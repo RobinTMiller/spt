@@ -1,0 +1,203 @@
+November 6th, 2006				Last Updated: August 18th, 2007
+
+Steps to build:
+  -  use "makespt" script to build all OS's
+		OR
+  -  cd to OS directory.
+  -  execute make specifying OS={aix,linux,hpux,solaris,windows} (the first time).
+     [ this creates link to proper SCSI library module and does build. ]
+  -  issue "make -f ../Makefile" thereafter.
+
+Example:
+
+shaix11% cd aix5.3
+shaix11% make -f ../Makefile OS=aix
+        gcc -g -D_ALL_SOURCE -I.. -c ../spt.c
+        gcc -o spt -g -D_ALL_SOURCE -I..  spt.o libscsi.o scsilib.o memory_alloc.o utilities.o  
+done!
+shaix11% 
+
+Execution: (must be root!)
+
+# ./spt help
+Usage: spt options...
+
+    Where options are:
+        dsf=device       The device special file.
+        din=filename     Data (in) file for reading.
+        dout=filename    Data (out) file for writing.
+        emit=string      Emit status format control string.
+        exit or quit     Exit when running in pipe mode.
+        cdb='hh hh ...'  The SCSI CDB to execute.
+        dir=direction    Data direction {none|read|write}.
+        length=value     The data length to read or write.
+        op=string        The operation type (see below).
+        onerr=action     The error action: {continue or stop}.
+        path=value       The (MPIO) path to issue command.
+        pout='hh hh ...' The parameter data to send device.
+        qtag=string      The queue tag message type (see below).
+        sname=string     The SCSI opcode name (for errors).
+        repeat=value     The number of times to repeat cmd.
+        runtime=time     The number of seconds to execute.
+        sleep=time       The sleep time (in seconds).
+        usleep=value     The usleep time (in microseconds).
+        timeout=value    The timeout value (in milliseconds).
+        enable=flag,flag Enable one or more flags (see below).
+        disable=flag     Disable one or more flags (see below).
+
+    Note: din/dout file can be '-' for stdin/stdout.
+
+    Emit Status Format Control:
+             %progname = Our program name (spt).
+               %status = The command (IOCTL) status.
+          %scsi_status = The SCSI status.
+          %host_status = The host status.
+        %driver_status = The driver status.
+           %sense_code = The sense error code.
+                %resid = The residual bytes.
+                 %xfer = The bytes transferred.
+            %sense_key = The sense key.
+                  %ili = Illegal length indicator.
+                  %eom = End of medium.
+                   %fm = Tape file mark.
+                 %ascq = The asc/ascq pair.
+                  %asc = The additional sense code.
+                  %asq = The additional sense qualifier.
+                  %fru = The field replaceable unit code.
+           %sense_data = All the sense data.
+
+    Flags to enable/disable:
+        adapter          SPT via HBA driver.  (Default: disabled)
+        debug            The SCSI debug flag. (Default: disabled)
+        errors           Report errors flag.  (Default: enabled)
+        multi            Multiple commands.   (Default: disabled)
+        pipes            Pipe mode flag.      (Default: disabled)
+
+    Operation Types:
+        abort_task_set   Abort task set.
+        bus_reset        Bus reset.
+        lun_reset        LUN reset.
+        target_reset     Target reset.
+        scsi_cdb         SCSI CDB (default).
+
+    Queue Tag Message Types:
+        head             Head of queue.
+        ordered          Ordered queuing.
+        simple           Simple queueing (default).
+        noq              Disable tagged queuing.
+        headhs           Head of HA queue (Solaris).
+
+    Numeric Input:
+        For options accepting numeric input, the string may contain any
+        combination of the following characters:
+
+        Special Characters:
+            w = words (4 bytes)            q = quadwords (8 bytes)
+            b = blocks (512 bytes)         k = kilobytes (1024 bytes)
+            m = megabytes (1048576 bytes)  
+            g = gigabytes (1073741824 bytes)
+            t = terabytes (1099511627776 bytes)
+            inf or INF = infinity (18446744073709551615 bytes)
+
+        Arithmetic Characters:
+            + = addition                   - = subtraction
+            * or x = multiplcation         / = division
+            % = remainder
+
+        Bitwise Characters:
+            ~ = complement of value       >> = shift bits right
+           << = shift bits left            & = bitwise 'and' operation
+            | = bitwise 'or' operation     ^ = bitwise exclusive 'or'
+
+        The default base for numeric input is decimal, but you can override
+        this default by specifying 0x or 0X for hexadecimal conversions, or
+        a leading zero '0' for octal conversions.  NOTE: Evaluation is from
+        right to left without precedence, and parenthesis are not permitted.
+
+    Time Input:
+            d = days (86400 seconds),      h = hours (3600 seconds)
+            m = minutes (60 seconds),      s = seconds (the default)
+
+        Arithmetic characters are permitted, and implicit addition is
+        performed on strings of the form '1d5h10m30s'.
+
+    Timeout Value:
+            d = days (86400000 ms),        h = hours (3600000 ms)
+            m = minutes (60000 ms),        s = seconds (1000 ms)
+
+    The default SCSI timeout is 60000 milliseconds (60 seconds).
+
+    Examples:
+
+    Define Device: (or use dsf= option)
+        # export SPT_DEVICE=/dev/rhdisk2
+    Inquiry:
+        # spt cdb='12 00 00 00 ff 00' dir=read length=255
+    Inquiry Serial Number Page:
+        # spt cdb='12 01 80 00 ff 00' dir=read length=255
+    Mode Sense (request all pages):
+        # spt cdb='5a 00 3f 00 00 00 00 00 c2 00' dir=read length=194
+    Mode Sense (error control page):
+        # spt cdb='1a 00 01 00 18 00' dir=read length=24 dsf=/dev/rhdisk0
+    Mode Select (error recovery page):
+        # spt cdb='15 11 00 00 18 00' dsf=/dev/rhdisk0 \
+              pout='00 00 00 08 04 3c d9 40 00 00 02 00 01 0a 00 0b 00 00 00 00 05 00 75 30'
+    Persistent Reserve In (Read Keys):
+        # spt cdb='5e 00 00 00 00 00 00 10 08 00' dir=read length=4104
+    Persistent Reserve In (Read Reservations):
+        # spt cdb='5e 01 00 00 00 00 00 20 08 00' dir=read length=8200
+    Read(6) 1 block: (lba 2097151)
+        # spt cdb='08 1f ff ff 01 00' dir=read length=512
+    Read(10) 1 block: (lba 134217727)
+        # spt cdb='28 00 ff ff ff ff 00 00 01 00' dir=read length=512
+    Read(16) 1 block: (lba 34359738367)
+        # spt cdb='88 00 00 00 0f ff ff ff ff ff 00 00 00 00 01 00' dir=read length=512
+    Read Capacity (10):
+        # spt cdb='25 00 00 00 00 00 00 00 00 00' dir=read length=10
+    Read Capacity (16):
+        # spt cdb='9e 10 00 00 00 00 00 00 00 00 00 00 00 20 00 00' dir=read length=32
+    Report LUNs:
+        # spt cdb='a0 00 00 00 00 00 00 00 08 08 00 00' dir=read length=2056
+    Report Target Group Support:
+        # spt cdb='a3 0a 00 00 00 00 00 00 04 84 00 00' dir=read length=1156
+    Reserve Unit:
+        # spt cdb='16 00 00 00 00 00'
+    Release Unit:
+        # spt cdb='17 00 00 00 00 00'
+    Seek (lba 99999):
+        # spt cdb='2b 00 00 01 86 9f 00 00 00 00'
+    Send Diagnostic (execute self-test):
+        # spt cdb='1d 04 00 00 00 00'
+    Stop Unit:
+        # spt cdb='1b 00 00 00 00 00'
+    Start Unit:
+        # spt cdb='1b 00 00 00 01 00'
+    Test Unit Ready:
+        # spt cdb='00 00 00 00 00 00'
+    Verify(10): [ lba 65535 for 64K blocks ]
+        # spt cdb='2f 00 00 00 ff ff 00 ff ff 00'
+    Verify(16): [ lba 65535 for 64K blocks ]
+        # spt cdb='8f 00 00 00 00 00 00 00 ff ff 00 00 ff ff 00 00'
+    Write(6) 1 block: (lba 2097151)
+        # spt cdb='0a 1f ff ff 01 00' dir=write din=data length=512
+    Write(10) 1 block: (lba 134217727)
+        # spt cdb='2a 00 ff ff ff ff 00 00 01 00' dir=write din=data length=512
+    Write(16) 1 block: (lba 34359738367)
+        # spt cdb='8a 00 00 00 0f ff ff ff ff ff 00 00 00 00 01 00' dir=write din=data length=512
+    Write and Verify(10) 8 blocks: (lba 2096896)
+        # spt cdb='2e 00 00 1f ff 00 00 00 08 00' dir=write din=data length=4096
+    Write and Verify(16) 8 blocks: (lba 2096896)
+        # spt cdb='8e 00 00 00 00 00 00 1f ff 00 00 00 00 08 00 00' dir=write din=data length=4096
+    Abort Task Set:
+        # spt op=abort_task_set
+    LUN Reset:
+        # spt op=lun_reset path=3
+    Target Reset:
+        # spt op=target_reset enable=debug
+
+    Environment Variables:
+        # export SPT_DEVICE='/dev/sg4'
+        # export SPT_EMIT_STATUS='Status: %status, SCSI Status: %scsi_status, ...'
+
+    --> Date: August 18th, 2007, Version: 0.20, Author: Robin T. Miller <--
+# 

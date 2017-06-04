@@ -1,0 +1,427 @@
+Robin@rtm-asus-pc ~
+$ ./spt help
+Usage: C:\cygwin64\home\Robin\spt.exe options...
+
+    Where options are:
+        dsf=device            The device special file.
+        dsf1=device           The 2nd device special file.
+        din=filename          Data (in) file for reading.
+        dout=filename         Data (out) file for writing.
+        keepalive=string      The keepalive message string.
+        keepalivet=time       The keepalive message frequency.
+        log=filename          The log file name to write.
+        logprefix=string      The per line logging prefix.
+        aborts=value          Set the abort frequency.  (Default: 0)
+        abort_timeout=value   Set the abort timeout. (Default: 1ms)
+        boff=string           Set the buffer offsets to: dec or hex (Default: hex)
+        dfmt=string           Set the data format to: byte or word (Default: word)
+        dlimit=value          Set the dump data buffer limit. (Default: 512)
+        emit=string OR        Emit status format control string.
+        emit={default|multi}  Default or multi devices emit strings.
+        exit or quit          Exit when running in pipe mode.
+        cdb='hh hh ...'       The SCSI CDB to execute.
+        cdbsize=value         The CDB size (overrides auto set).
+        dir=direction         Data direction {none|read|write}.
+        iomode=mode           Set I/O mode to: {copy, mirror, test, or verify}.
+        length=value          The data length to read or write.
+        op=string             The operation type (see below).
+        maxbad=value          Set maximum bad blocks to display. (Default: 10)
+        onerr=action          The error action: {continue or stop}.
+        path=value            The (MPIO) path to issue command.
+        pattern=value         The 32 bit hex data pattern to use.
+        pin='hh hh ...'       The parameter in data to compare.
+        pout='hh hh ...'      The parameter data to send device.
+        qtag=string           The queue tag message type (see below).
+        ranges=value          The number of range descriptors.
+        repeat=value          The number of times to repeat a cmd.
+        retry=value           The number of times to retry a cmd.
+        runtime=time          The number of seconds to execute.
+        script=filename       The script file name to execute.
+        sname=string          The SCSI opcode name (for errors).
+        sleep=time            The sleep time (in seconds).
+        msleep=value          The msleep time (in milliseconds).
+        usleep=value          The usleep time (in microseconds).
+        threads=value         The number of threads to execute.
+        timeout=value         The timeout value (in milliseconds).
+        enable=flag,flag      Enable one or more flags (see below).
+        disable=flag          Disable one or more flags (see below).
+        iotpass=value         Set the IOT pattern for specified pass.
+        iotseed=value         Set the IOT pattern block seed value.
+        help                  Display this help text.
+        eval EXPR             Evaluate expression, show values.
+        system CMD            Execute a system command.
+        !CMD                  Same as above, short hand.
+        shell                 Startup a system shell.
+        version               Display the version information.
+        scsiopcodes           Display the SCSI operation codes.
+
+    Note: din/dout file can be '-' for stdin/stdout.
+
+    Expect Data Options:
+        exp_radix={any,dec,hex} The default is any radix.
+
+        exp[ect]=type:byte_index:{string|value},...
+
+        Where type is:
+            C[HAR]            Character strings to expect.
+            B[YTE]            Byte (8 bit) values to expect.
+            S[SHORT]          Short (16 bit) values to expect.
+            W[ORD]            Word (32 bit) values to expect.
+            L[ONG]            Long (64 bit) values to expect.
+
+        Note: Byte index and values are taken as decimal (by default).
+
+    I/O Options:
+        lba=value             The logical block address.
+        bs=value              The number of bytes per request.
+        blocks=value          The number of blocks per request.
+        limit=value           The data limit to transfer (bytes).
+        ptype=string          The pattern type (only 'iot' now).
+        ending=value          The ending logical block address.
+        starting=value        The starting logical block address.
+        slices=value          The slices to divide capacity between.
+        step=value            The bytes to step after each request.
+
+    Error Recovery Options:
+        recovery_delay=value   The amount of time to delay before retrying. (Default: 2 secs)
+        recovery_retries=value The number of times to retry a SCSI request. (Default: 60)
+
+    Errors retried are OS specific, plus SCSI Busy and Unit Attention
+    Note: Errors are NOT automatically retried, enable=recovery is required.
+
+    Extended Copy Options:
+        src=device            The source special file.
+        dst=device            The destination special file.
+        readlength=value      The SCSI read length (in bytes).
+        readtype=string       The SCSI read type (read8, read10, read16).
+        writetype=string      The SCSI write type (write8, write10, write16, writev16).
+        ranges=value          The block device range descriptors.
+
+    These can be used in conjunction with the I/O options.
+    Note: The read options are only used with data compares.
+
+    Test Check Options:
+        resid=value           The expected residual.
+        status=value          The expected SCSI status.
+        skey=value            The expected SCSI sense key.
+        asc=value             The expected SCSI sense code.
+        asq=value             The expected SCSI sense qualifier.
+
+    Note: The enable=wait option can be used to wait for status.
+
+        SCSI Status         Keyword      Value
+        -----------         -------      -----
+        GOOD                 good        0x00
+        CHECK_CONDITION      cc          0x02
+        CONDITION_MET        cmet        0x04
+        BUSY                 busy        0x08
+        INTERMEDIATE         inter       0x10
+        INTER_COND_MET       icmet       0x14
+        RESERVATION_CONFLICT rescon      0x18
+        COMMAND_TERMINATED   term        0x22
+        QUEUE_FULL           qfull       0x28
+        ACA_ACTIVE           aca_active  0x30
+        TASK_ABORTED         aborted     0x40
+
+    Example:
+        # spt status=good resid=0 repeat=100 msleep=10 enable=wait qtag=simple cdb=0
+
+    Flags to enable/disable:
+        adapter          SPT via HBA driver.        (Default: disabled)
+        async            Execute asynchronously.    (Default: disabled)
+        bypass           Bypass sanity checks.      (Default: disabled)
+        compare          Data comparison.           (Default: disabled)
+        debug            The SCSI debug flag.       (Default: disabled)
+        Debug            The program debug flag.    (Default: disabled)
+        xdebug           The extended debug flag.   (Default: disabled)
+        decode           Decode control flag.       (Default: disabled)
+        emit_all         Emit status all cmds.      (Default: disabled)
+        encode           Encode control flag.       (Default: disabled)
+        errors           Report errors flag.        (Default: enabled)
+        genspt           Generate spt command.      (Default: disabled)
+        header           Log header control flag.   (Default: disabled)
+        image            Image mode copy.           (Default: disabled)
+        multi            Multiple commands.         (Default: disabled)
+        pipes            Pipe mode flag.            (Default: disabled)
+        prewrite         Prewrite data blocks.      (Default: enabled)
+        recovery         Automatic error recovery.  (Default: disabled)
+        read_after_write Read after write (or raw). (Default: disabled)
+        scsi             Report SCSI information.   (Default: disabled)
+        sense            Display sense data flag.   (Default: disabled)
+        unique           Unique pattern flag.       (Default: enabled)
+        verbose          Verbose output flag.       (Default: enabled)
+        warnings         Warnings control flag.     (Default: enabled)
+        wait             Wait for SCSI status.      (Default: disabled)
+
+    Operation Types:
+        abort_task_set   Abort task set (ats).
+        bus_reset        Bus reset (br).
+        lun_reset        LUN reset (lr).
+        target_reset     Target reset (bdr).
+        scsi_cdb         SCSI CDB (default).
+
+    Shorthands: ats, br, lr, or bdr permitted.
+
+    Example: op=lun_reset
+
+    Queue Tag Message Types:
+        head             Head of queue.
+        ordered          Ordered queuing.
+        simple           Simple queueing (default).
+        noq              Disable tagged queuing.
+        headhs           Head of HA queue (Solaris).
+
+    Example: qtag=simple
+
+    Numeric Input:
+        For options accepting numeric input, the string may contain any
+        combination of the following characters:
+
+        Special Characters:
+            w = words (4 bytes)            q = quadwords (8 bytes)
+            b = blocks (512 bytes)         k = kilobytes (1024 bytes)
+            m = megabytes (1048576 bytes)
+            g = gigabytes (1073741824 bytes)
+            t = terabytes (1099511627776 bytes)
+            inf or INF = infinity (18446744073709551615 bytes)
+
+        Arithmetic Characters:
+            + = addition                   - = subtraction
+            * or x = multiplication        / = division
+            % = remainder
+
+        Bitwise Characters:
+            ~ = complement of value       >> = shift bits right
+           << = shift bits left            & = bitwise 'and' operation
+            | = bitwise 'or' operation     ^ = bitwise exclusive 'or'
+
+        The default base for numeric input is decimal, but you can override
+        this default by specifying 0x or 0X for hexadecimal conversions, or
+        a leading zero '0' for octal conversions.  NOTE: Evaluation is from
+        right to left without precedence, and parenthesis are not permitted.
+
+    Emit Status Format Control:
+                 %progname = Our program name (C:\cygwin64\home\Robin\spt.exe).
+                   %thread = The thread number.
+                      %cdb = The SCSI CDB bytes.
+                      %dir = The data direction.
+                   %length = The data length.
+                      %dsf = The device special file.
+                     %dsf1 = The 2nd device special file.
+                      %dst = The destination device name.
+                      %src = The source device name.
+                 %src[1-2] = The other source devices.
+                     %srcs = All the source devices.
+                   %status = The command (IOCTL) status.
+               %status_msg = The IOCTL status message.
+                %scsi_name = The SCSI opcode name.
+              %scsi_status = The SCSI status.
+                 %scsi_msg = The SCSI message.
+              %host_status = The host status.
+                 %host_msg = The host status message.
+            %driver_status = The driver status.
+               %driver_msg = The driver status message.
+               %sense_code = The sense error code.
+                %sense_msg = The sense code message.
+               %info_valid = The information valid bit.
+                %info_data = The information field data.
+               %cspec_data = The cmd spec information data.
+                    %resid = The residual bytes.
+                   %blocks = The blocks transferred.
+                 %capacity = The device capacity (in blocks).
+              %device_size = The device block size.
+               %iterations = The iterations executed.
+               %operations = The operations executed.
+                 %starting = The starting logical block.
+                   %ending = The ending logical block.
+             %total_blocks = The total blocks transferred.
+         %total_operations = The total operations executed.
+                     %xfer = The bytes transferred. (or bytes)
+               %total_xfer = The total bytes transferred.
+                %sense_key = The sense key.
+                 %skey_msg = The sense key message.
+                      %ili = Illegal length indicator.
+                      %eom = End of medium.
+                       %fm = Tape file mark.
+                     %ascq = The asc/ascq pair.
+                 %ascq_msg = The asc/ascq message.
+                      %asc = The additional sense code.
+                      %asq = The additional sense qualifier.
+                      %fru = The field replaceable unit code.
+               %sense_data = All the sense data.
+                  %timeout = The command timeout (in ms).
+              %deallocated = The deallocated blocks.
+                   %mapped = The mapped blocks.
+
+    Time Keywords:
+            %date         = The current date/time.
+            %seconds      = The time in seconds.
+            %start_time   = The test start time.
+            %end_time     = The test end time.
+            %elapsed_time = The elapsed time.
+
+    Performance Keywords:
+            %bps  = The bytes per second.     %lbps = Logical blocks per second.
+            %kbps = Kilobytes per second.     %mbps = The megabytes per second.
+            %iops = The I/O's per second.     %spio = The seconds per I/O.
+
+    Log File/Prefix Format Keywords:
+            %dsf    = The device name.        %dsf1   = The second device.
+            %src    = The source device.      %src1   = The source 1 device.
+            %src2   = The source 2 device.    %srcs   = All source devices.
+            %host   = The host name.          %user   = The user name.
+            %job    = The job ID.             %tag    = The job tag.
+            %tid    = The thread ID.          %thread = The thread number.
+            %pid    = The process ID.         %prog   = The program name.
+            %ymd    = The year,month,day.     %hms    = The hour,day,seconds.
+            %dfs    = The directory separator ('\')
+            %date   = The date string.        %et     = The elapsed time.
+            %secs   = Seconds since start.    %seq    = The sequence number.
+
+      Examples: log='spt_%host-j%jobt%thread.log'
+                logprefix='%et %prog (j:%job t:%thread): '
+
+    Time Input:
+            d = days (86400 seconds),      h = hours (3600 seconds)
+            m = minutes (60 seconds),      s = seconds (the default)
+
+        Arithmetic characters are permitted, and implicit addition is
+        performed on strings of the form '1d5h10m30s'.
+
+    Timeout Value:
+            d = days (86400000 ms),        h = hours (3600000 ms)
+            m = minutes (60000 ms),        s = seconds (1000 ms)
+
+    The default SCSI timeout is 60000 milliseconds (60 seconds).
+
+    Examples:
+
+    Define Device: (or use dsf= option)
+        # export SPT_DEVICE=/dev/sdi
+    Inquiry:
+        # spt cdb='12 00 00 00 ff 00' dir=read length=255
+    Inquiry Serial Number:
+        # spt cdb='12 01 80 00 ff 00' dir=read length=255
+    Inquiry Device Identification:
+        # spt cdb='12 01 83 00 ff 00' dir=read length=255
+    Inquiry Management Network Addresses:
+        # spt cdb='12 01 85 00 ff 00' dir=read length=255
+    Format Unit:
+        # spt cdb='04 10 00 00 00 00'
+    Mode Sense(6) (request all pages):
+        # spt cdb='1a 00 3f 00 ff 00' dir=read length=255
+    Mode Sense(10) (request all pages):
+        # spt cdb='5a 00 3f 00 00 00 00 00 ff 00' dir=read length=255
+    Mode Sense(6) (error control page):
+        # spt cdb='1a 00 01 00 18 00' dir=read length=24
+    Mode Select(6) (error recovery page): (Seagate ST336607LC)
+        # spt cdb='15 11 00 00 18 00' \
+              pout='00 00 00 08 04 3d 67 1f 00 00 02 00 01 0a c0 0b ff 00 00 00 05 00 ff ff'
+    Mode Select(10) (error recovery page):
+        # spt cdb='55 11 00 00 00 00 00 00 1c 00' \
+              pout='00 00 00 00 00 00 00 08 04 3d 67 1f 00 00 02 00 81 0a c0 0b ff 00 00 00 05 00 ff ff'
+    Persistent Reserve In (Read Keys):
+        # spt cdb='5e 00 00 00 00 00 00 10 08 00' dir=read length=4104
+    Persistent Reserve In (Read Reservations):
+        # spt cdb='5e 01 00 00 00 00 00 20 08 00' dir=read length=8200
+    Persistent Reserve Out (Clear):
+        # spt cdb='5f 03 00 00 00 00 00 00 18 00' length=24 \
+              pout='11 22 33 44 55 66 77 88 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00'
+    Persistent Reserve Out (Register):
+        # spt cdb='5f 00 00 00 00 00 00 00 18 00' length=24 \
+              pout='00 00 00 00 00 00 00 00 11 22 33 44 55 66 77 88 00 00 00 00 01 00 00 00'
+    Read(6) 1 block: (lba 2097151)
+        # spt cdb='08 1f ff ff 01 00' dir=read length=512
+    Read(10) 1 block: (lba 134217727)
+        # spt cdb='28 00 ff ff ff ff 00 00 01 00' dir=read length=512
+    Read(16) 1 block: (lba 34359738367)
+        # spt cdb='88 00 00 00 0f ff ff ff ff ff 00 00 00 01 00 00' dir=read length=512
+    Read Capacity(10):
+        # spt cdb='25 00 00 00 00 00 00 00 00 00' dir=read length=8
+    Read Capacity(16):
+        # spt cdb='9e 10 00 00 00 00 00 00 00 00 00 00 00 20 00 00' dir=read length=32
+    Report LUNs:
+        # spt cdb='a0 00 00 00 00 00 00 00 08 08 00 00' dir=read length=2056
+    Report Target Group Support:
+        # spt cdb='a3 0a 00 00 00 00 00 00 04 84 00 00' dir=read length=1156
+    Reserve Unit(6):
+        # spt cdb='16 00 00 00 00 00'
+    Reserve Unit(10):
+        # spt cdb='56 00 00 00 00 00 00 00 00 00'
+    Release Unit(6):
+        # spt cdb='17 00 00 00 00 00'
+    Release Unit(10):
+        # spt cdb='57 00 00 00 00 00 00 00 00 00'
+    Request Sense:
+        # spt cdb='03 00 00 00 ff 00' dir=read length=255
+    Seek (lba 99999):
+        # spt cdb='2b 00 00 01 86 9f 00 00 00 00'
+    Send Diagnostic (execute self-test):
+        # spt cdb='1d 04 00 00 00 00'
+    Stop Unit:
+        # spt cdb='1b 00 00 00 00 00'
+        # spt cdb='1b 01 00 00 00 00' (stop immediate)
+    Start Unit:
+        # spt cdb='1b 00 00 00 01 00'
+        # spt cdb='1b 01 00 00 01 00' (start immediate)
+    Synchronize Cache(10):
+        # spt cdb='35 00 00 00 00 00 00 00 00 00'
+    Synchronize Cache(16):
+        # spt cdb='91 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00'
+    Test Unit Ready:
+        # spt cdb='00 00 00 00 00 00'
+    Verify(10): [ lba 65535 for 64K blocks ]
+        # spt cdb='2f 00 00 00 ff ff 00 ff ff 00'
+    Verify(16): [ lba 65535 for 64K blocks ]
+        # spt cdb='8f 00 00 00 00 00 00 00 ff ff 00 00 ff ff 00 00'
+    Write(6) 1 block: (lba 2097151)
+        # spt cdb='0a 1f ff ff 01 00' dir=write din=data length=512
+    Write(10) 1 block: (lba 134217727)
+        # spt cdb='2a 00 ff ff ff ff 00 00 01 00' dir=write din=data length=512
+    Write(16) 1 block: (lba 34359738367)
+        # spt cdb='8a 00 00 00 0f ff ff ff ff ff 00 00 00 01 00 00' dir=write din=data length=512
+    Write Same(10) all blocks: (not valid for RR.1 and beyond)
+        # spt cdb='41 00 00 00 00 00 00 00 00 00' dir=write length=512 timeout=5m
+    Write Same(16) 499712 blocks: (unmap) (max permitted in c-mode)
+        # spt cdb='93 08 00 00 00 00 00 00 00 00 07 a0 00 00 00 00' dir=write length=512
+    Write and Verify(10) 8 blocks: (lba 2097151)
+        # spt cdb='2e 00 00 1f ff ff 00 00 08 00' dir=write din=data length=4096
+    Write and Verify(16) 8 blocks: (lba 2097151)
+        # spt cdb='8e 00 00 00 00 00 00 1f ff ff 00 00 00 08 00 00' dir=write din=data length=4096
+    Abort Task Set:
+        # spt op=abort_task_set
+    LUN Reset:
+        # spt op=lun_reset path=3
+    Target Reset:
+        # spt op=target_reset enable=debug
+
+    Using I/O parameters, CDB/parameter data is automatically generated:
+    Write(16) IOT pattern to all blocks first:
+        # spt cdb=8a dir=write length=32k slices=10 starting=0 ptype=iot
+
+    Builtin Support Examples:
+
+    Inquiry Information: (human readable)
+        # spt cdb=12 enable=encode,decode disable=verbose
+    Read Capacity(16): (shows thin provisioning)
+        # spt cdb='9e 10' enable=encode,decode disable=verbose
+    Write and Read/Compare IOT Pattern: (32k, all blocks)
+        # spt cdb=8a dir=write length=32k enable=compare,recovery,sense starting=0 ptype=iot
+    Read and Compare IOT Pattern: (32k, all blocks)
+        # spt cdb=88 dir=read length=32k enable=compare,recovery,sense starting=0 ptype=iot
+    Write Same w/Unmap: (all blocks)
+        # spt cdb='93 08' starting=0 dir=write length=512 blocks=4m/b
+    Copy/Verify Source to Destination Device: (uses read/write operations)
+        # spt iomode=copy length=32k dsf=${SRC} starting=0 dsf1=${DST} starting=0 enable=compare,recovery,sense
+    Write Source and Verify with Mirror Device: (10 threads for higher performance)
+        # spt iomode=mirror length=32k dsf=${SRC} starting=0 dsf1=${DST} starting=0 enable=compare slices=10
+
+    Environment Variables:
+        # export SPT_DEVICE='/dev/sdi'
+        # export SPT_EMIT_STATUS='Status: %status, SCSI Status: %scsi_status, Sense Code: %sense_code, Sense Key: %sense_key, Ascq: %ascq, Resid: %resid'
+
+    --> Date: May 26th, 2017, Version: 2.50, Author: Robin T. Miller <--
+
+Robin@rtm-asus-pc ~
+$
+
