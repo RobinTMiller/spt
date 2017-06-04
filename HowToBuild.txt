@@ -1,0 +1,23 @@
+% pwd
+/u/rtmiller/spt.d/linux-rhel7x64
+% make -f ../Makefile OS=linux clean
+% make -f ../Makefile OS=linux
+cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt.o ../spt.c
+cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_fmt.o ../spt_fmt.c
+cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_inquiry.o ../spt_inquiry.c
+cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_mem.o ../spt_mem.c
+cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_print.o ../spt_print.c
+cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_scsi.o ../spt_scsi.c
+cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_unix.o ../spt_unix.c
+cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_usage.o ../spt_usage.c
+cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o scsi_opcodes.o ../scsi_opcodes.c
+cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o libscsi.o ../libscsi.c
+cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o libnetapp.o ../libnetapp.c
+cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o scsidata.o ../scsidata.c
+cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o scsilib.o scsilib.c
+cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o utilities.o ../utilities.c
+cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_mtrand64.o ../spt_mtrand64.c
+cc -o spt -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT  spt.o spt_fmt.o spt_inquiry.o spt_mem.o spt_print.o spt_scs
+i.o spt_unix.o spt_usage.o scsi_opcodes.o libscsi.o libnetapp.o scsidata.o scsilib.o utilities.o spt_mtrand64.o  -lpthread
+done!
+% 
