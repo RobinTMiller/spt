@@ -1,0 +1,20 @@
+﻿  utilities.c
+  spt_win32.c
+  spt_usage.c
+  spt_scsi.c
+  spt_print.c
+  spt_mtrand64.c
+  spt_mem.c
+  spt_iot.c
+  spt_inquiry.c
+  spt_fmt.c
+  spt.c
+  scsi_opcodes.c
+  scsilib.c
+c:\program files (x86)\windows kits\8.1\include\shared\ntddscsi.h(719): warning C4091: 'typedef ': ignored on left of '_NV_SEP_WRITE_CACHE_TYPE' when no variable is declared
+  scsidata.c
+  libscsi.c
+  Generating Code...
+libscsi.obj : warning LNK4075: ignoring '/EDITANDCONTINUE' due to '/SAFESEH' specification
+  spt.vcxproj -> C:\cygwin64\home\RMill7198650\PreHGST\spt.d\windows\.\Debug\spt.exe
+  spt.vcxproj -> .\Debug/spt.pdb (Full PDB)

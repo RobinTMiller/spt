@@ -1,0 +1,47 @@
+<html>
+<body>
+<pre>
+<h1>Build Log</h1>
+<h3>
+--------------------Configuration: spt - Win32 Debug--------------------
+</h3>
+<h3>Command Lines</h3>
+Creating temporary file "C:\DOCUME~1\rtmiller\LOCALS~1\Temp\RSP32D.tmp" with contents
+[
+/nologo /MLd /W3 /Gm /GX /ZI /Od /D "WIN32" /D "_DEBUG" /D "_CONSOLE" /D "_MBCS" /Fp"Debug/spt.pch" /YX /Fo"Debug/" /Fd"Debug/" /FD /GZ /c 
+"H:\Tools\ScsiLib.d\windows\libscsi.c"
+"H:\Tools\ScsiLib.d\windows\memory_alloc.c"
+"H:\Tools\ScsiLib.d\windows\scsidata.c"
+"H:\Tools\ScsiLib.d\windows\scsilib.c"
+"H:\Tools\ScsiLib.d\windows\spt.c"
+"H:\Tools\ScsiLib.d\windows\utilities.c"
+]
+Creating command line "cl.exe @C:\DOCUME~1\rtmiller\LOCALS~1\Temp\RSP32D.tmp" 
+Creating temporary file "C:\DOCUME~1\rtmiller\LOCALS~1\Temp\RSP32E.tmp" with contents
+[
+kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib /nologo /subsystem:console /incremental:yes /pdb:"Debug/spt.pdb" /debug /machine:I386 /out:"Debug/spt.exe" /pdbtype:sept 
+.\Debug\libscsi.obj
+.\Debug\memory_alloc.obj
+.\Debug\scsidata.obj
+.\Debug\scsilib.obj
+.\Debug\spt.obj
+.\Debug\utilities.obj
+]
+Creating command line "link.exe @C:\DOCUME~1\rtmiller\LOCALS~1\Temp\RSP32E.tmp"
+<h3>Output Window</h3>
+Compiling...
+libscsi.c
+memory_alloc.c
+scsidata.c
+scsilib.c
+spt.c
+utilities.c
+Linking...
+
+
+
+<h3>Results</h3>
+spt.exe - 0 error(s), 0 warning(s)
+</pre>
+</body>
+</html>

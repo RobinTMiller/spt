@@ -1,0 +1,17 @@
+﻿  libscsi.c
+  scsidata.c
+  scsilib.c
+  scsi_opcodes.c
+  spt.c
+  spt_fmt.c
+  spt_inquiry.c
+  spt_iot.c
+  spt_mem.c
+  spt_mtrand64.c
+  spt_print.c
+  spt_scsi.c
+  spt_usage.c
+  spt_win32.c
+  utilities.c
+  Generating Code...
+  spt.vcxproj -> C:\cygwin64\home\Robin\spt.d\windows\.\Release\spt.exe
