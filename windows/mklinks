@@ -14,8 +14,8 @@ ln ../scsilib-windows.c .
 ln ../scsi_opcodes.h .
 ln ../spt.h .
 ln ../spt_usage.c .
-ln ../spt_win32.c .
-ln ../spt_win32.h .
+ln ../spt_win.c .
+ln ../spt_win.h .
 ln ../spt_inquiry.c .
 ln ../spt_mtrand64.c .
 ln ../spt_mtrand64.h .
