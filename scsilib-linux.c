@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2014			    *
+ *			  COPYRIGHT (c) 2006 - 2017			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -32,6 +32,9 @@
  *
  * Modification History:
  *
+ * November 2nd, 2017 by Robin T. Miller
+ *      Added support for mapping from device name to SCSI device name.
+ * 
  * August 14th, 2012 by Robin T. Miller
  *	Added new host status codes introduced for multipathing.
  *
@@ -48,6 +51,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -62,16 +66,20 @@
 /*
  * Local Definitions:
  */
+#define DEV_PATH	"/dev"
 #define SG_PATH_PREFIX	"/dev/sg"
 #define SG_PATH_SIZE	7
 
 /*
  * Forward Declarations:
  */
+static char *find_scsi_device(scsi_generic_t *sgp);
+static char *find_sg_device(scsi_generic_t *sgp, int bus, int channel, int tid, int lun);
 static char *linux_HostStatus(unsigned short host_status);
 static char *linux_DriverStatus(unsigned short driver_status);
 static char *linux_SuggestStatus(unsigned short suggest_status);
 static void DumpScsiCmd(scsi_generic_t *sgp, sg_io_hdr_t *siop);
+static int force_path_failover(scsi_generic_t *sgp);
 
 /*
  * os_open_device() = Open Device.
@@ -89,38 +97,132 @@ os_open_device(scsi_generic_t *sgp)
     void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
     int status = SUCCESS;
     int oflags = (O_RDWR|O_NONBLOCK);
+    char *dsf = NULL;
 
+    /* Find assocoated /dev/sgN device, unless disabled or specified. */
+    if ( sgp->mapscsi && (sgp->adsf == NULL) &&
+	 (strncmp(sgp->dsf, SG_PATH_PREFIX, SG_PATH_SIZE) != 0) ) {
+	sgp->adsf = find_scsi_device(sgp);
+    }
+    dsf = (sgp->adsf) ? sgp->adsf : sgp->dsf;
     /* 
      * /dev/sg devices do NOT like the direct I/O flag!
      * Results in: errno = 22 - Invalid argument
      */
-    if (strncmp(sgp->dsf, SG_PATH_PREFIX, SG_PATH_SIZE) != 0) {
+    if (strncmp(dsf, SG_PATH_PREFIX, SG_PATH_SIZE) != 0) {
 	oflags |= O_DIRECT;
     }
     if (sgp->debug == True) {
 	Printf(opaque, "Opening device %s, open flags = %#o (%#x)...\n",
-	       sgp->dsf, oflags, oflags);
+	       dsf, oflags, oflags);
     }
-    if ( (sgp->fd = open(sgp->dsf, oflags)) < 0) {
+    if ( (sgp->fd = open(dsf, oflags)) < 0) {
 	if (errno == EROFS) {
-	    int oflags = (O_RDONLY|O_NONBLOCK|O_DIRECT);
+	    int oflags = (O_RDONLY|O_NONBLOCK);
+	    if (strncmp(dsf, SG_PATH_PREFIX, SG_PATH_SIZE) != 0) {
+		oflags |= O_DIRECT;
+	    }
 	    if (sgp->debug == True) {
 		Printf(opaque, "Opening device %s read-only, open flags = %#o (%#x)...\n",
-		       sgp->dsf, oflags, oflags);
+		       dsf, oflags, oflags);
 	    }
-	    sgp->fd = open(sgp->dsf, oflags);
+	    sgp->fd = open(dsf, oflags);
 	}
 	if (sgp->fd == INVALID_HANDLE_VALUE) {
 	    if (sgp->errlog == True) {
-		os_perror(opaque, "open() of %s failed!", sgp->dsf);
+		os_perror(opaque, "open() of %s failed!", dsf);
 	    }
 	    status = FAILURE;
 	}
     }
-    if ( (sgp->debug == True) && (sgp->fd != INVALID_HANDLE_VALUE) ) {
-	Printf(opaque, "Device %s successfully opened, fd = %d\n", sgp->dsf, sgp->fd);
+    if ( (sgp->debug == True) && (status == SUCCESS) ) {
+	Printf(opaque, "Device %s successfully opened, fd = %d\n", dsf, sgp->fd);
     }
     return(status);
+}
+
+static char *
+find_scsi_device(scsi_generic_t *sgp)
+{
+    void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
+    int bus, tid, lun, channel, ids[2];
+    char *scsi_device = NULL;
+    int oflags = (O_RDONLY|O_NONBLOCK);
+    int fd;
+
+    fd = open(sgp->dsf, oflags);
+    if (fd == INVALID_HANDLE_VALUE) {
+	return(scsi_device);
+    }
+    if (ioctl(fd, SCSI_IOCTL_GET_BUS_NUMBER, &bus) == SUCCESS) {
+	if (ioctl(fd, SCSI_IOCTL_GET_IDLUN, &ids) == SUCCESS) {
+	    tid = (ids[0] & 0xff);
+	    lun = ((ids[0] >> 8) & 0xff);
+	    channel = ((ids[0] >> 16) & 0xff);
+	    scsi_device = find_sg_device(sgp, bus, channel, tid, lun);
+	    if (scsi_device && sgp->debug == True) {
+		Printf(opaque, "Device '%s', Bus %u, Channel %u, Target %u, LUN %u, SCSI Device: %s\n",
+		       sgp->dsf, bus, channel, tid, lun, scsi_device);
+	    }
+	}
+    }
+    (void)close(fd);
+    return(scsi_device);
+}
+
+static char *
+find_sg_device(scsi_generic_t *sgp, int bus, int channel, int tid, int lun)
+{
+    void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
+    struct sg_scsi_id scsi_id, *sid = &scsi_id;
+    DIR                 *dir;
+    struct dirent       *dirent;
+    char filename[PATH_BUFFER_SIZE];
+    char *sg_device = NULL;
+    int fd = INVALID_HANDLE_VALUE;
+
+    dir = opendir(DEV_PATH);
+    if (dir) {
+	while ((dirent = readdir(dir)) != NULL) {
+	    if ((dirent->d_type != DT_CHR) &&
+		(dirent->d_type != DT_LNK)) {
+		continue;
+	    }
+	    if (strncmp(dirent->d_name, "sg", 2)) {
+		continue;
+	    }
+	    snprintf(filename, sizeof(filename), "%s/%s", DEV_PATH, dirent->d_name);
+	    fd = open(filename, (O_RDONLY | O_NONBLOCK));
+	    if (fd == INVALID_HANDLE_VALUE) {
+		continue;
+	    }
+	    memset(sid, '\0', sizeof(*sid));
+	    /* This IOCTL only works on "sg" devices (of course). */
+	    if (ioctl(fd, SG_GET_SCSI_ID, sid) == SUCCESS) {
+		if ( (sid->host_no == bus) && (sid->channel == channel) &&
+		     (sid->scsi_id == tid) && (sid->lun == lun) ) {
+#if 0
+		    if (sgp->debug == True) {
+			Printf(opaque, "Host: %u\n", sid->host_no);     /* Bus */
+			Printf(opaque, "Channel: %u\n", sid->channel);	/* Channel */
+			Printf(opaque, "SCSI ID: %u\n", sid->scsi_id);	/* Target */
+			Printf(opaque, "LUN: %u\n", sid->lun);		/* LUN */
+			Printf(opaque, "SCSI Type: %u\n", sid->scsi_type);
+			Printf(opaque, "Cmds per LUN: %u\n", sid->h_cmd_per_lun);
+			Printf(opaque, "Queue Depth: %u\n", sid->d_queue_depth);
+		    }
+#endif /* 0 */
+		    sg_device = strdup(filename);
+		}
+	    }
+	    (void)close(fd);
+	    if (sg_device) {
+		break;
+	    }
+	}
+	closedir(dir);
+    }
+    return(sg_device);
 }
 
 /*
@@ -137,13 +239,14 @@ int
 os_close_device(scsi_generic_t *sgp)
 {
     void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
+    char *dsf = (sgp->adsf) ? sgp->adsf : sgp->dsf;
     int error;
 
     if (sgp->debug == True) {
-	Printf(opaque, "Closing device %s, fd %d...\n", sgp->dsf, sgp->fd);
+	Printf(opaque, "Closing device %s, fd %d...\n", dsf, sgp->fd);
     }
     if ( (error = close(sgp->fd)) < 0) {
-	os_perror(opaque, "close() of %s failed", sgp->dsf);
+	os_perror(opaque, "close() of %s failed", dsf);
     }
     sgp->fd = INVALID_HANDLE_VALUE;
     return(error);
@@ -275,13 +378,14 @@ int
 os_reset_bus(scsi_generic_t *sgp)
 {
     void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
+    char *dsf = (sgp->adsf) ? sgp->adsf : sgp->dsf;
     int arg = SG_SCSI_RESET_BUS;
     int error;
 
     if ( (error = ioctl(sgp->fd, SG_SCSI_RESET, &arg)) < 0) {
 	sgp->os_error = errno;
 	if (sgp->errlog == True) {
-	    os_perror(opaque, "SCSI reset bus (SG_SCSI_RESET_BUS) failed on %s!", sgp->dsf);
+	    os_perror(opaque, "SCSI reset bus (SG_SCSI_RESET_BUS) failed on %s!", dsf);
 	}
     }
     return(error);
@@ -301,13 +405,14 @@ int
 os_reset_ctlr(scsi_generic_t *sgp)
 {
     void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
+    char *dsf = (sgp->adsf) ? sgp->adsf : sgp->dsf;
     int arg = SG_SCSI_RESET_HOST;
     int error;
 
     if ( (error = ioctl(sgp->fd, SG_SCSI_RESET, &arg)) < 0) {
 	sgp->os_error = errno;
 	if (sgp->errlog == True) {
-	    os_perror(opaque, "SCSI reset controller (SG_SCSI_RESET_HOST) failed on %s!", sgp->dsf);
+	    os_perror(opaque, "SCSI reset controller (SG_SCSI_RESET_HOST) failed on %s!", dsf);
 	}
     }
     return(error);
@@ -334,13 +439,14 @@ int
 os_reset_device(scsi_generic_t *sgp)
 {
     void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
+    char *dsf = (sgp->adsf) ? sgp->adsf : sgp->dsf;
     int arg = SG_SCSI_RESET_TARGET;
     int error;
 
     if ( (error = ioctl(sgp->fd, SG_SCSI_RESET_TARGET, &arg)) < 0) {
 	sgp->os_error = errno;
 	if (sgp->errlog == True) {
-	    os_perror(opaque, "SCSI reset device (SG_SCSI_RESET_TARGET) failed on %s!", sgp->dsf);
+	    os_perror(opaque, "SCSI reset device (SG_SCSI_RESET_TARGET) failed on %s!", dsf);
 	}
     }
     return(error);
@@ -360,13 +466,14 @@ int
 os_reset_lun(scsi_generic_t *sgp)
 {
     void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
+    char *dsf = (sgp->adsf) ? sgp->adsf : sgp->dsf;
     int arg = SG_SCSI_RESET_DEVICE;
     int error;
 
     if ( (error = ioctl(sgp->fd, SG_SCSI_RESET, &arg)) < 0) {
 	sgp->os_error = errno;
 	if (sgp->errlog == True) {
-	    os_perror(opaque, "SCSI reset device (SG_SCSI_RESET_DEVICE) failed on %s!", sgp->dsf);
+	    os_perror(opaque, "SCSI reset device (SG_SCSI_RESET_DEVICE) failed on %s!", dsf);
 	}
     }
     return(error);
@@ -549,6 +656,7 @@ int
 os_spt(scsi_generic_t *sgp)
 {
     void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
+    char *dsf = (sgp->adsf) ? sgp->adsf : sgp->dsf;
     sg_io_hdr_t sgio;
     sg_io_hdr_t *siop = &sgio;
     int error;
@@ -591,7 +699,7 @@ os_spt(scsi_generic_t *sgp)
     if (error < 0) {
 	sgp->os_error = errno;
 	if (sgp->errlog == True) {
-	    os_perror(opaque, "SCSI request (SG_IO) failed on %s!", sgp->dsf);
+	    os_perror(opaque, "SCSI request (SG_IO) failed on %s!", dsf);
 	}
 	sgp->error = True;
 	goto error;
@@ -838,10 +946,11 @@ DumpScsiCmd(scsi_generic_t *sgp, sg_io_hdr_t *siop)
     char buf[128];
     char *bp = buf;
     char *msgp = NULL;
+    char *dsf = (sgp->adsf) ? sgp->adsf : sgp->dsf;
 
     Printf(opaque, "SCSI I/O Structure:\n");
 
-    Printf(opaque, "    Device Special File .............................: %s\n", sgp->dsf);
+    Printf(opaque, "    Device Special File .............................: %s\n", dsf);
     Printf(opaque, "    File Descriptor .............................. fd: %d\n", sgp->fd);
     switch (siop->dxfer_direction) {
 	case SG_DXFER_NONE:
@@ -956,11 +1065,6 @@ os_is_retriable(scsi_generic_t *sgp)
     if ( (sgp->os_error == EAGAIN)		      ||
 	 (sgp->host_status == DID_TRANSPORT_FAILFAST) ||
 	 (sgp->host_status == DID_TRANSPORT_DISRUPTED) ) {
-	unsigned char *buffer;
-	size_t bytes = BLOCK_SIZE;
-	off_t offset;
-	int error;
-	
 	if (sgp->debug == True) {
 	    if (sgp->os_error == EAGAIN) {
 		Printf(opaque, "DEBUG: EAGAIN detected on %s...\n", sgp->cdb_name);
@@ -970,22 +1074,54 @@ os_is_retriable(scsi_generic_t *sgp)
 		Printf(opaque, "DEBUG: DID_TRANSPORT_DISRUPTED detected on %s...\n", sgp->cdb_name);
 	    }
 	}
-	offset = lseek(sgp->fd, (off_t) 0, SEEK_SET);
-	if ( (offset == (off_t)-1) && sgp->debug) {
-	    os_perror(opaque, "os_is_retriable() lseek() failed");
-	}
-	buffer = malloc_palign(opaque, bytes, 0);
-	if (buffer == NULL) return (is_retriable);
-	if (sgp->debug) {
-	    Printf(opaque, "DEBUG: Reading %u bytes at lba 0 to force path failover!\n", bytes);
-	}
-	error = read(sgp->fd, buffer, bytes);
-	/* Note: Multiple read()'s may be necessary to overcome EAGAIN! */
-	if ( (error == FAILURE) && sgp->debug) {
-	    os_perror(opaque, "os_is_retriable() read() failed");
-	}
-	free_palign(opaque, buffer);
+	(void)force_path_failover(sgp);
 	is_retriable = True;
     }
     return (is_retriable);
+}
+
+/*
+ * force_path_failover() - Force DMMP (MPIO) Path Failover. 
+ *  
+ * Description: 
+ *      Since the Linux I/O stack does *not* do failovers with SCSI pass-through API,
+ * we must do a normal read through the disk driver to force path failovers. 
+ *  
+ */
+static int
+force_path_failover(scsi_generic_t *sgp)
+{
+    void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
+    unsigned char *buffer;
+    size_t bytes = 4096; /* Handles 512 or 4k disk sector sizes. */
+    ssize_t bytes_read = 0;
+    HANDLE fd = sgp->fd;
+    hbool_t close_device = False;
+
+    if (sgp->adsf && (strncmp(sgp->dsf, SG_PATH_PREFIX, SG_PATH_SIZE) != 0) ) {
+	int oflags = (O_RDONLY|O_NONBLOCK|O_DIRECT);
+	fd = open(sgp->dsf, oflags);
+	if (fd == INVALID_HANDLE_VALUE) {
+	    if (sgp->errlog == True) {
+		os_perror(opaque, "force_path_failover(), open() of %s failed!", sgp->dsf);
+	    }
+	    return(FAILURE);
+	}
+	close_device = True;
+    }
+    buffer = malloc_palign(opaque, bytes, 0);
+    if (buffer == NULL) return (FAILURE);
+    if (sgp->debug) {
+	Printf(opaque, "DEBUG: Reading %u bytes at lba 0 to force path failover...\n", bytes);
+    }
+    bytes_read = read(fd, buffer, bytes);
+    /* Note: Multiple read()'s may be necessary to overcome EAGAIN! */
+    if ( (bytes_read == FAILURE) && sgp->debug) {
+	os_perror(opaque, "force_path_failover(), read() failed");
+    }
+    free_palign(opaque, buffer);
+    if (close_device) {
+	(void)close(fd);
+    }
+    return(SUCCESS);
 }

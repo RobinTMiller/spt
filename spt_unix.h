@@ -93,6 +93,14 @@
 
 #define TRIGGER_SCRIPT	"/x/eng/localtest/noarch/bin/dt_noprog_script.ksh"
 
+/*
+ * Define POSIX Mode for Creating Files & Directories:
+ */
+/* Note: This is 0777 for Read/Write/Execute for user, group, and other! */
+#define DIR_CREATE_MODE  (S_IRWXU | S_IRWXG | S_IRWXO)
+/* Note: This is 0666 or Read/Write for user, group, and other! */
+#define FILE_CREATE_MODE (S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH)
+
 #define OS_OPEN_FILE_OP			"open"
 #define OS_CLOSE_FILE_OP		"close"
 #define OS_DELETE_FILE_OP		"unlink"

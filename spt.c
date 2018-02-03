@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2016			    *
+ *			  COPYRIGHT (c) 2006 - 2017			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -32,159 +32,61 @@
  *
  * Modification History:
  * 
- * March 24th, 2016 by Robin T. Miller
- * 	Fix bug in close_devices(), where the thread specific parameters
- * were no being setup properly. The master device was used instead, which
- * later caused us to blowup trying to print debug information when exiting.
+ * December 5th, 2017 by Robin T. Miller
+ *      For cdb=, pin=, and pout=, allow comma "," separator vs. spaces.
  * 
- * March 7th, 2016 by Robin T. Miller
- * 	Move the tool specific information from the SCSI device structure to
- * to the per device data structure, so statistics are accurate for each device.
+ * November 16th, 2017 by Robin T. Miller
+ *      Add report-format={brief,full,none} to control expanded output.
+ *      What is epanded output? page headers and descriptors, etc.
+ *      Note: The shorthand is rfmt=, just like ofmt=, etc.
  * 
- * January 9th, 2016 by Robin T. Miller
- * 	Fix issue cloning the per device SCSI information.
- * 	Copy cdb string before using strtok() to avoid overwrites.
+ * November 2nd, 2017 by Robin T. Miller
+ *      Add SATA device flag, to handle ASCII byte swapping.
+ *      Add support for Linux device to SCSI (sg) device mapping.
  * 
- * October 3rd, 2014 by Robin T. Miller
- * 	Modified SCSI generic opaque pointer to tool_specific information,
- * so we can pass more tool specific information (e.g. dt versus spt).
+ * October 13th, 2017 by Robin T. Miller
+ *      Handle sense data in both fixed and descriptor formats.
  * 
- * June 18th, 2014 by Robin T. Miller
- * 	Add default emit status strings, choose by emit={default|multi}
- * 	This default is being added to help with automation, since it's
- * difficult to define long emit status strings and/or the SPT_EMIT_STATUS
- * environment variable from remote requests.
- *
- * June 16th, 2014 by Robin T. Miller
- *	Allow a runtime of -1 to run forever! (popular request! :-)
- * 	Added IOT Corruption Analysis (CA) support and various options.
- * 	Added enable/disable={raw|read_after_write|read_immed} flag, to
- * enable read after write and optional verify, controlled by compare flag.
- * Note: The compare flag is enabled automatically with pattern/ptype opts.
- *
- * June 15th, 2014 by Robin T. Miller
- * 	Added parsing of pattern=iot, iotpass=, and iotseed= to match dt!
- * 	Ensure the slices= value is reset to 0 before parsing next command.
- * 	Ensure cdb_blocks is reset to 0, or subsequent commands may fail.
- *
- * June 12th, 2024 by Robin T. Miller
- * 	Ensure the recovery parameters get propagated to all devices/threads.
- * Previously the parameters were only set for the selected device, so when
- * doing copy operations with compare, recovery didn't occur for all devices.
- * Basically a false error occured, since a recoverable error was not retried!
+ * October 10th, 2017 by Robin T. Miller
+ *      When waiting for a specific status, exit loop once status is found.
+ *      Added enable/disable=json_pretty to control the JSON pretty printing.
  * 
- * January 14th, 2014 by Robin T. Miller
- * 	Add keepalive options and execution to thread loops.
- *
- * December 16th, 2013 by Robin T. Miller
- * 	Add thread log file support.
- * 	Don't to selective buffer duplication, based on async flag.
- * 	This trying to share read-only data is too difficult to manage!
- *
- * October 31st, 1013 by Robin T. Miller
- * 	Remove bypass check iwhen setting up the data length based on
- * the block size (bs=) option. Otherwise, an illegal request requests
- * if they have not specifed the data length.
- * Note: Previously, this bypass check existed for negative tests, but
- * that said, many folks are now using I/O parameters and bumping into
- * issues with certain bypass checks. Let's hope we don't break folks.
+ * May 22nd, 2017 by Robin T. Miller
+ *      Add support for unpack="format string" to unpack received data.
  * 
- * January 25th, 2013 by Robin T. Miller
- * 	Moved recovery parameters to the generic SCSI device structure
- * and moved the is retriable function to the common SCSI library. This
- * allows us to enable recovery for both SPT CDB's and library functions.
- * The recovery logic is a must for Linux so we can force path failovers.
+ * February 26th, 2017 by Robin T. Miller
+ *      Add support for Inquiry pages.
+ *      Make full sense data display the default.
  * 
- * December 17th, 2012 by Robin T. Miller
- * 	Added support for automatic error recovery.
- * 	The recovery can be OS specific, or common for SCSI Busy and
- * Unit Attention sense key. These are hardcoded (at present).
+ * February 19th, 2017 by Robin T. Miller
+ *      Add support for log sense pages.
  * 
- * November 19th, 2012 by Robin T. Miller
- * 	Replace sleep/msleep/usleep with OS specific macros.
- * 	For *nix, the OS macros invoke poll() to be thread safe!
- *
- * November 13th, 2012 by Robin T. Miller
- * 	Added support for continuation lines and expanding env variables.
- * 	This enhancement is mainly for helping with script files.
- * 	Handle script and interactive end-of-file better (don't loop).
- *
- * November 9th, 2012 by Robin T. Miller
- * 	Added support for iomode={copy,mirror,test,verify} options.
- *
- * October 23rd, 2012 by Robin T. Miller
- * 	Added support for non-token based extended copy (xcopy) support.
- * 	This included major restructuring to support multiple device per thread.
- *
- * February 15th, 2012 by Robin T. Miller
- *	Ensure the proper exit status is maintained with multiple commands.
- * 	When executing script commands, on failures, close all script files.
- * 	Previously, we would continue executing script commands on errors.
- *
- * February 6th, 2012 by Robin T. Miller
- * 	When formatting the emit status string, allocate sufficient memory for
- * the max sense data length. Don't know this is a problem, but we could exceed
- * the previous length of 256 characters!
+ * January 21st, 2017 by Robin T. Miller
+ * 	On get command line failures, invoke HandleExit() w/status.
+ *	For Windows, parse <cr><lf> properly for continuation lines.
+ *      Allows comments on continuation lines, including leading spaces.
  * 
- * January 28th, 2012 by Robin T. Miller
- * 	When verifying expected data, provide a more user friendly format, and
- * verify all bytes, rather than stopping at the first mismatched data. Also,
- * when a failure is detected, provide a summary of the good and bad entries.
+ * January 6th, 2017 by Robin T. Miller
+ *      Add verify data flag, to request and verify data previously set.
+ *      This is currently being implemented for verifying SES page data.
+ *
+ * December 3rd, 2016 by Robin T. Miller
+ *      Move SCSI Enclosure Services (SES) functions to spt_ses.c
  * 
- * January 23rd, 2012 by Robin T. Miller
- * 	When expanding the %sense_data, include the sense length byte, otherwise
- * we are short (off by 1) byte in the emitted sense data.
+ * November 15th, 2016 by Robin T. Miller
+ *      Add generic send/receive diagnostic commands: senddiag and rcvdiag
+ *      These should be used in conjunction with these options:
+ *          page=value and/or pout="hex bytes..." for send diagnostic
+ *      The CDB length and page header length are automatically initialized.
  * 
- * January 19th, 2012 by Robin T. Miller
- * 	Dynamically adjust the expected data bytes during parsing, when we exceed
- * the initially allocated 64 entries. Also add exp_radix, to override the default
- * any radix, so one can set it to hex (for example) and avoid many 0x prefixes.
+ * October 7th, 2016 by Robin T. Miller
+ *	Modify a_cdb() to allow calling decode even when not receiving data.
  * 
- * April 28th, 2011 by Robin T. Miller
- * 	Fix pthread*() API error handling. I assumed (wrongly) that these API's
- * returned -1 for an error, and set errno, but this is not the case. To be
- * thread safe, pthread API's return 0 on success, and the errno on errors!
- * 
- * May 7th, 2010 by Robin T. Miller
- * 	Restructure code in prepartion for multi-threading. Move global data
- * to either scsi_device or scsi_generic data structures.
- * 
- * May 16th, 2008 by Robin T. Miller
- *	Updated ReadDataFile() to do multiple reads in attempts to read
- * the data size specified, since data can get broken up reading pipes.
- *
- * September 11th, 2007 by Robin T. Miller
- *	Add native Windows support (see _WIN32 conditionalization).
- *	When doing a SCSI write, if a data in file is not specified, then
- * we allocate a null filled buffer to write (for ease of use).
- *
- * August 14th, 2007 by Robin T. Miller.
- *	Added support for Solaris head of HA queue type.
- *	Changed queue type default from noq to simple queue.
- *	Added reporting of OS specific host and driver status.
- *
- * August 10th, 2007 by Robin T. Miller
- *	If the dsf= is specified without an operation, enable interactive
- * mode (similar to pipe mode, except w/prompt and no emit status string).
- *
- * August 5th, 2007 by Robin T. Miller
- *	Added support for pipe mode for use with test scripts.
- *
- * August 1st, 2007 by Robin T. Miller
- *	Add support for user defined emit status string.
- *
- * March 21st, 2007 by Robin T. Miller.
- *	Fix improper free() in ExecuteCdb() detected on Linux.
- *
- * February 10th, 2007 by Robin T. Miller
- *      Added support for queue tag message types, and abort task set.
- *
- * November 18th, 2006 by Robin T. Miller
- *      Added support for pout='hh hh ...' option to specify parameter
- * data to send device. Note: When using this option, the data direction
- * is automatically set to "write" and the length is set from the number
- * of hex bytes specified.
- *
+ * September 14th, 2016 by Robin T. Miller
+ *      Merge dt's variable expansion logic.
+ *      Fix parsing of quoted text in MakeArgList().
+ *      Bug was terminaing with a NULL, rather than processing more
+ * text in the string. What was I thinking? ;(
  */
 #if defined(AIX)
 # include "aix_workaround.h"
@@ -211,6 +113,10 @@
 #include "libscsi.h"
 #include "inquiry.h"
 #include "spt.h"
+#include "spt_version.h"
+#include "spt_ses.h"
+#include "scsi_diag.h"
+#include "scsi_log.h"
 
 /*
  * Local Definitions:
@@ -247,12 +153,14 @@ char    *OurName = NULL;                /* Our program name.            */
 char	*sptpath;			/* Path to our executable.	*/
 volatile hbool_t CmdInterruptedFlag;	/* User interrupted command.	*/ 
 hbool_t DebugFlag = False;		/* The program debug flag.	*/
+hbool_t ExpandVars = True;		/* Expand environment variables.*/
 hbool_t	ExitFlag = False;		/* In pipe mode, exit flag.	*/
 hbool_t InteractiveFlag = False;	/* Stay in interactive mode.	*/
 hbool_t	mDebugFlag = False;		/* Memory related debug flag.	*/
 hbool_t StdinIsAtty = TRUE;		/* Standard input isatty flag.	*/
 hbool_t StdoutIsAtty = TRUE;		/* Standard output isatty flag.	*/
 hbool_t	PipeModeFlag = False;		/* Pipe mode control flag.	*/
+uint32_t PipeDelay = 250;		/* Pipe mopde delay value.	*/
 
 /* Note: These will become unique per thread w/log option! */
 FILE	*efp;				/* Default error data stream.	*/
@@ -348,10 +256,14 @@ hbool_t	is_retriable(scsi_generic_t *sgp);
 int ExecuteCdb(scsi_device_t *sdp, scsi_generic_t *sgp);
 static int VerifyExpectedData(scsi_device_t *sdp, unsigned char *buffer, size_t count);
 static hbool_t check_expected_status(scsi_device_t *sdp, hbool_t report);
+void cleanup_EOL(char *string);
+void display_command(scsi_device_t *sdp, char *command, hbool_t prompt);
+char *expand_word(scsi_device_t *sdp, char **from, size_t bufsiz, int *status);
 static int parse_args(scsi_device_t *sdp, int argc, char **argv);
 static int parse_exp_data(char *str, scsi_device_t *sdp);
 static int expand_exp_data(scsi_device_t *sdp);
-static hbool_t match(char **sptr, char *s);
+static int parse_ses_args(char *string, scsi_device_t *sdp);
+hbool_t match(char **sptr, char *s);
 char *concatenate_args(scsi_device_t *sdp, int argc, char **argv, int arg_index);
 void show_expression(scsi_device_t *sdp, uint64_t value);
 static uint32_t number(scsi_device_t *sdp, char *str, int base);
@@ -372,7 +284,7 @@ int clone_devices(scsi_device_t *sdp, scsi_device_t *tsdp);
 #if defined(_WIN32)
 void mark_devices_closed(scsi_device_t *sdp);
 #endif /* defined(WIN32) */
-void EmitStatus(scsi_device_t *sdp, char *status_string);
+void EmitStatus(scsi_device_t *sdp, char *status_string, hbool_t prefix_flag);
 int HandleExit(scsi_device_t *sdp, int status);
 void MyExit(scsi_device_t *sdp, int status);
 void SignalHandler(int sig);
@@ -408,6 +320,7 @@ init_devices(scsi_device_t *sdp)
 	sgp->afd		= INVALID_HANDLE_VALUE;
 	sgp->debug		= False;
 	sgp->dopen		= True;
+	sgp->mapscsi		= MapDeviceToScsiDefault;
 	tsp->opaque		= sdp;
 	tsp->params		= iop;
 	tsp->execute_cdb	= (int (*)(void *, scsi_generic_t *))&ExecuteCdb;
@@ -549,7 +462,6 @@ cleanup_devices(scsi_device_t *sdp, hbool_t master)
 	iop->total_lba_blocks	= 0;
 	iop->max_unmap_lba_count= 0;
 	iop->max_write_same_len = 0;
-
 	sgp->cdb_name		= "SCSI_CDB";
 	sgp->cdb_size		= 0;
 	sdp->iterations		= 0;
@@ -624,6 +536,10 @@ cleanup_devices(scsi_device_t *sdp, hbool_t master)
     if (sdp->pin_buffer) {
 	free_palign(sdp, sdp->pin_buffer);
 	sdp->pin_buffer = NULL;
+    }
+    if (sdp->unpack_format) {
+	free(sdp->unpack_format);
+	sdp->unpack_format = NULL;
     }
     if (sdp->user_sname) {
 	free(sdp->scsi_name);
@@ -730,7 +646,7 @@ clone_devices(scsi_device_t *sdp, scsi_device_t *tsdp)
 	    }
 #endif /* defined(WIN32) */
 	}
-	/*
+        /*
 	 * If we clone the base device, we must copy its' SCSI information.
 	 */
 	if (biop->cloned_device == True) {
@@ -759,6 +675,9 @@ clone_devices(scsi_device_t *sdp, scsi_device_t *tsdp)
     }
     if (sdp->keepalive) {
 	tsdp->keepalive = strdup(sdp->keepalive);
+    }
+    if (sdp->unpack_format) {
+	tsdp->unpack_format = strdup(sdp->unpack_format);
     }
     if (sdp->user_sname) {
 	tsdp->scsi_name = strdup(sdp->scsi_name);
@@ -807,17 +726,21 @@ mark_devices_closed(scsi_device_t *sdp)
  * Note: This function is used for emit status and keepalive format/display.
  */
 void
-EmitStatus(scsi_device_t *sdp, char *status_string)
+EmitStatus(scsi_device_t *sdp, char *status_string, hbool_t prefix_flag)
 {
     /*
      * If an emit statusi/keepalive string was specified, format and display it.
      */
-    if (status_string) {
+    if (status_string && strlen(status_string)) {
 	char *efmt_buffer = Malloc(sdp, EMIT_STATUS_BUFFER_SIZE);
 	if (efmt_buffer == NULL) return;
 	(void)FmtEmitStatus(sdp, NULL, NULL, status_string, efmt_buffer);
 	strcat(efmt_buffer, "\n");
-	PrintLines(sdp, efmt_buffer);
+	if (prefix_flag == True) {
+	    PrintLines(sdp, efmt_buffer);
+	} else {
+	    Print(sdp, "%s", efmt_buffer);
+	}
 	(void)fflush(stdout);
 	free(efmt_buffer);
     }
@@ -840,7 +763,6 @@ HandleExit(scsi_device_t *sdp, int status)
      * Commands like "help" or "version" will cause scripts to exit,
      * but we don't wish to continue on fatal errors, so...
      */
-    //if (InteractiveFlag || PipeModeFlag) {
     if (InteractiveFlag || PipeModeFlag || sdp->script_level) {
 	if (sdp->script_level && (status == FAILURE)) {
 	    MyExit(sdp, status);	/* Rethink this, it's too messy! */
@@ -1010,17 +932,21 @@ main(int argc, char **argv)
     sdp->exp_data_entries = EXP_DATA_ENTRIES;
     sdp->exp_data_size	  = (sizeof(exp_data_t) * sdp->exp_data_entries);
     sdp->log_header_flag  = LogHeaderFlagDefault;
+    sdp->report_format    = REPORT_FULL;
     sdp->read_after_write = ReadAfterWriteDefault;
     sdp->prewrite_flag	  = PreWriteFlagDefault; /* Controls CAW data prewrites. */
+    sdp->sata_device_flag = SataDeviceFlagDefault;
     sdp->scsi_info_flag   = ScsiInformationDefault;
     sdp->sense_flag 	  = SenseFlagDefault;
     sdp->verbose	  = VerboseFlagDefault;
+    sdp->verify_data	  = VerifyFlagDefault;
     sdp->warnings_flag	  = WarningsFlagDefault;
     /* IOT Corruption Analysis Defaults: */
     sdp->dumpall_flag	  = False;
     sdp->max_bad_blocks	  = MAXBADBLOCKS;
     sdp->boff_format	  = HEX_FMT;
     sdp->data_format	  = NONE_FMT;
+    sdp->unpack_data_fmt  = DEC_FMT;
 
     /*
      * SCSI Read Verify Information: (used for xcopy and copy/mirror/verify ops)
@@ -1029,7 +955,22 @@ main(int argc, char **argv)
     sdp->scsi_read_length  = ScsiReadLengthDefault;
     sdp->scsi_write_type   = ScsiWriteTypeDefault;
     sdp->scsi_write_length = ScsiWriteLengthDefault;
-    
+
+    /*
+     * Page Control Defaults:
+     */
+    sdp->page_control = LOG_PCF_CURRENT_CUMULATIVE;
+    sdp->page_format = True;		/* Set the page format bit. */
+    sdp->page_code_valid = True;	/* Set the page code valid bit. */
+
+    /*
+     * Storage Enclosure Services Defaults:
+     */
+    sdp->ses_element_flag = False;
+    sdp->ses_element_index = ELEMENT_INDEX_UNINITIALIZED;
+    sdp->ses_element_status = ELEMENT_STATUS_UNINITIALIZED;
+    sdp->ses_element_type = ELEMENT_TYPE_UNINITIALIZED;
+
     init_devices(sdp);
     tsgp = NULL;
 
@@ -1110,10 +1051,13 @@ main(int argc, char **argv)
 	sdp->dout_file		= NULL;
 	sdp->rod_token_file	= NULL;
 	sdp->iomode		= IOMODE_TEST;
+	sdp->cmd_type		= CMD_TYPE_NONE;
+	sdp->cgs_type		= CGS_TYPE_NONE;
 	sdp->op_type		= UNDEFINED_OP;
 	memset(&sdp->tci, 0, sizeof(sdp->tci));
 	sdp->tci.exp_scsi_status = SCSI_GOOD;
 	sdp->exp_data_count	= 0;
+	sdp->page_specified	= False;
 	sdp->pin_data		= False;
 	sdp->pin_length		= 0;
 	sdp->slices		= 0;
@@ -1122,6 +1066,7 @@ main(int argc, char **argv)
 	sdp->user_pattern	= False;
 	sdp->compare_data	= CompareFlagDefault;
 	sdp->image_copy		= ImageModeFlagDefault;
+	sdp->json_pretty	= JsonPrettyFlagDefault;
 	sdp->iot_seed		= IOT_SEED;
 	sdp->iot_pattern	= False;
 	sdp->range_count	= RangeCountDefault;
@@ -1136,11 +1081,15 @@ main(int argc, char **argv)
 	    /* Parse command line options first! */
 	    FirstTime = False;
 	} else {
-	    if ( (pstatus = sptGetCommandLine(sdp)) != SUCCESS) {
+	    if (PipeModeFlag) {
+		sdp->status = status;
+	    }
+	    if ((pstatus = sptGetCommandLine(sdp)) != SUCCESS) {
 		if (pstatus == END_OF_FILE) {
 		    ExitFlag = True;
 		} else if (pstatus == FAILURE) {
 		    status = pstatus;
+		    (void)HandleExit(sdp, pstatus);
 		}
 		continue;
 	    }
@@ -1178,7 +1127,15 @@ main(int argc, char **argv)
 	    (void)HandleExit(sdp, WARNING);
 	    continue;
 	}
-	
+
+	if ( (sdp->cmd_type != CMD_TYPE_NONE) &&
+	     ( (sdp->ses_element_flag == False) ||
+	       (sdp->ses_element_type == ELEMENT_TYPE_UNINITIALIZED) ) ) {
+	    Wprintf(sdp, "Please specify an element index and element type!\n");
+	    (void)HandleExit(sdp, WARNING);
+	    continue;
+	}
+
 	/* Propagate recovery parameters to SCSI generic fields. */
 	sgp->recovery_flag = sdp->recovery_flag;
 	sgp->recovery_delay = sdp->recovery_delay;
@@ -1467,7 +1424,7 @@ a_cdb(void *arg)
     scsi_device_t *sdp = arg;
     io_params_t *iop = &sdp->io_params[IO_INDEX_BASE];
     scsi_generic_t *sgp = &iop->sg;
-    hbool_t expected_found, file_open = False;
+    hbool_t expected_found = False, file_open = False;
     hbool_t opened_devices = False;
     struct tms end_times;
     int status;
@@ -1557,7 +1514,7 @@ top:
 		expected_found = check_expected_status(sdp, reached_limit);
 		if (expected_found) {
 		    sdp->status = SUCCESS;	/* We matched, that's success! */
-		    /* continue below */
+		    /* Continue to allow other checks below... */
 		} else if (reached_limit) {
 		    Eprintf(sdp, "Retry limit of " LUF" reached for SCSI opcode 0x%x (%s)\n",
 			    (sdp->iterations + 1), sgp->cdb[0], sgp->cdb_name);
@@ -1565,8 +1522,8 @@ top:
 		    break;
 		} else {
 		    sdp->retry_count++;
-		    do_sleeps(sdp);
-		    continue;
+		    //do_sleeps(sdp);
+		    /* Continue to allow other checks below... */
 		}
 	    } else {
 		expected_found = check_expected_status(sdp, True);
@@ -1600,9 +1557,10 @@ top:
 	    sdp->status = FAILURE;
 	    break;
 	} 
-
-	if ( (status == SUCCESS) && sdp->decode_flag &&
-	     ((sgp->data_dir == scsi_data_read) && sgp->data_transferred) ) {
+	/* 
+	 * Some send commands are followed by receiving data, so allow decode!
+	 */
+	if ( (status == SUCCESS) && sdp->decode_flag ) {
 	    if (iop->sop && iop->sop->decode) {
 		sdp->status = (*iop->sop->decode)(sdp);
 	    }
@@ -1613,7 +1571,7 @@ top:
 	    if (file_open == True) {
 		ssize_t count;
 #if defined(_WIN32)
-		if (!WriteFile(sdp->data_fd, sgp->data_buffer, sgp->data_transferred, &count, NULL)) count = -1;
+		if (!WriteFile(sdp->data_fd, sgp->data_buffer, sgp->data_transferred, (LPDWORD)&count, NULL)) count = -1;
 #else /* !defined(_WIN32) */
 		count = write(sdp->data_fd, sgp->data_buffer, sgp->data_transferred);
 #endif /* defined(_WIN32) */
@@ -1660,18 +1618,42 @@ top:
 		    sdp->status = VerifyExpectedData(sdp, sgp->data_buffer, sgp->data_transferred);
 		    if (sdp->status == FAILURE) break;
 		}
+		if (sdp->unpack_format && (status == SUCCESS) && sgp->data_transferred) {
+		    char *unpacked = FmtUnpackString(sdp, sdp->unpack_format, sgp->data_buffer, sgp->data_transferred);
+		    if (unpacked) {
+			PrintLines(sdp, unpacked);
+			Free(sdp, unpacked);
+		    } else {
+			sdp->status = FAILURE;
+			break;
+		    }
+		}
 	    }
 	}
 	if (sdp->emit_all) {
-	    EmitStatus(sdp, sdp->emit_status);
+	    EmitStatus(sdp, sdp->emit_status, True);
 	}
 	if (sdp->keepalive_time && sdp->keepalive) {
 	    time_t current_time = time((time_t *) 0);
 	    if ( (current_time - sdp->last_keepalive) >= sdp->keepalive_time) {
-		EmitStatus(sdp, sdp->keepalive);
+		EmitStatus(sdp, sdp->keepalive, True);
 		sdp->last_keepalive = current_time;
 	    }
 	}
+	/*
+	 * When waiting for a specific status, break out once found.
+	 */
+	if (sdp->tci.check_status && sdp->tci.wait_for_status) {
+	    if (expected_found == True) {
+		break;		/* Ok, we found the expected status. */
+	    } else {
+		if (do_post_processing(sdp, SUCCESS) != CONTINUE) {
+		    break;
+		}
+		goto top;	/* Loop without requiring repeat option! */
+	    }
+	}
+	/* Note: This handles Ctrl/C and sleeps. (even the author forgets!) */
 	if (do_post_processing(sdp, sdp->status) != CONTINUE) {
 	    break;
 	}
@@ -1679,8 +1661,8 @@ top:
 	 * Special check, so we can repeat this sequence up to the runtime. 
 	 */
 	if (iop->block_limit) {
-	    if ( (CmdInterruptedFlag == True) ||
-		( (sdp->runtime > 0) && (time(&sdp->loop_time) >= sdp->end_time)) ) {
+	    /* Ugly, but we must avoid while checks below, esp. iterations! */
+	    if ( (sdp->runtime > 0) && (time(&sdp->loop_time) >= sdp->end_time) ) {
 		break;
 	    }
 	    goto top;
@@ -1700,7 +1682,7 @@ finish:
     }
     (void)close_devices(sdp, IO_INDEX_BASE);
     if (!PipeModeFlag && !sdp->emit_all) {
-	EmitStatus(sdp, sdp->emit_status);
+	EmitStatus(sdp, sdp->emit_status, True);
     }
     pthread_exit(sdp);
     return(NULL);
@@ -1749,12 +1731,12 @@ a_tmf(void *arg)
 	 */
 	sdp->status = (*sdp->sg_func)(sgp);
 	if (sdp->emit_all) {
-	    EmitStatus(sdp, sdp->emit_status);
+	    EmitStatus(sdp, sdp->emit_status, True);
 	}
 	if (sdp->keepalive_time && sdp->keepalive) {
 	    time_t current_time = time((time_t *) 0);
 	    if ( (current_time - sdp->last_keepalive) >= sdp->keepalive_time) {
-		EmitStatus(sdp, sdp->keepalive);
+		EmitStatus(sdp, sdp->keepalive, True);
 		sdp->last_keepalive = current_time;
 	    }
 	}
@@ -1771,7 +1753,7 @@ finish:
     sdp->end_time = time((time_t *) 0);
     (void)close_devices(sdp, IO_INDEX_BASE);
     if (!PipeModeFlag && !sdp->emit_all) {
-	EmitStatus(sdp, sdp->emit_status);
+	EmitStatus(sdp, sdp->emit_status, True);
     }
     pthread_exit(sdp);
     return(NULL);
@@ -1788,8 +1770,8 @@ process_cdb_params(scsi_device_t *sdp)
      * Calculate the CDB size (as needed).
      */
     if (iop->user_cdb_size == False) {
-	/* Note: Bypass previousily skipped this, but caused issues! */
-	/*   But, changing this breaks compatibility, so small risk! */
+	/* Note: Bypass previously skipped this, but caused issues! */
+	/*  But, changing this breaks compatibility, so small risk! */
 	if ( (sgp->cdb_size != 6)   && (sgp->cdb_size != 10) &&
 	     (sgp->cdb_size != 12)  && (sgp->cdb_size != 16) ) {
 	    sgp->cdb_size = GetCdbLength(sgp->cdb[0]);
@@ -1936,7 +1918,7 @@ process_output_file(scsi_device_t *sdp)
 	    sdp->data_fd = CreateFile(sdp->dout_file, GENERIC_WRITE, FILE_SHARE_WRITE,
 				      NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 #else /* !defined(_WIN32) */
-	    sdp->data_fd = open(sdp->dout_file, (O_CREAT|O_RDWR), (S_IRWXU|S_IRWXG|S_IRWXO));
+	    sdp->data_fd = open(sdp->dout_file, (O_CREAT|O_RDWR), FILE_CREATE_MODE);
 #endif /* defined(_WIN32) */
 	}
 	if (sdp->data_fd == INVALID_HANDLE_VALUE) {
@@ -2025,7 +2007,11 @@ ExecuteCdb(scsi_device_t *sdp, scsi_generic_t *sgp)
 	char *host_msg = os_host_status_msg(sgp);
 	char *driver_msg = os_driver_status_msg(sgp);
         scsi_sense_t *ssp = sgp->sense_data;
-        char *ascq_msg = ScsiAscqMsg(ssp->asc, ssp->asq);
+	unsigned char sense_key, asc, asq;
+	char *ascq_msg;
+
+	GetSenseErrors(ssp, &sense_key, &asc, &asq);
+	ascq_msg = ScsiAscqMsg(asc, asq);
 
 	ReportCdbDeviceInformation(sdp, sgp);
 	Fprintf(sdp, "SCSI Status = %#x (%s)\n", sgp->scsi_status, ScsiStatus(sgp->scsi_status));
@@ -2044,8 +2030,7 @@ ExecuteCdb(scsi_device_t *sdp, scsi_generic_t *sgp)
 		   sgp->host_status, sgp->driver_status);
 	}
 	Fprintf(sdp, "Sense Key = %d = %s, Sense Code/Qualifier = (%#x, %#x)",
-		ssp->sense_key, SenseKeyMsg(ssp->sense_key),
-		ssp->asc, ssp->asq);
+		sense_key, SenseKeyMsg(sense_key), asc, asq);
 	if (ascq_msg) {
 	  Fprint(sdp, " - %s\n", ascq_msg);
 	} else {
@@ -2108,20 +2093,22 @@ check_expected_status(scsi_device_t *sdp, hbool_t report)
 {
     scsi_generic_t *sgp = &sdp->io_params[IO_INDEX_BASE].sg;
     scsi_sense_t *ssp = sgp->sense_data;
+    unsigned char sense_key, asc, asq;
     hbool_t expected_found;
 
+    GetSenseErrors(ssp, &sense_key, &asc, &asq);
     if ( (sdp->tci.exp_scsi_status != sgp->scsi_status)	 ||
 	 ((sdp->tci.exp_scsi_status == SCSI_CHECK_CONDITION) &&
-	  ((sdp->tci.exp_sense_key != ssp->sense_key)	 ||
-	   (sdp->tci.exp_sense_asc != ssp->asc)		 ||
-	   (sdp->tci.exp_sense_asq != ssp->asq))) ) {
+	  ((sdp->tci.exp_sense_key != sense_key)	 ||
+	   (sdp->tci.exp_sense_asc != asc)		 ||
+	   (sdp->tci.exp_sense_asq != asq))) ) {
 	if (sgp->debug || report) {
 	    Fprint(sdp, "Result for %s\n", sgp->cdb_name);
 	    Fprint(sdp, "Expected:\n");
 	    print_scsi_status(sgp, sdp->tci.exp_scsi_status, sdp->tci.exp_sense_key,
 			      sdp->tci.exp_sense_asc, sdp->tci.exp_sense_asq);
 	    Fprint(sdp, "Actual:\n");
-	    print_scsi_status(sgp, sgp->scsi_status, ssp->sense_key, ssp->asc, ssp->asq);
+	    print_scsi_status(sgp, sgp->scsi_status, sense_key, asc, asq);
 	}
 	expected_found = False;
     } else {
@@ -2166,9 +2153,13 @@ parse_args(scsi_device_t *sdp, int argc, char **argv)
         if (match (&string, "cdb=")) {
 	    uint32_t value;
             char *str, *token;
-            sgp->cdb_size = 0;
+	    char *sep = " ";
+	    if (strchr(string, ',')) {
+		sep = ",";
+	    }
+	    sgp->cdb_size = 0;
 	    str = strdup(string);
-            token = strtok(str, " ");
+            token = strtok(str, sep);
             while (token != NULL) {
 		value = number(sdp, token, HEX_RADIX);
 		if (value > 0xFF) {
@@ -2177,7 +2168,7 @@ parse_args(scsi_device_t *sdp, int argc, char **argv)
 		    return ( HandleExit(sdp, FATAL_ERROR) );
 		}
                 sgp->cdb[sgp->cdb_size++] = (uint8_t)value;
-                token = strtok(NULL, " ");
+                token = strtok(NULL, sep);
                 if (sgp->cdb_size >= MAX_CDB) {
                     Eprintf(sdp, "Maximum CDB size is %d bytes!\n", MAX_CDB);
 		    Free(sdp, str);
@@ -2187,7 +2178,11 @@ parse_args(scsi_device_t *sdp, int argc, char **argv)
 	    Free(sdp, str);
 	    sdp->op_type = SCSI_CDB_OP;
 	    /*
-	     * Note: Disabled for fear of breaking existing scripts! (negative testing)
+	     * Note: Disabled for fear of breaking existing scripts! (negative testing) 
+	     *  
+	     * This cannot be enabled without the side effect of forcing the direction 
+	     * and data length to be required for where encode functions set these! 
+	     * Therefore, this code MUST stay disabled. Inquiry is an example.
 	     */ 
 #if 0
 	    /* Setup the CDB size and direction, if known. */
@@ -2381,6 +2376,10 @@ eloop:
                 DebugFlag = sdp->DebugFlag = True;
                 goto eloop;
             }
+            if (match(&string, "expandvars")) {
+                ExpandVars = True;
+                goto eloop;
+            }
             if (match(&string, "mdebug")) {
                 mDebugFlag = True;
                 goto eloop;
@@ -2421,6 +2420,14 @@ eloop:
                 sdp->log_header_flag = True;
                 goto eloop;
             }
+            if (match(&string, "json_pretty")) {
+                sdp->json_pretty = True;
+                goto eloop;
+            }
+            if (match(&string, "mapscsi")) {
+                sgp->mapscsi = True;
+                goto eloop;
+            }
             if (match(&string, "multi")) {
                 PipeModeFlag = False;
 		InteractiveFlag = True;
@@ -2447,6 +2454,14 @@ eloop:
 		sdp->read_after_write = True;
 		goto eloop;
 	    }
+	    if (match(&string, "scriptverify")) {
+		sdp->script_verify = True;
+		goto eloop;
+	    }
+	    if (match(&string, "sata")) {
+		sdp->sata_device_flag = True;
+		goto eloop;
+	    }
 	    if (match(&string, "scsi")) {
 		sdp->scsi_info_flag = True;
 		goto eloop;
@@ -2461,6 +2476,10 @@ eloop:
 	    }
 	    if (match(&string, "verbose")) {
 		sdp->verbose = True;
+		goto eloop;
+	    }
+	    if (match(&string, "verify")) {
+		sdp->verify_data = True;
 		goto eloop;
 	    }
 	    if (match(&string, "warnings")) {
@@ -2514,14 +2533,22 @@ dloop:
                 DebugFlag = sdp->DebugFlag = False;
                 goto dloop;
             }
+            if (match(&string, "expandvars")) {
+                ExpandVars = False;
+                goto dloop;
+            }
 	    if (match(&string, "mdebug")) {
 		mDebugFlag = False;
 		goto dloop;
 	    }
 	    if (match(&string, "header")) {
 		sdp->logheader_flag = False;
-		goto eloop;
+		goto dloop;
 	    }
+            if (match(&string, "json_pretty")) {
+                sdp->json_pretty = False;
+                goto dloop;
+            }
             if (match(&string, "xdebug")) {
                 sdp->xDebugFlag = False;
                 goto dloop;
@@ -2554,6 +2581,10 @@ dloop:
                 sdp->log_header_flag = False;
                 goto dloop;
             }
+            if (match(&string, "mapscsi")) {
+                sgp->mapscsi = False;
+                goto dloop;
+            }
             if (match(&string, "multi")) {
 		InteractiveFlag = False;
                 goto dloop;
@@ -2575,6 +2606,14 @@ dloop:
 		sdp->read_after_write = False;
 		goto dloop;
 	    }
+	    if (match(&string, "scriptverify")) {
+		sdp->script_verify = False;
+		goto dloop;
+	    }
+	    if (match(&string, "sata")) {
+		sdp->sata_device_flag = False;
+		goto dloop;
+	    }
 	    if (match(&string, "scsi")) {
 		sdp->scsi_info_flag = False;
 		goto dloop;
@@ -2589,6 +2628,10 @@ dloop:
 	    }
 	    if (match(&string, "verbose")) {
 		sdp->verbose = False;
+		goto dloop;
+	    }
+	    if (match(&string, "verify")) {
+		sdp->verify_data = False;
 		goto dloop;
 	    }
 	    if (match(&string, "warnings")) {
@@ -2642,6 +2685,34 @@ dloop:
 	    }
 	    continue;
 	}
+	if ( match(&string, "ofmt=") || match(&string, "output-format=")) {
+	    if (match(&string, "ascii")) {
+		sdp->output_format = ASCII_FMT;
+	    } else if (match (&string, "json")) {
+		sdp->output_format = JSON_FMT;
+	    } else {
+		Eprintf(sdp, "Valid data formats are: ascii or json\n");
+		return ( HandleExit(sdp, FAILURE) );
+	    }
+	    if (sdp->log_prefix) {
+		Free(sdp, sdp->log_prefix);
+	    }
+	    sdp->log_prefix = strdup("");
+	    continue;
+	}
+	if ( match(&string, "rfmt=") || match(&string, "report-format=")) {
+	    if (match(&string, "brief")) {
+		sdp->report_format = REPORT_BRIEF;
+	    } else if (match (&string, "full")) {
+		sdp->report_format = REPORT_FULL;
+	    } else if (match (&string, "none")) {
+		sdp->report_format = REPORT_NONE;
+	    } else {
+		Eprintf(sdp, "Valid data formats are: brief or full\n");
+		return ( HandleExit(sdp, FAILURE) );
+	    }
+	    continue;
+	}
 	if (match (&string, "keepalive=")) {
 	    if (sdp->keepalive) free(sdp->keepalive);
 	    sdp->keepalive = strdup(string);
@@ -2684,6 +2755,170 @@ dloop:
             }
             continue;
         }
+	if (match (&string, "inquiry")) {
+	    size_t data_length = sizeof(inquiry_t);
+	    uint8_t page = 0;
+	    if ( setup_inquiry(sdp, sgp, data_length, page) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+            continue;
+        }
+	if (match (&string, "logsense")) {
+	    size_t data_length = LOG_SENSE_LENGTH_MAX;
+	    uint8_t page = 0;
+	    if ( setup_log_sense(sdp, sgp, data_length, page) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+            continue;
+        }
+	if (match (&string, "zerolog")) {
+	    uint8_t page = 0;
+	    if ( setup_zero_log(sdp, sgp, page) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+            continue;
+        }
+	if (match (&string, "readcapacity16")) {
+	    size_t data_length = LOG_SENSE_LENGTH_MAX;
+	    uint8_t page = 0;
+	    if ( setup_read_capacity16(sdp, sgp) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+            continue;
+        }
+	/* Generic receive diagnostic setup. */
+	if (match (&string, "rcvdiag")) {
+	    size_t data_length = RECEIVE_DIAGNOSTIC_MAX;
+	    uint8_t page = 0;
+	    if ( setup_receive_diagnostic(sdp, sgp, data_length, page) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+            continue;
+        }
+	/* Generic send diagnostic setup. */
+	if (match (&string, "senddiag")) {
+	    size_t data_length = 0;
+	    uint8_t page = 0;
+	    if ( setup_send_diagnostic(sdp, sgp, page) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+            continue;
+        }
+	/* SES diagnostic page to return enclosure help text. */
+	if (match (&string, "showhelp")) {
+	    size_t data_length = RECEIVE_DIAGNOSTIC_MAX;
+	    if ( setup_receive_diagnostic(sdp, sgp, data_length, DIAG_HELP_TEXT_PAGE) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+            continue;
+        }
+	/* SES Parameters. */
+	if ( match(&string, "element=") || match(&string, "element_index=") ) {
+	    sdp->ses_element_index = (int)number(sdp, string, ANY_RADIX);
+	    sdp->ses_element_flag = True;
+	    continue;
+	}
+	if ( match(&string, "etcode=") || match(&string, "element_tcode=") ) {
+	    sdp->ses_element_type = (int)number(sdp, string, ANY_RADIX);
+	    continue;
+	}
+	if ( match(&string, "escode=") || match(&string, "element_scode=") ) {
+	    sdp->ses_element_status = (int)number(sdp, string, ANY_RADIX);
+	    continue;
+	}
+	if ( match(&string, "etype=") || match(&string, "element_type=") ) {
+	    int status = SUCCESS;
+	    sdp->ses_element_type = find_element_type(sdp, string, &status);
+	    if (status == FAILURE) {
+		Eprintf(sdp, "Did not find element type '%s'!\n", string);
+		return( HandleExit(sdp, status) );
+	    } else if (status == WARNING) {
+		return( HandleExit(sdp, status) );
+	    }
+	    continue;
+	}
+	if ( match(&string, "estatus=") || match(&string, "element_status=") ) {
+	    int status = SUCCESS;
+	    sdp->ses_element_status = find_element_status(sdp, string, &status);
+	    if (status == FAILURE) {
+		Eprintf(sdp, "Did not find element status '%s'!\n", string);
+		return( HandleExit(sdp, status) );
+	    } else if (status == WARNING) {
+		return( HandleExit(sdp, status) );
+	    }
+	    continue;
+	}
+	if (match(&string, "ses")) {
+	    uint8_t page = DIAG_ENCLOSURE_CONTROL_PAGE;
+	    size_t data_length = RECEIVE_DIAGNOSTIC_MAX;
+	    int status;
+	    if (++i < argc) {
+                string = argv[i];
+		status = parse_ses_args(string, sdp);
+	    } else {
+		Eprintf(sdp, "Format is: ses {clear|set}={devoff|fail/fault|ident/locate|unlock\n");
+		status = FAILURE;
+	    }
+	    if (status == FAILURE) {
+		return( HandleExit(sdp, status) );
+	    }
+	    /* This will be a read-modify-write operation. */
+	    if (setup_receive_diagnostic(sdp, sgp, data_length, page)) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+            continue;
+        }
+        if (match (&string, "page=")) {
+	    int status = SUCCESS;
+	    uint8_t opcode = sgp->cdb[0];
+	    sdp->page_specified = True;
+	    /* Note: Overloading page={hex|string} */
+	    /* TODO: Update this for log sense/select pages! */
+	    if ( (*string == '\0') || (isHexString(string) == False) ) {
+		if (opcode == SOPC_INQUIRY) {
+		    sdp->page_code = find_inquiry_page_code(sdp,string, &status);
+		    if (status == FAILURE) {
+			Eprintf(sdp, "Did not find Inquiry page '%s'!\n", string);
+			return( HandleExit(sdp, status) );
+		    } else if (status == WARNING) {
+			return( HandleExit(sdp, status) );
+		    }
+		    sdp->verbose = False;
+		    continue;
+		} else if ((opcode == SOPC_LOG_SELECT) || (opcode == SOPC_LOG_SENSE)) {
+		    sdp->page_code = find_log_page_code(sdp, string, &status);
+		    if (status == FAILURE) {
+			Eprintf(sdp, "Did not find diagnostic page '%s'!\n", string);
+			return( HandleExit(sdp, status) );
+		    } else if (status == WARNING) {
+			return( HandleExit(sdp, status) );
+		    }
+		    sdp->verbose = False;
+		    continue;
+		} else if ( (opcode == SOPC_RECEIVE_DIAGNOSTIC) ||
+			    (opcode == SOPC_SEND_DIAGNOSTIC) ) {
+		    sdp->page_code = find_diagnostic_page_code(sdp, string, &status);
+		    if (status == FAILURE) {
+			Eprintf(sdp, "Did not find diagnostic page '%s'!\n", string);
+			return( HandleExit(sdp, status) );
+		    } else if (status == WARNING) {
+			return( HandleExit(sdp, status) );
+		    }
+		    sdp->verbose = False;
+		    continue;
+		}
+	    }
+	    sdp->page_code = (uint8_t)number(sdp, string, HEX_RADIX);
+	    sdp->verbose = False;
+            continue;
+        }
         if (match (&string, "path=")) {
             sgp->scsi_addr.scsi_path = (int)number(sdp, string, ANY_RADIX);
             continue;
@@ -2702,7 +2937,7 @@ dloop:
 	    continue;
 	}
 	if (match (&string, "ptype=")) {
-	    int size = strlen(string);
+	    int size = (int)strlen(string);
 	    if ((size == 3) && match (&string, "iot") || match(&string, "IOT")) {
 		sdp->iot_pattern = True;
 		sdp->user_pattern = True;
@@ -2718,6 +2953,10 @@ dloop:
 	    uint32_t value;
 	    char *str, *token;
 	    char *pin;
+	    char *sep = " ";
+	    if (strchr(string, ',')) {
+		sep = ",";
+	    }
 	    sgp->data_dir = scsi_data_read; /* Receiving parameter data from device. */
 	    sdp->pin_buffer = malloc_palign(sdp, strlen(string), 0);
 	    sdp->pin_length = 0;
@@ -2725,7 +2964,7 @@ dloop:
     	    sdp->compare_data = True;
 	    pin = sdp->pin_buffer;
 	    str = strdup(string);
-	    token = strtok(str, " ");
+	    token = strtok(str, sep);
 	    while (token != NULL) {
 		value = number(sdp, token, HEX_RADIX);
 		if (value > 0xFF) {
@@ -2734,7 +2973,7 @@ dloop:
 		    return ( HandleExit(sdp, FATAL_ERROR) );
 		}
 		pin[sdp->pin_length++] = (uint8_t)value;
-		token = strtok(NULL, " ");
+		token = strtok(NULL, sep);
 	    }
 	    Free(sdp, str);
 	    continue;
@@ -2743,13 +2982,17 @@ dloop:
             uint32_t value;
             char *str, *token;
             char *pout;
+	    char *sep = " ";
+	    if (strchr(string, ',')) {
+		sep = ",";
+	    }
             sgp->data_dir = scsi_data_write; /* Sending parameter data to device. */
             sgp->data_buffer = malloc_palign(sdp, strlen(string), 0);
             sgp->data_length = 0;
 	    sdp->user_data = True;
             pout = sgp->data_buffer;
 	    str = strdup(string);
-            token = strtok(str, " ");
+            token = strtok(str, sep);
             while (token != NULL) {
 		value = number(sdp, token, HEX_RADIX);
 		if (value > 0xFF) {
@@ -2758,7 +3001,7 @@ dloop:
 		    return ( HandleExit(sdp, FATAL_ERROR) );
 		}
                 pout[sgp->data_length++] = (uint8_t)value;
-                token = strtok(NULL, " ");
+                token = strtok(NULL, sep);
             }
 	    Free(sdp, str);
             continue;
@@ -2997,6 +3240,39 @@ dloop:
 	    sdp->rod_inactivity_timeout = number(sdp, string, ANY_RADIX);
 	    continue;
 	}
+	/* Options for pack and unpack. */
+	if (match (&string, "unpack=")) {
+	    /* Append, for multiple unpack options. */
+	    if (sdp->unpack_format) {
+		char *str = sdp->unpack_format;
+		size_t len = strlen(str);
+		char *dst = Malloc(sdp, (len + strlen(string) + 1) );
+		if (dst == NULL) return(FAILURE);
+		(void)strcat(dst, str);
+		(void)strcat(dst, string);
+		sdp->unpack_format = dst;
+		Free(sdp, str);
+	    } else {
+		sdp->unpack_format = strdup(string);
+	    }
+	    /* Assume the log prefix is not required. */
+	    if (sdp->log_prefix) {
+		Free(sdp, sdp->log_prefix);
+	    }
+	    sdp->log_prefix = strdup("");
+	    continue;
+	}
+	if (match (&string, "unpack_fmt=")) {
+	    if (match(&string, "dec")) {
+		sdp->unpack_data_fmt = DEC_FMT;
+	    } else if (match (&string, "hex")) {
+		sdp->unpack_data_fmt = HEX_FMT;
+	    } else {
+		Eprintf(sdp, "Valid unpack data formats are: dec or hex\n");
+		return ( HandleExit(sdp, FAILURE) );
+	    }
+	    continue;
+	}
 	if ( match (&string, "exit") || match (&string, "quit") ) {
 	    ExitFlag = True;
 	    continue;
@@ -3174,7 +3450,7 @@ parse_exp_data(char *string, scsi_device_t *sdp)
 	if (sdp->exp_data == NULL) return (FAILURE);
     }
 
-    /* Copy string to avoid clobbering dur to strtok() API! */
+    /* Copy string to avoid clobbering due to strtok() API! */
     str = strp = strdup(string);
     /* Note: Remember match() updates "str"! */
     if ( match(&str, "C:") || match(&str, "CHAR:")) {
@@ -3199,7 +3475,7 @@ parse_exp_data(char *string, scsi_device_t *sdp)
 	    }
 	    token = strtok(NULL, ",");
 	}
-    } else if ( match(&str, "B:") || match(&str, "BYTE:")) {
+    } else if ( match(&str, "B:") || match(&str, "BYTE:") ) {
 	uint32_t value;
 	/* Format: B[YTE]:index:value,value... */
 	token = strtok(str, ":");
@@ -3224,7 +3500,7 @@ parse_exp_data(char *string, scsi_device_t *sdp)
 	    sdp->exp_data_count++;
 	    token = strtok(NULL, ",");
 	}
-    } else if ( match(&str, "S:") || match(&str, "SHORT:")) {
+    } else if ( match(&str, "S:") || match(&str, "SHORT:") ) {
 	uint32_t value;
 	/* Format: S[HORT]:index:value,value... */
 	token = strtok(str, ":");
@@ -3251,7 +3527,7 @@ parse_exp_data(char *string, scsi_device_t *sdp)
 	    }
 	    token = strtok(NULL, ",");
 	}
-    } else if ( match(&str, "W:") || match(&str, "WORD:")) {
+    } else if ( match(&str, "W:") || match(&str, "WORD:") ) {
 	uint32_t value;
 	/* Format: W[ORD]:index:value,value... */
 	token = strtok(str, ":");
@@ -3274,7 +3550,7 @@ parse_exp_data(char *string, scsi_device_t *sdp)
 	    }
 	    token = strtok(NULL, ",");
 	}
-    } else if ( match(&str, "L:") || match(&str, "LONG:")) {
+    } else if ( match(&str, "L:") || match(&str, "LONG:") ) {
 	uint64_t value;
 	/* Format: L[ONG]:index:value,value... */
 	token = strtok(str, ":");
@@ -3343,6 +3619,47 @@ expand_exp_data(scsi_device_t *sdp)
 }
 
 /*
+ * parse_ses_args() - Parse the expected SES keywords.
+ *
+ * Inputs:
+ *	string = The string to parse.
+ *	sdp = The SCSI device information.
+ *
+ * Outputs:
+ *	(global) string = Updated input argument pointer.
+ *
+ * Return Value:
+ *	Returns SUCCESS / FAILURE
+ */ 
+static int
+parse_ses_args(char *string, scsi_device_t *sdp)
+{
+    if (match(&string, "clear=")) {
+	sdp->cmd_type = CMD_TYPE_CLEAR;
+    } else if (match(&string, "set=")) {
+	sdp->cmd_type = CMD_TYPE_SET;
+    } else {
+	Eprintf(sdp, "Invalid SES keyword found: %s\n", string);
+	Printf(sdp, "Valid SES keywords are: clear= or set=\n");
+	return(FAILURE);
+    }
+    if (match(&string, "devoff")) {
+	sdp->cgs_type = CGS_TYPE_DEVOFF;
+    } else if ( match(&string, "fail") || match(&string, "fault")) {
+	sdp->cgs_type = CGS_TYPE_FAULT;
+    } else if ( match(&string, "ident") || match(&string, "locate") ) {
+	sdp->cgs_type = CGS_TYPE_IDENT;
+    } else if ( match(&string, "unlock") ) {
+	sdp->cgs_type = CGS_TYPE_UNLOCK;
+    } else {
+	Eprintf(sdp, "Invalid SES keyword found: %s\n", string);
+	Printf(sdp, "Valid SES keywords are: devoff, fail/fault, ident/locate, unlock\n");
+	return(FAILURE);
+    }
+    return(SUCCESS);
+}
+
+/*
  * match() - Match a Substring within a String.
  *
  * Inputs:
@@ -3355,12 +3672,10 @@ expand_exp_data(scsi_device_t *sdp)
  * Return Value:
  *	Returns TRUE/FALSE = Match / Not Matched
  */
-static hbool_t
-match (char **sptr, char *s)
+hbool_t
+match(char **sptr, char *s)
 {
-    char *cs;
-
-    cs = *sptr;
+    char *cs = *sptr;
     while (*cs++ == *s) {
 	if (*s++ == '\0') {
 	    goto done;
@@ -3519,6 +3834,7 @@ sptGetCommandLine(scsi_device_t *sdp)
     char *bufptr, *p;
     size_t bufsiz;
     FILE *stream;
+    hbool_t continuation = False;
     int status;
 
     /*
@@ -3552,10 +3868,13 @@ reread:
 	}
     }
     if (PipeModeFlag) {
-	EmitStatus(sdp, sdp->emit_status);
+	/* Short delay is required for stderr/stdout processing. */
+	//if (PipeDelay) os_msleep(PipeDelay);
+	EmitStatus(sdp, sdp->emit_status, False);
+	sdp->status = SUCCESS; /* Prime for next command. */
     }
 read_more:
-    if (fgets (bufptr, bufsiz, stream) == NULL) {
+    if (fgets (bufptr, (int)bufsiz, stream) == NULL) {
 	if (feof (stream) != 0) {
 	    status = END_OF_FILE;
 	    if (stream != stdin) {
@@ -3577,13 +3896,37 @@ read_more:
 	sdp->script_lineno[sdp->script_level-1]++;
     }
     /*
+     * Handle comments early so we can embed comments in continuation lines.
+     */
+    p = bufptr;
+    while ( (*p == ' ') || (*p == '\t') ) {
+	p++;	/* Skip leading whitespace. */
+    }
+    if (*p == '#') {
+	*p = '\0';
+	if (continuation == True) {
+	    if (InteractiveFlag && !sdp->script_level) {
+		Print(sdp, "> "); (void)fflush(stdout);
+	    }
+	    /* Note: We discard the entire comment line! */
+	    goto read_more;
+	} else {
+	    goto reread;
+	}
+    }
+    /*
      * Handle continuation lines.
-     */ 
+     */
     if (p = strrchr(bufptr, '\n')) {
 	--p;
-	if ( (p > bufptr) && (*p == '\\') ) {
+	/* Handle Windows <cr><lf> sequence! */
+	if (*p == '\r') {
+	    --p;
+	}
+	if ((p > bufptr) && (*p == '\\')) {
 	    *p = '\0';
 	    bufsiz -= strlen(bufptr);
+	    continuation = True;
 	    if (bufsiz) {
 		bufptr = p;
 		if (InteractiveFlag && !sdp->script_level) {
@@ -3593,17 +3936,18 @@ read_more:
 	    }
 	}
     }
-    status = ExpandEnvironmentVariables(sdp, sdp->cmdbufptr, sdp->cmdbufsiz);
+    cleanup_EOL(sdp->cmdbufptr);
+    if (ExpandVars == True) {
+	status = ExpandEnvironmentVariables(sdp, sdp->cmdbufptr, sdp->cmdbufsiz);
+    }
     /*
-     * Display the expanded command line. (messy, try to cleanup!)
+     * Display the expanded command line, depending on our mode.
+     * TODO: This is rather messy, try to cleanup as time permits!
      */ 
     if ( ((InteractiveFlag || DebugFlag) && sdp->script_level) ||
-	 (!StdinIsAtty && PipeModeFlag) ) {
-	if (/*DebugFlag &&*/ sdp->script_level) {
-	    Print(sdp, "%s> ", OurName); (void)fflush(stdout);
-	}
-	Print(sdp, "%s", sdp->cmdbufptr);
-	(void)fflush(stdout);
+	 (sdp->script_level && sdp->script_verify && !PipeModeFlag) ) {
+	hbool_t prompt = (sdp->script_level) ? True : False;
+	display_command(sdp, sdp->cmdbufptr, prompt);
     }
     if (status == SUCCESS) {
 	sdp->argc = MakeArgList(sdp, sdp->argv, sdp->cmdbufptr);
@@ -3611,49 +3955,189 @@ read_more:
     return(status);
 }
 
+void
+cleanup_EOL(char *string)
+{
+    char *p = string;
+    size_t length = strlen(p);
+    if (length == 0) return;
+    p += (length - 1);
+    while( length &&
+	   ( (*p == '\n') || (*p == '\r') ||
+	     (*p == ' ') || (*p == '\t') ) ) {
+	*p-- = '\0';
+	length--;
+    }
+    return;
+}
+
+void
+display_command(scsi_device_t *sdp, char *command, hbool_t prompt)
+{
+    if (prompt == True) {
+	Print(sdp, "%s> ", OurName);
+    }
+    Print(sdp, "%s\n", command);
+    (void)fflush(sdp->ofp);
+    return;
+}
+
+char *
+expand_word(scsi_device_t *sdp, char **from, size_t bufsiz, int *status)
+{
+    char *src = *from;
+    char *env, *bp, *str;
+
+    if ( (str = Malloc(sdp, bufsiz)) == NULL) {
+	*status = FAILURE;
+	return(NULL);
+    }
+    *status = SUCCESS;
+    bp = str;
+
+    /* Note: Nested conditional expansion not supported! */
+    while ( (*src != '}') && (*src != '\0') ) {
+	/* Check for nested variable and expand them! */
+	if ( (*src == '$') && (*(src+1) == '{') ) {
+	    int var_len = 0;
+	    char *var;
+	    src += 2;
+	    var = src;
+	    while ( (*src != '}') && (*src != '\0') ) {
+		src++; var_len++;
+	    }
+	    if (*src != '}') {
+		var_len = (int)((src - var) + 1);
+		Eprintf(sdp, "Failed to find right brace expanding: %.*s\n", var_len, var);
+		*status = FAILURE;
+		break;
+	    }
+	    *src = '\0';
+	    env = getenv(var);
+	    *src = '}';
+	    /* Note: Not defined is acceptable! */
+	    if (env) {
+		while (*env) {
+		    *str++ = *env++;
+		}
+	    }
+	    src++; /* skip '}' */
+	} else {
+	    *str++ = *src++;
+	}
+    }
+    *from = src;
+    if ( (*status == SUCCESS) && strlen(bp) ) {
+	str = strdup(bp);
+    } else {
+	str = NULL;
+    }
+    FreeStr(sdp, bp);
+    return(str);
+}
+
 int
 ExpandEnvironmentVariables(scsi_device_t *sdp, char *bufptr, size_t bufsiz)
 {
-    char    *from = bufptr;
-    char    *bp, *to, *env, *p;
+    char   *from = bufptr;
+    char   *bp, *to, *env, *p, *str = NULL;
     size_t length = strlen(from);
-    int     status = SUCCESS;
+    int    status = SUCCESS;
 
+    if ( *from == '#' ) return(status); /* don't expand comments! */
     if ( (p = strstr(from, "${")) == NULL) return(status);
     if ( (to = Malloc(sdp, bufsiz)) == NULL) return(FAILURE);
     bp = to;
 
     while (length > 0) {
 	/*
-	 * Parse variables of the form: ${var}
+	 * Parse variables and do limited substitution (see below). 
+	 * TODO: It would be nice to support more of shell expansion. 
 	 */
 	if ( (*from == '$') && (*(from+1) == '{') ) {
-	    char *var = (from + 2);
-	    if ( (p = strchr(var, '}')) ) {
-		int var_len = ((p - from) + 1);
-		*p = '\0';
-		env = getenv(var);
-		*p = '}';
-		if (env) {
-		    size_t env_len;
-		    env_len = strlen(env);
-		    if ( (size_t)((to + env_len) - bp) < bufsiz) {
-			to += Sprintf(to, "%s", env);
-			length -= var_len;
-			from += var_len;
-			continue;
-		    }
-		} else {
-		    Eprintf(sdp, "Failed to expand variable: %.*s\n", var_len, from);
-		    return(FAILURE);
+	    hbool_t conditional = False;
+	    hbool_t error_if_not_set = False;
+	    char sep, *var = (from + 2);
+	    int var_len = 0;
+	    env = NULL;
+
+	    p = var;
+	    while ( (*p != ':') && (*p != '}') && (*p != '\0') ) {
+		p++;
+	    }
+	    sep = *p;
+	    *p = '\0';
+	    env = getenv(var);
+	    *p = sep;
+	    /* Allow ${VAR:string} format. */
+	    /* If VAR is set, then use it, otherwise use string. */
+	    if (*p == ':') {
+		conditional = True;
+		p++;
+		/* ${VAR:?string} */
+		/* If VAR is not set, print string and error! */
+		if (*p == '?') {
+		    error_if_not_set = True;
+		    p++;
+		} else if (*p == '-') {
+		    p++;	/* Treat the same as ${VAR:string}, ksh style! */
 		}
+		/* Expand the word part. */
+		str = expand_word(sdp, &p, bufsiz, &status);
+		if (status == FAILURE) break;
+	    }
+	    var_len = (int)((p - from) + 1);
+
+	    if (*p != '}') {
+		var_len = (int)((p - from) + 1);
+		Eprintf(sdp, "Failed to find right brace expanding: %.*s\n", var_len, from);
+		return(FAILURE);
+	    }
+	    if ( (conditional == True) && (error_if_not_set == True) &&
+		 ( (env == NULL) || (strlen(env) == 0) ) ) {
+		/* Note: The string is the error message! */
+		if ( (str == NULL) || (strlen(str) == 0) ) {
+		    Eprintf(sdp, "Not defined: %.*s\n", var_len, from);
+		} else if (DebugFlag == True) {
+		    Eprintf(sdp, "%s: %.*s\n", str, var_len, from);
+		} else {
+		    Eprintf(sdp, "%s\n", str);
+		}
+		status = FAILURE;
+		break;
+	    } else if ( (conditional == True) && str && (env == NULL) ) {
+		size_t str_len;
+		str_len = strlen(str);
+		if ( (size_t)((to + str_len) - bp) < bufsiz) {
+		    to += Sprintf(to, "%s", str);
+		    length -= var_len;
+		    from += var_len;
+		    if (str) { FreeStr(sdp, str); str = NULL; }
+		    continue;
+		}
+	    } else if (env) {
+		size_t env_len;
+		env_len = strlen(env);
+		if ( (size_t)((to + env_len) - bp) < bufsiz) {
+		    to += Sprintf(to, "%s", env);
+		    length -= var_len;
+		    from += var_len;
+		    if (str) { FreeStr(sdp, str); str = NULL; }
+		    continue;
+		}
+	    } else {
+		Eprintf(sdp, "Failed to expand variable: %.*s\n", var_len, from);
+		status = FAILURE;
+		break;
 	    }
 	}
 	*to++ = *from++;
 	length--;
     }
-    (void)strcpy(bufptr, bp);
-    free(bp);
+    if (status == SUCCESS) {
+	(void)strcpy(bufptr, bp);
+    }
+    FreeStr(sdp, bp);
     return(status);
 }
 
@@ -3731,13 +4215,20 @@ MakeArgList(scsi_device_t *sdp, char **argv, char *s)
 	    case '\'': {
 		/* Remove the quoting. */
 		char *to = (s-1);
+		char *from = NULL;
 		while ( (c1 = *to++ = *s++) != c) {
 		    if ( (c1 == '\0') || (c1 == '\n') ) {
 			Printf (sdp, "Missing trailing quote parsing: %s\n", str);
 			return(-1);
 		    }
 		}
-		*(to-1) = '\0';
+		/* Copy rest of string over last quote, in case there's more text! */
+		/* Note: This string copy corrupts the string! Optimized machine code? */
+		//s = strcpy((to-1), s);
+		to--;		/* Point to the trailing quote. */
+		from = s;	/* Copy the current string pointer. */
+		s = to;		/* This becomes the updated string. */
+		while (*to++ = *from++) ;
 		break;
 	    }
 	    default:
@@ -3803,7 +4294,7 @@ ReadDataFile(
 #if defined(_WIN32)
       {
         BOOL bResult;
-	bResult = ReadFile(fd, bp, len, &count, NULL);
+	bResult = ReadFile(fd, bp, (DWORD)len, (LPDWORD)&count, NULL);
 	if (bResult && (count == 0)) {
 	    eof = True;
 	} else if (!bResult) {
@@ -3986,7 +4477,7 @@ log_header(scsi_device_t *sdp)
     Printf(sdp, "\n");
     Printf(sdp, "    %c %s", getuid() ? '%' : '#', sdp->cmd_line);
     Printf(sdp, "\n");
-    Printf(sdp, "\t--> %s <--\n", version_str);
+    Printf(sdp, "\t--> " ToolVersion " <--\n");
     Printf(sdp, "\n");
     return;
 }

@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 1988 - 2016			    *
+ *			  COPYRIGHT (c) 1988 - 2017			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -31,6 +31,10 @@
  *	Various printing functions.
  *
  * Modification History:
+ * 
+ * August 12th, 2016 by Robin T. Miller
+ *      When dumping buffers via DumpFieldsOffset(), honor the buffer offset
+ * format of dec or hex. The field width remains 6 with leading zeros.
  * 
  * February 25th, 2016 by Robin T. Miller
  *  Increase print format buffers to accomodate very long command lines.
@@ -133,7 +137,7 @@ fmtmsg_prefix(scsi_device_t *sdp, char *bp, int flags, logLevel_t level)
 
     if (sdp == NULL) sdp = master_sdp;
     /*
-     * The logging prefix can be user define or standard.
+     * The logging prefix can be user defined standard.
      */ 
     if (sdp->log_prefix) {
         log_prefix = FmtLogPrefix(sdp, sdp->log_prefix, False);
@@ -189,7 +193,7 @@ LogMsg(scsi_device_t *sdp, FILE *fp, enum logLevel level, int flags, char *fmtst
 	}
     }
     if ( sdp->syslog_flag && (flags & PRT_SYSLOG) ) {
-	syslog(level, buffer);
+	syslog(level, "%s", buffer);
     }
     return;
 }
@@ -208,7 +212,7 @@ SystemLog(scsi_device_t *sdp, int priority, char *format, ...)
     va_start(ap, format);
     bp += vsprintf(bp, format, ap);
     va_end(ap);
-    syslog(priority, buffer);
+    syslog(priority, "%s", buffer);
     return;
 }
 
@@ -368,6 +372,10 @@ Lprintf(scsi_device_t *sdp, char *format, ...)
     va_list ap;
     char *bp = sdp->log_bufptr;
 
+    if (bp == NULL) {
+	Fprintf(sdp, "No log buffer!\n");
+	return;
+    }
     va_start(ap, format);
     vsprintf(bp, format, ap);
     va_end(ap);
@@ -609,6 +617,15 @@ PrintHex(scsi_device_t *sdp, char *field_str, uint32_t numeric_value, int nl_fla
 }
 
 void
+PrintHexP(scsi_device_t *sdp, char *field_str, uint32_t numeric_value, int nl_flag)
+{
+    char *printf_str = HEXP_FIELD;
+
+    Printf(sdp, printf_str, field_str, numeric_value);
+    if (nl_flag) Print(sdp, "\n");
+}
+
+void
 PrintHexDec(scsi_device_t *sdp, char *field_str, uint32_t numeric_value, int nl_flag)
 {
     char *printf_str = HEX_DEC_FIELD;
@@ -661,6 +678,15 @@ void
 PrintLongHex(scsi_device_t *sdp, char *field_str, uint64_t numeric_value, int nl_flag)
 {
     char *printf_str = LHEX_FIELD;
+
+    Printf(sdp, printf_str, field_str, numeric_value);
+    if (nl_flag) Print(sdp, "\n");
+}
+
+void
+PrintLongHexP(scsi_device_t *sdp, char *field_str, uint64_t numeric_value, int nl_flag)
+{
+    char *printf_str = LHEXP_FIELD;
 
     Printf(sdp, printf_str, field_str, numeric_value);
     if (nl_flag) Print(sdp, "\n");
@@ -814,7 +840,11 @@ DumpFieldsOffset(scsi_device_t *sdp, uint8_t *bptr, int length)
     Printf(sdp, "Offset  Data\n");
     while (count < length) {
         if (first) {
-            Printf(sdp, "%06d  ", count);
+	    if (sdp->boff_format == DEC_FMT) {
+		Printf(sdp, "%06d  ", count);
+	    } else {
+		Printf(sdp, "%06x  ", count);
+	    }
             first = False;
         }
         data = *bptr++;
@@ -833,4 +863,253 @@ DumpFieldsOffset(scsi_device_t *sdp, uint8_t *bptr, int length)
     }
     Free(sdp, abufp);
     return;
+}
+
+int
+FormatAsciiData(char *text, int offset, uint8_t *bptr, int length)
+{
+    int field_entrys = 16;
+    int count = 0, i;
+    int boffset = 0;
+    char *tp = text;
+    char abuf[LARGE_BUFFER_SIZE];
+    char hbuf[LARGE_BUFFER_SIZE];
+    char *ap = abuf, *hp = hbuf;
+
+    *text = '\0';
+    while (count < length) {
+	if ((count++ % field_entrys) == 0) {
+	    if (tp != text) {
+		/* Display hex bytes followed by ASCII! */
+		tp += sprintf(tp, "%s\n", hbuf);
+		tp += sprintf(tp, "               ");
+		tp += sprintf(tp, "%s\n", abuf);
+		ap = abuf, hp = hbuf;
+	    }
+	    tp += sprintf(tp, "        Index: ");
+	    for (i = 0; i < field_entrys; i++) {
+		tp += sprintf(tp, (length > 100) ? " %02x" : " %02d", (boffset + i));
+	    }
+	    tp += sprintf(tp, "\n");
+	    tp += sprintf(tp, "%05d (0x%04x) ", offset, offset);
+        }
+	/* Format both hex bytes and printable ASCII. */
+	hp += sprintf(hp, " %02x", *bptr);
+	if (isprint((int)*bptr)) {
+	    ap += sprintf(ap, " %c ", *bptr++);
+	} else {
+	    ap += sprintf(ap, " %02x", *bptr++);
+	}
+	offset++;
+	boffset++;
+    }
+    if (ap != abuf) {
+	tp += sprintf(tp, "%s\n", hbuf);
+	tp += sprintf(tp, "               ");
+	tp += sprintf(tp, "%s\n", abuf);
+    } else if ( ((count - 1) % field_entrys) != 0) {
+	tp += sprintf(tp, "\n");
+    }
+    return( offset );
+}
+
+int
+PrintAsciiData(scsi_device_t *sdp, int offset, uint8_t *bptr, int length)
+{
+    char text[STRING_BUFFER_SIZE];
+    int field_entrys = 16;
+    int count = 0, i;
+    int boffset = 0;
+    int off = offset;
+    char *tp = text;
+    char abuf[LARGE_BUFFER_SIZE];
+    char hbuf[LARGE_BUFFER_SIZE];
+    char *ap = abuf, *hp = hbuf;
+
+    *text = '\0';
+    /* Note: Usually the descriptor length is already displayed. */
+    //PrintDecHex(sdp, "Length", length, PNL);
+    while (count < length) {
+	if ((count++ % field_entrys) == 0) {
+	    if (tp != text) {
+		/* Display hex bytes followed by ASCII! */
+		PrintFieldData(sdp, "Offset", off, hbuf);
+		PrintFieldData(sdp, "", -1, abuf);
+		ap = abuf, hp = hbuf;
+		tp = text;
+		off = offset;
+	    }
+	    for (i = 0; i < field_entrys; i++) {
+		tp += sprintf(tp, (length > 100) ? "%02x " : "%02d ", (boffset + i));
+	    }
+	    PrintFieldData(sdp, "Index", -1, text);
+        }
+	/* Format both hex bytes and printable ASCII. */
+	hp += sprintf(hp, "%02x ", *bptr);
+	if (isprint((int)*bptr)) {
+	    ap += sprintf(ap, " %c ", *bptr++);
+	} else {
+	    ap += sprintf(ap, "%02x ", *bptr++);
+	}
+	offset++;
+	boffset++;
+    }
+    if (ap != abuf) {
+	PrintFieldData(sdp, "Offset", off, hbuf);
+	PrintFieldData(sdp, "", -1, abuf);
+    }
+    return( offset );
+}
+
+void
+PrintFieldData(scsi_device_t *sdp, char *field, int offset, char *data)
+{
+    char text[STRING_BUFFER_SIZE];
+
+    if (field && (offset < 0)) {
+	(void)sprintf(text, "%s", field);
+    } else if (offset < 0) {
+	text[0] = '\0';
+    } else {
+	(void)sprintf(text, "%s %d (0x%x)", field, offset, offset);
+    }
+    PrintAscii(sdp, text, data, PNL);
+    return;
+}
+
+int
+FormatHexData(char *text, int offset, uint8_t *bptr, int length)
+{
+    int field_entrys = 16;
+    int count = 0;
+    char *tp = text;
+
+    *text = '\0';
+    while (count < length) {
+	if ((count++ % field_entrys) == 0) {
+	    if (tp != text) {
+		tp += sprintf(tp, "\n");
+	    }
+	    tp += sprintf(tp, "%05d (0x%04x) ", offset, offset);
+        }
+	tp += sprintf(tp, " %02x", *bptr++);
+	offset++;
+    }
+    if (tp != text) {
+	tp += sprintf(tp, "\n");
+    }
+    return( offset );
+}
+
+#if !defined(INLINE_FUNCS)
+
+int
+PrintHexDebug(scsi_device_t *sdp, int offset, uint8_t *ucp, int length)
+{
+    if (sdp->DebugFlag) {
+	offset = PrintHexData(sdp, offset, ucp, length);
+    } else {
+	offset += length;
+    }
+    return(offset);
+}
+
+#endif /* !defined(INLINE_FUNCS) */
+
+int
+PrintHexData(scsi_device_t *sdp, int offset, uint8_t *bptr, int length)
+{
+    char text[STRING_BUFFER_SIZE];
+    int field_entrys = 16;
+    int count = 0;
+    int off = offset;
+    char *tp = text;
+
+    *tp = '\0';
+    PrintDecHex(sdp, "Length", length, PNL);
+    while (count < length) {
+	if ((count++ % field_entrys) == 0) {
+	    if (tp != text) {
+		PrintFieldData(sdp, "Offset", off, text);
+		tp = text;
+		off = offset;
+	    }
+        }
+	tp += sprintf(tp, "%02x ", *bptr++);
+	offset++;
+    }
+    if (tp != text) {
+	PrintFieldData(sdp, "Offset", off, text);
+    }
+    return( offset );
+}
+
+int
+FormatHexBytes(char *text, int offset, uint8_t *bptr, int length)
+{
+    int count = 0;
+    char *tp = text;
+
+    *text = '\0';
+    while (count++ < length) {
+	tp += sprintf(tp, "%02x ", *bptr++);
+	offset++;
+    }
+    if (length) {
+	tp[-1] = '\0';
+    }
+    return( offset );
+}
+
+char *
+FormatQuotedText(char *text, char *tp, int length)
+{
+    int count = 0;
+    char *cp = text;
+
+    *cp++ = '\'';
+    /* Note: Not using strncpy() since we may have non-ASCII data! */
+    while (count++ < length) {
+	if (isprint((int)*tp)) {
+	    cp += sprintf(cp, "%c", *tp++);
+	} else {
+	    /* Decode the common byte sequences. */
+	    switch (*tp) {
+		case '\0':
+		    cp += sprintf(cp, "\\0");
+		    break;
+		case '\a':
+		    cp += sprintf(cp, "\\a");
+		    break;
+		case '\b':
+		    cp += sprintf(cp, "\\b");
+		    break;
+		case '\t':
+		    cp += sprintf(cp, "\\t");
+		    break;
+		case '\n':
+		    cp += sprintf(cp, "\\n");
+		    break;
+		case '\v':
+		    cp += sprintf(cp, "\\v");
+		    break;
+		case '\f':
+		    cp += sprintf(cp, "\\f");
+		    break;
+		case '\r':
+		    cp += sprintf(cp, "\\r");
+		    break;
+		case '\\':
+		    cp += sprintf(cp, "\\\\");
+		    break;
+		default:
+		    cp += sprintf(cp, "<%02x>", *tp);
+		    break;
+	    }
+	    tp++;
+	}
+    }
+    *cp++ = '\'';
+    *cp++ = '\0';
+    return(text);
 }

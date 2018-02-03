@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2016			    *
+ *			  COPYRIGHT (c) 2006 - 2017			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -38,7 +38,7 @@
 #define __unix
 #endif
 
-#if defined(__64BIT__) || defined(_LP64) || defined(__arch64__) || defined(_WIN64)
+#if defined(__alpha) || defined(__64BIT__) || defined(_LP64) || defined(__LP64__) || defined(__arch64__) || defined(_WIN64)
 #  define QuadIsLong
 #  define MACHINE_64BITS
 #else /* assume !64bit compile! */
@@ -149,52 +149,81 @@ typedef signed int              int32_t;
 typedef unsigned char           uint8_t;
 typedef unsigned short int      uint16_t;
 typedef unsigned int            uint32_t;
-#  if defined(_WIN64)
+//#  if defined(_WIN64)
 /* Note: Unlike most Unix OS's, 64-bit Windows does *not* make a long 64-bits! */
 //typedef long int                int64_t;
 //typedef unsigned long int       uint64_t;
-typedef LONG64			int64_t;
-typedef ULONG64			uint64_t;
-#  else /* !defined(_WIN64) */
+//typedef LONG64			int64_t;
+//typedef ULONG64			uint64_t;
+//#  else /* !defined(_WIN64) */
 typedef __int64			int64_t;
 typedef unsigned __int64        uint64_t;
-#  endif
+//#  endif
 #endif /* defined(_WIN32) */
 
 #if defined(WIN32)
 
-#define S64OF           "%I64d"
-#define U64OF           "%I64u"
-#define X64OF           "0x%I64x"
-#define SLOF            "%ld"
-#define ULOF            "%lu"
-#define PTROF           "0x%lx"
+#  define S64OF		"%I64d"
+#  define U64OF		"%I64u"
+#  define X64OF		"0x%I64x"
+#  define SLOF		"%ld"
+#  define ULOF		"%lu"
+#  define PTROF		"0x%lx"
 
-#if defined(_LP64) || defined(__arch64__) || (_POSIX_V6_LP64_OFF64 - 0) == 1
-#  define LUF	ULOF
-#  define LDF	SLOF
-#  define LXF	"%#lx"
-#else
-#  define LUF	U64OF
-#  define LDF	S64OF
-#  define LXF	X64OF
-#endif
+# if defined(_LP64) || defined(__arch64__) || (_POSIX_V6_LP64_OFF64 - 0) == 1
+
+#  define LUF		ULOF
+#  define LDF		SLOF
+#  define LXF		"0x%lx"
+
+/* Note: Formats for leading zeros, half or full 64-bits. */
+#  define LLHXFMT	"0x%08I64x"
+#  define LLFXFMT	"0x%016I64x"
+
+/* Note: Replacement for "%p" which differs between OS's, esp. Windows! */
+#  define LLPXFMT	"0x%I64x"
+#  define LLPX0FMT	"0x%016I64x"
+
+# else /* 32-bit Windows */
+
+#  define LUF		U64OF
+#  define LDF		S64OF
+#  define LXF		X64OF
+
+#  define LLHXFMT	"0x%08I64x"
+#  define LLFXFMT	"0x%016I64x"
+
+#  define LLPXFMT	"0x%lx"
+#  define LLPX0FMT	"0x%08lx"
+
+# endif /* defined(_LP64) || defined(__arch64__) || (_POSIX_V6_LP64_OFF64 - 0) == 1 */
 
 #else /* UNIX systems */
 
 # if defined(_LP64) || defined(__arch64__) || (_POSIX_V6_LP64_OFF64 - 0) == 1
 
-#  define LUF	"%lu"
-#  define LDF	"%ld"
-#  define LXF	"%#lx"
+#  define LUF		"%lu"
+#  define LDF		"%ld"
+#  define LXF		"0x%lx"
+
+#  define LLHXFMT	"0x%08lx"
+#  define LLFXFMT	"0x%016lx"
+
+#  define LLPXFMT	"0x%lx"
+#  define LLPX0FMT	"0x%016lx"
 
 # else /* !defined(_LP64) && !defined(__arch64__) && !(_POSIX_V6_LP64_OFF64 - 0) == 1 */
 
 /* 32-bit Definitions: */
 
-#  define LUF   "%llu"
-#  define LDF   "%lld"
-#  define LXF   "%#llx"
+#  define LUF	   	"%llu"
+#  define LDF	   	"%lld"
+#  define LXF	   	"0x%#llx"
+
+#  define LLHXFMT	"0x%08llX"
+#  define LLFXFMT	"0x%016llX"
+#  define LLPXFMT	"0x%x"
+#  define LLPX0FMT	"0x%08x"
 
 # endif /* defined(_LP64) || defined(__arch64__) || (_POSIX_V6_LP64_OFF64 - 0) == 1 */
 #endif /* defined(_WIN32) */
@@ -204,11 +233,12 @@ typedef unsigned __int64        uint64_t;
  */
 #if defined(__alpha) || defined(__LP64__) || defined(_WIN64)
 #if defined(_WIN64)
-typedef ULONG64			ptr_t;
+//typedef ULONG64		ptr_t;
+typedef unsigned __int64	ptr_t;
 #else /* defined(_WIN64) */
 typedef unsigned long		ptr_t;
 #endif /* defined(_WIN64) */
-typedef unsigned int		bool;
+//typedef unsigned int		bool;
 typedef volatile unsigned int	v_bool;
 
 #else /* !defined(__alpha) && !defined(__LP64__) && !defined(_WIN64) */
@@ -236,7 +266,7 @@ typedef unsigned int iotlba_t;
 #define FALSE		0			/* Boolean FALSE value.	*/
 #define UNINITIALIZED	255			/* Uninitialized flag.	*/
 
-#define FATAL_ERROR	255			/* Fatal error code.	*/
+#define FATAL_ERROR	-1			/* Fatal error code.	*/
 
 #define MSECS           1000                    /* Milliseconds value.  */
 
@@ -268,6 +298,37 @@ typedef unsigned int iotlba_t;
 #define MSECS_PER_MIN   (SECS_PER_MIN * MSECS)
 #define MSECS_PER_SEC   MSECS
 
+#define MSECS_PER_SEC   MSECS
+#define mSECS_PER_SEC   1000
+#define uSECS_PERmSEC   1000
+#define uSECS_PER_SEC   1000000
+
+/*
+ * Macros to aid with string comparisions.
+ */
+#define EQ(x,y)		(strcmp(x,y) == 0)	/* String EQ compare.	*/
+#define EQL(x,y,n)	(strncmp(x,y,n) == 0)	/* Compare w/length.	*/
+#define EQC(x,y)	(strcasecmp(x,y) == 0)	/* Case insensitive.	*/
+#define EQLC(x,y,n)	(strncasecmp(x,y,n) == 0) /* Compare w/length.	*/
+
+#define NE(x,y)		(strcmp(x,y) != 0)	/* String NE compare.	*/
+#define NEL(x,y,n)	(strncmp(x,y,n) != 0)	/* Compare w/length.	*/
+#define NEC(x,y)	(strcasecmp(x,y) != 0)	/* Case insensitive.	*/
+#define NELC(x,y,n)	(strncasecmp(x,y,n) != 0) /* Compare w/length.	*/
+
+#define EQS(x,y)	(strstr(x,y) != NULL)	/* Sub-string equal.	*/
+#define EQSC(x,y)	(strcasestr(x,y) != NULL) /* Case insensitive.	*/
+
+#define NES(x,y)	(strstr(x,y) == NULL)	/* Sub-string not equal	*/
+#define NESC(x,y)	(strcasestr(x,y) == NULL) /* Case insensitive.	*/
+
+#define EqualString(s1,s2)	( strcmp(s1,s2) == 0 )
+#define NotEqualString(s1,s2)	( strcmp(s1,s2) != 0 )
+#define EqualStringLength(s1,s2,n)	( strncmp(s1,s2,n) == 0 )
+#define NotEqualStringLength(s1,s2,n)	( strncmp(s1,s2,n) != 0 )
+#define EqualLength(s1,s2)	( strlen(s1) == strlen(s2) )
+#define NotEqualLength(s1,s2)	( strlen(s1) != strlen(s2) )
+
 /*********************************** macros **********************************/
 
 #ifndef max
@@ -295,7 +356,7 @@ typedef unsigned int iotlba_t;
 extern char *OurName;
 
 #if defined(_WIN32)
-# include "spt_win32.h"
+# include "spt_win.h"
 #else /* !defined(_WIN32) */
 # include "spt_unix.h"
 #endif /* defined(_WIN32) */

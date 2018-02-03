@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2016			    *
+ *			  COPYRIGHT (c) 2006 - 2017			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -32,25 +32,12 @@
  *
  * Modification History:
  * 
- * October 3rd, 2014 by Robin T. Miller
- * 	Modified SCSI generic opaque pointer to tool_specific information,
- * so we can pass more tool specific information (e.g. dt versus spt).
+ * October 19th, 2017 by Robin T. Miller
+ *      Added additional Inquiry VPD pages.
+ *      Note: Not implemented, but useful for "showopcodes".
  * 
- * June 15th, 2014 by Robin T. Miller
- * 	When setting up initial I/O parameters, if data verification has been
- * requested, ensure the pattern buffer has been allocated and initialized,
- * otherwise data validation is skipped! The mainline only allocated this
- * pattern buffer if the direction is read and we have a data length, but
- * now that assumption is no longer true, since folks wanted the direction
- * and length to be setup automatically by encode functions. (sigh)
- * 
- * November 2nd, 2013 by Robin T. Miller
- * 	Removed bypass flag check in initialize_io_parameters() to ensure
- * the data direction and length get setup for normal read/write commands.
- * Previously, bypass allowed improper setting to allow negative testing.
- * 
- * February 7th, 2012 by Robin T. Miller
- * 	Move SCSI operation code table here from scsi_data.c
+ * December 3rd, 2016 by Robin T. Miller
+ *      Move SES functions to spt_ses.[ch] and scsi_ses.h
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,9 +47,17 @@
 #include "libscsi.h"
 #include "inquiry.h"
 
+#include "spt_ses.h"
 #include "scsi_cdbs.h"
+#include "scsi_diag.h"
+#include "scsi_log.h"
 
 #include "spt_mtrand64.h"
+#include "parson.h"
+
+/*
+ * External Declarations: 
+ */
 
 /*
  * Forward References:
@@ -100,16 +95,27 @@ int read_capacity16_encode(void *arg);
 int read_capacity16_decode(void *arg);
 int get_lba_status_encode(void *arg);
 int get_lba_status_decode(void *arg);
+
 int report_luns_encode(void *arg);
 int report_luns_decode(void *arg);
 int rtpgs_encode(void *arg);
 int rtpgs_decode(void *arg);
 
+/*
+ * JSON Functions:
+ */
+char *read_capacity16_decode_json(scsi_device_t *sdp, io_params_t *iop, ReadCapacity16_data_t *rcdp, char *scsi_name);
+
 /* Support Functions: */
 int wut_extended_copy_verify_data(scsi_device_t *sdp);
 void check_thin_provisioning(scsi_device_t *sdp, scsi_generic_t *sgp, io_params_t *iop);
 int get_block_provisioning(scsi_device_t *sdp, scsi_generic_t *sgp, io_params_t *iop);
+int get_punch_hole_limits(scsi_device_t *sdp, scsi_generic_t *sgp, io_params_t *iop, uint64_t max_blocks);
 int get_unmap_block_limits(scsi_device_t *sdp, scsi_generic_t *sgp, io_params_t *iop, uint64_t max_blocks);
+int cawWriteData(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp,
+		 uint64_t lba, uint32_t blocks, uint32_t bytes);
+int cawReadVerifyData(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp,
+		      uint64_t lba, uint32_t blocks, uint32_t bytes);
 int random_rw_complete_io(scsi_device_t *sdp, uint64_t max_lba, uint64_t max_blocks);
 int random_rw_process_cdb(scsi_device_t *sdp, io_params_t *iop, uint64_t max_lba, uint64_t max_blocks);
 int random_rw_process_data(scsi_device_t *sdp);
@@ -390,50 +396,72 @@ GetCapacity(scsi_device_t *sdp, io_params_t *iop)
     ReadCapacity16_data_t ReadCapacity16_data;
     ReadCapacity16_data_t *rcdp = &ReadCapacity16_data;
     int status;
-
+    
     iop->lbpme_flag = False;
     iop->lbprz_flag = False;
     iop->lbpmgmt_valid = False;
     /*
      * 16byte CDB may fail on some disks, but 10-byte should succeed!
-     */
+     */ 
     status = ReadCapacity16(sgp->fd, sgp->dsf, sgp->debug, False,
-                            NULL, NULL, rcdp, sizeof(*rcdp), 0,
-                            sgp->timeout, sgp->tsp);
+			    NULL, NULL, rcdp, sizeof(*rcdp), 0,
+			    sgp->timeout, sgp->tsp);
     if (status == SUCCESS) {
-        uint32_t device_size = (uint32_t)StoH(rcdp->block_length);
-        uint64_t device_capacity = StoH(rcdp->last_block);
-        if (device_size) {
-            iop->device_size = device_size;
-        }
-        if (device_capacity) {
-            iop->device_capacity = (device_capacity + 1);
-        }
-        iop->lbpmgmt_valid = True;
-        if (rcdp->lbpme) iop->lbpme_flag = True;
-        if (rcdp->lbprz) iop->lbprz_flag = True;
+	uint32_t device_size = (uint32_t)StoH(rcdp->block_length);
+	uint64_t device_capacity = StoH(rcdp->last_block);
+	if (device_size) {
+	    iop->device_size = device_size;
+	}
+	if (device_capacity) {
+	    iop->device_capacity = (device_capacity + 1);
+	}
+	iop->lbpmgmt_valid = True;
+	if (rcdp->lbpme) iop->lbpme_flag = True;
+	if (rcdp->lbprz) iop->lbprz_flag = True;
     } else {
-        ReadCapacity10_data_t ReadCapacity10_data;
-        ReadCapacity10_data_t *rcdp = &ReadCapacity10_data;
-        status = ReadCapacity10(sgp->fd, sgp->dsf, sgp->debug, TRUE,
-                                NULL, NULL, rcdp, sizeof(*rcdp), 0,
-                                sgp->timeout, sgp->tsp);
-        if (status == SUCCESS) {
-            uint32_t device_size = (uint32_t)StoH(rcdp->block_length);
-            uint32_t device_capacity = (uint32_t)StoH(rcdp->last_block);
-            if (device_size) {
-                iop->device_size = device_size;
-            }
-            if (device_capacity) {
-                iop->device_capacity = (uint64_t)(device_capacity + 1);
-            }
-        }
+	ReadCapacity10_data_t ReadCapacity10_data;
+	ReadCapacity10_data_t *rcdp = &ReadCapacity10_data;
+	status = ReadCapacity10(sgp->fd, sgp->dsf, sgp->debug, TRUE,
+				NULL, NULL, rcdp, sizeof(*rcdp), 0,
+				sgp->timeout, sgp->tsp);
+	if (status == SUCCESS) {
+	    uint32_t device_size = (uint32_t)StoH(rcdp->block_length);
+	    uint32_t device_capacity = (uint32_t)StoH(rcdp->last_block);
+	    if (device_size) {
+		iop->device_size = device_size;
+	    }
+	    if (device_capacity) {
+		iop->device_capacity = (uint64_t)(device_capacity + 1);
+	    }
+	}
     }
     if ( (status == SUCCESS) && sdp->DebugFlag) {
-        Printf(sdp, "Device: %s, Device Size: %u bytes, Capacity: " LUF " blocks (thread %d)\n",
-                sgp->dsf, iop->device_size, iop->device_capacity, sdp->thread_number);
+	Printf(sdp, "Device: %s, Device Size: %u bytes, Capacity: " LUF " blocks (thread %d)\n",
+	        sgp->dsf, iop->device_size, iop->device_capacity, sdp->thread_number);
     }
     return (status);
+}
+
+int
+setup_read_capacity16(scsi_device_t *sdp, scsi_generic_t *sgp)
+{
+    ReadCapacity16_CDB_t *cdb;
+    uint32_t data_length = sizeof(ReadCapacity16_data_t);
+
+    cdb = (ReadCapacity16_CDB_t *)sgp->cdb;
+    memset(cdb, '\0', sizeof(*cdb));
+    cdb->opcode = (uint8_t)SOPC_SERVICE_ACTION_IN_16; 
+    cdb->service_action = SCSI_SERVICE_ACTION_READ_CAPACITY_16;
+    sgp->data_dir = scsi_data_read;
+    sgp->data_length = data_length;
+    sgp->data_buffer = malloc_palign(sdp, sgp->data_length, 0);
+    if (sgp->data_buffer == NULL) return (FAILURE);
+    /* Setup to execute a CDB operation. */
+    sdp->op_type = SCSI_CDB_OP;
+    sdp->encode_flag = True;
+    sdp->decode_flag = True;
+    sgp->cdb_size = GetCdbLength(sgp->cdb[0]);
+    return(SUCCESS);
 }
 
 int
@@ -448,10 +476,10 @@ read_capacity16_encode(void *arg)
     cdb = (ReadCapacity16_CDB_t *)sgp->cdb;
     sgp->data_dir = scsi_data_read;
     if ( (sgp->data_buffer == NULL) || (sgp->data_length < sizeof(*rcdp)) ) {
-        if (sgp->data_buffer) free_palign(sdp, sgp->data_buffer);
-        sgp->data_length = sizeof(*rcdp);
-        sgp->data_buffer = malloc_palign(sdp, sgp->data_length, 0);
-        if (sgp->data_buffer == NULL) return(FAILURE);
+	if (sgp->data_buffer) free_palign(sdp, sgp->data_buffer);
+	sgp->data_length = sizeof(*rcdp);
+	sgp->data_buffer = malloc_palign(sdp, sgp->data_length, 0);
+	if (sgp->data_buffer == NULL) return(FAILURE);
     }
     HtoS(cdb->allocation_length, sgp->data_length);
     return(SUCCESS);
@@ -468,11 +496,22 @@ read_capacity16_decode(void *arg)
     uint64_t logical_blocks;
     uint16_t lowest_aligned;
     int status = SUCCESS;
-
+    
     if ( (rcdp = (ReadCapacity16_data_t *)sgp->data_buffer) == NULL) {
-        ReportDeviceInformation(sdp, sgp);
-        Fprintf(sdp, "No capacity buffer provided!\n");
-        return(FAILURE);
+	ReportDeviceInformation(sdp, sgp);
+	Fprintf(sdp, "No capacity buffer provided!\n");
+	return(FAILURE);
+    }
+
+    if (sdp->output_format == JSON_FMT) {
+	char *json_string;
+	json_string = read_capacity16_decode_json(sdp, iop, rcdp, "Read Capacity(16)");
+	if (json_string) {
+	    PrintLines(sdp, json_string);
+	    Printnl(sdp);
+	    json_free_serialized_string(json_string);
+	}
+	return(status);
     }
 
     Printf(sdp, "\n");
@@ -484,9 +523,9 @@ read_capacity16_decode(void *arg)
 
     PrintLongDec(sdp, "Maximum Capacity", logical_blocks, (block_length) ? DNL : PNL);
     if (block_length) {
-        double bytes;
-        bytes = ((double) logical_blocks * (double) block_length);
-        Print(sdp, " (%.3f megabytes)\n", (bytes / (double) MBYTE_SIZE));
+	double bytes;
+	bytes = ((double) logical_blocks * (double) block_length);
+	Print(sdp, " (%.3f megabytes)\n", (bytes / (double) MBYTE_SIZE));
     }
     PrintDecimal(sdp, "Block Length", (uint32_t)block_length, PNL);
     PrintYesNo(sdp, False, "Protection Enabled", rcdp->prot_en, PNL);
@@ -501,6 +540,82 @@ read_capacity16_decode(void *arg)
     lowest_aligned = ((rcdp->lowest_aligned_msb << 8) | rcdp->lowest_aligned_lsb);
     PrintDecimal(sdp, "Lowest Aligned Logical Block Address", lowest_aligned, PNL);
     return(status);
+}
+
+/*
+ * Supported Diagnostic Pages (Page 0x00) in JSON Format:
+ */
+char *
+read_capacity16_decode_json(scsi_device_t *sdp, io_params_t *iop, ReadCapacity16_data_t *rcdp, char *scsi_name)
+{
+    JSON_Value	*root_value;
+    JSON_Object *root_object;
+    JSON_Value  *value;
+    JSON_Object *object;
+    JSON_Status json_status;
+    char *json_string = NULL;
+    char text[STRING_BUFFER_SIZE];
+    char *tp = NULL;
+    uint8_t *ucp = NULL;
+    int length = 0;
+    int offset = 0;
+    uint32_t block_length;
+    uint64_t logical_blocks;
+    uint16_t lowest_aligned;
+    int status = SUCCESS;
+
+    root_value  = json_value_init_object();
+    if (root_value == NULL) return(NULL);
+    root_object = json_value_get_object(root_value);
+
+    value  = json_value_init_object();
+    if (value == NULL) {
+	json_value_free(root_value);
+	return(NULL);
+    }
+    json_status = json_object_dotset_value(root_object, scsi_name, value);
+    object = json_value_get_object(value);
+
+    ucp = (uint8_t *)rcdp;
+    length = sizeof(*rcdp);
+    json_status = json_object_set_number(object, "Length", (double)length);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Offset", (double)offset);
+    if (json_status != JSONSuccess) goto finish;
+    offset = FormatHexBytes(text, offset, ucp, length);
+    json_status = json_object_set_string(object, "Bytes", text);
+    if (json_status != JSONSuccess) goto finish;
+
+    logical_blocks = StoH(rcdp->last_block) + 1;
+    block_length = (uint32_t)StoH(rcdp->block_length);
+
+    json_status = json_object_set_number(object, "Maximum Capacity", (double)logical_blocks);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Block Length", (double)block_length);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_boolean(object, "Protection Enabled", rcdp->prot_en);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Protection Type", (double)rcdp->p_type);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Logical Blocks per Physical Exponent", (double)rcdp->lbppbe);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Protection Information Exponent", (double)rcdp->p_i_exponent);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_boolean(object, "Logical Block Provisioning Management", rcdp->lbpme);
+    json_status = json_object_set_boolean(object, "Logical Block Provisioning Read Zeroes", rcdp->lbprz);
+    if (json_status != JSONSuccess) goto finish;
+    lowest_aligned = ((rcdp->lowest_aligned_msb << 8) | rcdp->lowest_aligned_lsb);
+    json_status = json_object_set_number(object, "Lowest Aligned Logical Block Address", (double)lowest_aligned);
+
+finish:
+    (void)json_object_set_number(object, "JSON Status", (double)json_status);
+    if (sdp->json_pretty) {
+	json_string = json_serialize_to_string_pretty(root_value);
+    } else {
+	json_string = json_serialize_to_string(root_value);
+    }
+    json_value_free(root_value);
+    return(json_string);
 }
 
 char *
@@ -794,9 +909,9 @@ random_rw6_encode(void *arg)
 
     HtoS(cdb->lba, iop->current_lba);
     if (iop->cdb_blocks) {
-        cdb->length = (uint8_t)iop->cdb_blocks;
+	cdb->length = (uint8_t)iop->cdb_blocks;
     } else {
-        cdb->length = (uint8_t)(sgp->data_length / iop->device_size);
+	cdb->length = (uint8_t)(sgp->data_length / iop->device_size);
     }
     return (SUCCESS);
 }
@@ -816,9 +931,9 @@ random_rw10_encode(void *arg)
 
     HtoS(cdb->lba, iop->current_lba);
     if (iop->cdb_blocks) {
-        HtoS(cdb->length, iop->cdb_blocks);
+	HtoS(cdb->length, iop->cdb_blocks);
     } else {
-        HtoS(cdb->length, (sgp->data_length / iop->device_size));
+	HtoS(cdb->length, (sgp->data_length / iop->device_size));
     }
     return (SUCCESS);
 }
@@ -839,9 +954,9 @@ random_rw16_encode(void *arg)
     HtoS(cdb->lba, iop->current_lba);
 
     if (iop->cdb_blocks) {
-        HtoS(cdb->length, iop->cdb_blocks);
+	HtoS(cdb->length, iop->cdb_blocks);
     } else {
-        HtoS(cdb->length, (sgp->data_length / iop->device_size));
+	HtoS(cdb->length, (sgp->data_length / iop->device_size));
     }
     return (SUCCESS);
 }
@@ -1114,22 +1229,28 @@ static scsi_opcode_t scsiOpcodeTable[] = {
     {	SOPC_INQUIRY,		    0x85, ALL_DEVICE_TYPES, "Inquiry - Management Network Addresses" },
     {	SOPC_INQUIRY,		    0x86, ALL_DEVICE_TYPES, "Inquiry - Extended Inquiry Data"	},
     {	SOPC_INQUIRY,		    0x87, ALL_DEVICE_TYPES, "Inquiry - Mode Page Policy"	},
+    {	SOPC_INQUIRY,		    0x89, ALL_DEVICE_TYPES, "Inquiry - ATA Information"		},
+    {	SOPC_INQUIRY,		    0x8D, ALL_DEVICE_TYPES, "Inquiry - Power Consumption"	},
     {	SOPC_INQUIRY,		    0x8F, ALL_DEVICE_TYPES, "Inquiry - Third-party Copy"	},
     {	SOPC_INQUIRY,		    0xB0, ALL_RANDOM_DEVICES, "Inquiry - Block Limits"		},
+    {	SOPC_INQUIRY,		    0xB1, ALL_RANDOM_DEVICES, "Inquiry - Block Device Characteristics" },
     {	SOPC_INQUIRY,		    0xB2, ALL_RANDOM_DEVICES, "Inquiry - Logical Block Provisioning" },
-    {	SOPC_INQUIRY,		    0xC0, BITMASK(DTYPE_DIRECT), "Inquiry - Filer IP Address"	},
-    {	SOPC_INQUIRY,		    0xC1, BITMASK(DTYPE_DIRECT), "Inquiry - Proxy Information"	},
-    {	SOPC_INQUIRY,		    0xC2, BITMASK(DTYPE_DIRECT), "Inquiry - Target Port Information"},
-    {	SOPC_LOG_SELECT,	    0x00, ALL_DEVICE_TYPES, "Log Select"		},
-    {	SOPC_LOG_SENSE,		    0x00, ALL_DEVICE_TYPES, "Log Sense"			},
+    {	SOPC_INQUIRY,		    0xB3, ALL_RANDOM_DEVICES, "Inquiry - Referrals"		},
+    {	SOPC_INQUIRY,		    0xB4, ALL_RANDOM_DEVICES, "Inquiry - Supported Block Lengths And Protection Types" },
+    {	SOPC_LOG_SELECT,	    0x00, ALL_DEVICE_TYPES, "Log Select",
+	scsi_data_write, log_select_encode						},
+    {	SOPC_LOG_SENSE,		    0x00, ALL_DEVICE_TYPES, "Log Sense",
+	scsi_data_read, log_sense_encode, log_sense_decode				},
     {	SOPC_MODE_SELECT_6,	    0x00, ALL_DEVICE_TYPES, "Mode Select(6)"		},
     {	SOPC_MODE_SELECT_10,	    0x00, ALL_DEVICE_TYPES, "Mode Select(10)"		},
     {	SOPC_MODE_SENSE_6,	    0x00, ALL_DEVICE_TYPES, "Mode Sense(6)"		},
     {	SOPC_MODE_SENSE_10,	    0x00, ALL_DEVICE_TYPES, "Mode Sense(10)"		},
     {	SOPC_READ_BUFFER,	    0x00, ALL_DEVICE_TYPES, "Read Buffer"		},
-    {	SOPC_RECEIVE_DIAGNOSTIC,    0x00, ALL_DEVICE_TYPES, "Receive Diagnostic"	},
+    {	SOPC_RECEIVE_DIAGNOSTIC,    0x00, ALL_DEVICE_TYPES, "Receive Diagnostic",
+	scsi_data_read, receive_diagnostic_encode, receive_diagnostic_decode		},
     {	SOPC_REQUEST_SENSE,	    0x00, ALL_DEVICE_TYPES, "Request Sense"		},
-    {	SOPC_SEND_DIAGNOSTIC,	    0x00, ALL_DEVICE_TYPES, "Send Diagnostic"		},
+    {	SOPC_SEND_DIAGNOSTIC,	    0x00, ALL_DEVICE_TYPES, "Send Diagnostic",
+	scsi_data_write, send_diagnostic_encode, send_diagnostic_decode			},
     {	SOPC_TEST_UNIT_READY,	    0x00, ALL_DEVICE_TYPES, "Test Unit Ready"		},
     {	SOPC_WRITE_BUFFER,	    0x00, ALL_DEVICE_TYPES, "Write Buffer"		},
     {	SOPC_PERSISTENT_RESERVE_IN, 0xFF, ALL_DEVICE_TYPES, "Persistent Reserve In"	},
@@ -1146,13 +1267,23 @@ static scsi_opcode_t scsiOpcodeTable[] = {
     {	SOPC_PERSISTENT_RESERVE_OUT,0x05, ALL_DEVICE_TYPES, "Persistent Reserve Out - Preempt and Clear" },
     {	SOPC_PERSISTENT_RESERVE_OUT,0x06, ALL_DEVICE_TYPES, "Persistent Reserve Out - Register and Ignore" },
     {	SOPC_PERSISTENT_RESERVE_OUT,0x07, ALL_DEVICE_TYPES, "Persistent Reserve Out - Register and Move" },
-    {   SOPC_REPORT_LUNS,           0x00, ALL_DEVICE_TYPES, "Report Luns"               },
+#if 1 
+    {	SOPC_REPORT_LUNS,	    0x00, ALL_DEVICE_TYPES, "Report Luns"		},
+#else
+    {	SOPC_REPORT_LUNS,	    0x00, ALL_DEVICE_TYPES, "Report Luns",
+	scsi_data_read, report_luns_encode, report_luns_decode				},
+#endif
     {	SOPC_MAINTENANCE_IN,	    0x00, ALL_DEVICE_TYPES, "Maintenance In"		},
     {	SOPC_MAINTENANCE_IN,	    0x05, ALL_DEVICE_TYPES, "Maintenance In - Report Device Identifier" },
     {	SOPC_MAINTENANCE_IN,	    0x06, ALL_DEVICE_TYPES, "Maintenance In - Report States" },
     {	SOPC_MAINTENANCE_IN,	    0x08, ALL_DEVICE_TYPES, "Maintenance In - Report Supported Configuration Method" },
     {	SOPC_MAINTENANCE_IN,	    0x09, ALL_DEVICE_TYPES, "Maintenance In - Report Unconfigured Capacity" },
-    {   SOPC_MAINTENANCE_IN,        0x0A, ALL_DEVICE_TYPES, "Maintenance In - Report Target Port Groups" },
+#if 1
+    {	SOPC_MAINTENANCE_IN,	    0x0A, ALL_DEVICE_TYPES, "Maintenance In - Report Target Port Groups" },
+#else
+    {	SOPC_MAINTENANCE_IN,	    0x0A, ALL_DEVICE_TYPES, "Maintenance In - Report Target Port Groups",
+	scsi_data_read, rtpgs_encode, rtpgs_decode					},
+#endif
     {	SOPC_MAINTENANCE_IN,	    0x0C, ALL_DEVICE_TYPES, "Maintenance In - Report Supported Operation Codes" },
     {	SOPC_MAINTENANCE_IN,	    0x0D, ALL_DEVICE_TYPES, "Maintenance In - Report Supported Task Mgmt Functions" },
     /*
@@ -1181,7 +1312,12 @@ static scsi_opcode_t scsiOpcodeTable[] = {
     {	SOPC_SET_LIMITS,	    0x00, ALL_RANDOM_DEVICES, "Set Limits"		},
     {	SOPC_START_STOP_UNIT,	    0x00, ALL_RANDOM_DEVICES, "Start/Stop Unit"		},
     {	SOPC_SYNCHRONIZE_CACHE,	    0x00, ALL_RANDOM_DEVICES, "Synchronize Cache"	},
-    {   SOPC_UNMAP,                 0x00, ALL_RANDOM_DEVICES, "Unmap"                   },
+#if 1
+    {	SOPC_UNMAP,		    0x00, ALL_RANDOM_DEVICES, "Unmap"			},
+#else
+    {	SOPC_UNMAP,		    0x00, ALL_RANDOM_DEVICES, "Unmap",
+	scsi_data_write, random_unmap_encode, NULL, UNMAP_MAX_PER_RANGE			},
+#endif
     {	SOPC_VERIFY,		    0x00, ALL_RANDOM_DEVICES, "Verify(10)",
 	scsi_data_none, random_rw10_encode, NULL, SCSI_MAX_BLOCKS10			},
     {	SOPC_WRITE_6,		    0x00, ALL_RANDOM_DEVICES, "Write(6)",
@@ -1196,9 +1332,27 @@ static scsi_opcode_t scsiOpcodeTable[] = {
     /*
      * 16-byte Opcodes:
      */
-    {   SOPC_EXTENDED_COPY,         0x00, ALL_RANDOM_DEVICES, "Extended Copy"           },
-    {   SOPC_RECEIVE_COPY_RESULTS,  0x00, ALL_RANDOM_DEVICES, "Receive Copy Results"    },
-    {   SOPC_RECEIVE_ROD_TOKEN_INFO,0x00, ALL_RANDOM_DEVICES, "Receive ROD Token Information" },
+#if 1
+    {	SOPC_EXTENDED_COPY,	    0x00, ALL_RANDOM_DEVICES, "Extended Copy"		},
+    {	SOPC_RECEIVE_COPY_RESULTS,  0x00, ALL_RANDOM_DEVICES, "Receive Copy Results"	},
+    {	SOPC_RECEIVE_ROD_TOKEN_INFO,0x00, ALL_RANDOM_DEVICES, "Receive ROD Token Information" },
+#else
+    {	SOPC_EXTENDED_COPY,	    SCSI_XCOPY_EXTENDED_COPY_LID1,
+					  ALL_RANDOM_DEVICES, "Extended Copy",
+	scsi_data_write, extended_copy_encode, NULL, XCOPY_MAX_BLOCKS_PER_SEGMENT	},
+    {	SOPC_EXTENDED_COPY,	    SCSI_XCOPY_POPULATE_TOKEN,
+					  ALL_RANDOM_DEVICES, "XCOPY - Populate Token",
+	scsi_data_write, NULL, NULL, XCOPY_PT_MAX_BLOCKS					},
+    {	SOPC_EXTENDED_COPY,	    SCSI_XCOPY_WRITE_USING_TOKEN,
+					  ALL_RANDOM_DEVICES, "XCOPY - Write Using Token",
+	scsi_data_write, write_using_token_encode, NULL, XCOPY_PT_MAX_BLOCKS		},
+    {	SOPC_RECEIVE_COPY_RESULTS,  SCSI_TGT_RECEIVE_COPY_RESULTS_SVACT_OPERATING_PARAMETERS,
+					  ALL_RANDOM_DEVICES, "Receive Copy Results",
+	scsi_data_read, NULL, NULL							},
+    {	SOPC_RECEIVE_ROD_TOKEN_INFO,SCSI_TGT_RECEIVE_ROD_TOKEN_INFORMATION,
+					  ALL_RANDOM_DEVICES, "Receive ROD Token Information",
+	scsi_data_read, NULL, receive_rod_token_decode					},
+#endif /* 0 */
     {	SOPC_READ_16,		    0x00, ALL_RANDOM_DEVICES, "Read(16)",
 	scsi_data_read, random_rw16_encode, NULL					},
     {	SOPC_WRITE_16,		    0x00, ALL_RANDOM_DEVICES, "Write(16)",
@@ -1206,7 +1360,7 @@ static scsi_opcode_t scsiOpcodeTable[] = {
     {	SOPC_WRITE_AND_VERIFY_16,   0x00, ALL_RANDOM_DEVICES, "Write and Verify(16)",
 	scsi_data_write, random_rw16_encode, NULL					},
     {	SOPC_VERIFY_16,		    0x00, ALL_RANDOM_DEVICES, "Verify(16)",
-	scsi_data_none, random_rw16_encode, NULL, SCSI_MAX_BLOCKS16			},
+	scsi_data_none, random_rw16_encode, NULL, VERIFY_DATA_MAX_BLOCKS16		},
     {	SOPC_SYNCHRONIZE_CACHE_16,  0x00, ALL_RANDOM_DEVICES, "Synchronize Cache(16)"	},
     {	SOPC_WRITE_SAME_16,	    0x00, ALL_RANDOM_DEVICES, "Write Same(16)",
 	scsi_data_write, random_rw16_encode, NULL, WRITE_SAME_MAX_BLOCKS16		},
@@ -1214,8 +1368,20 @@ static scsi_opcode_t scsiOpcodeTable[] = {
 	scsi_data_read									},
     {	SOPC_SERVICE_ACTION_IN_16,  0x10, ALL_RANDOM_DEVICES, "Read Capacity(16)",
 	scsi_data_read, read_capacity16_encode, read_capacity16_decode			},
-    {   SOPC_SERVICE_ACTION_IN_16,  0x12, ALL_RANDOM_DEVICES, "Get LBA Status(16)"      },
-    {   SOPC_COMPARE_AND_WRITE,     0x00, ALL_RANDOM_DEVICES, "Compare and Write(16)"   }
+#if 1
+    {	SOPC_SERVICE_ACTION_IN_16,  0x12, ALL_RANDOM_DEVICES, "Get LBA Status(16)"	},
+    {	SOPC_COMPARE_AND_WRITE,	    0x00, ALL_RANDOM_DEVICES, "Compare and Write(16)"	},
+#else
+    {	SOPC_SERVICE_ACTION_IN_16,  0x12, ALL_RANDOM_DEVICES, "Get LBA Status(16)",
+        scsi_data_read, get_lba_status_encode, get_lba_status_decode			},
+    {	SOPC_COMPARE_AND_WRITE,	    0x00, ALL_RANDOM_DEVICES, "Compare and Write(16)",
+	scsi_data_write, random_caw16_encode, NULL, CAW_DEFAULT_BLOCKS			},
+#endif
+    /*
+     * ATA Operation Codes:
+     */
+    {	SOPC_ATA_PASS_THROUGH_12,    0x00, ALL_RANDOM_DEVICES, "ATA Pass-Through(12)"	},
+    {	SOPC_ATA_PASS_THROUGH_16,    0x00, ALL_RANDOM_DEVICES, "ATA Pass-Through(16)"	},
 #if 0
     /*
      * SCSI Operation Codes for Sequential-Access Devices.

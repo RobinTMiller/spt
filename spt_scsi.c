@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2016			    *
+ *			  COPYRIGHT (c) 2006 - 2017			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -54,10 +54,11 @@
 #include "spt.h"
 //#include "include.h"
 //#include "libscsi.h"
+#include "scsi_cdbs.h"
 #include "scsi_opcodes.h"
 
 #if defined(_WIN32)
-#  include "spt_win32.h"
+#  include "spt_win.h"
 #else /* !defined(_WIN32) */
 #  include "spt_unix.h"
 #endif /* defined(_WIN32) */
@@ -67,6 +68,7 @@
  */ 
 void strip_trailing_spaces(char *bp);
 scsi_generic_t *init_sg_info(scsi_device_t *sdp, tool_specific_t *tsp);
+void SetupIdentification(scsi_device_t *sdp, io_params_t *iop);
 
 void
 strip_trailing_spaces(char *bp)
@@ -222,6 +224,12 @@ get_standard_scsi_information(scsi_device_t *sdp, io_params_t *iop, scsi_generic
     inquiry_t		*inquiry;
     int			status = SUCCESS;
 
+
+    status = get_inquiry_information(sdp, iop, sgp);
+    if (status == FAILURE) {
+	return(status);
+    }
+#if 0
     if (sip == NULL) {
 	iop->sip = sip = Malloc(sdp, sizeof(*sip) );
 	if (sip == NULL) return(FAILURE);
@@ -245,8 +253,14 @@ get_standard_scsi_information(scsi_device_t *sdp, io_params_t *iop, scsi_generic
     strip_trailing_spaces(sip->si_vendor_id);
     strip_trailing_spaces(sip->si_product_id);
     strip_trailing_spaces(sip->si_revision_level);
+#endif /* 0 */
 
-    status = GetCapacity(sdp, iop);
+    inquiry = sip->si_inquiry;
+    if ( (inquiry->inq_dtype == DTYPE_DIRECT) || (inquiry->inq_dtype == DTYPE_RAID) ||
+	 (inquiry->inq_dtype == DTYPE_MULTIMEDIA) || (inquiry->inq_dtype == DTYPE_OPTICAL) ||
+	 (inquiry->inq_dtype == DTYPE_WORM) ) {
+	status = GetCapacity(sdp, iop);
+    }
 
     sip->si_idt = IDT_BOTHIDS;
 
@@ -263,6 +277,112 @@ get_standard_scsi_information(scsi_device_t *sdp, io_params_t *iop, scsi_generic
 						NULL, &sgp, inquiry, sgp->timeout, sgp->tsp);
     }
     return(status);
+}
+
+int
+get_inquiry_information(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *csgp)
+{
+    scsi_generic_t	*sgp = NULL;
+    scsi_information_t	*sip = iop->sip;
+    inquiry_t		*inquiry = NULL;
+    int			status = SUCCESS;
+
+    sgp = Malloc(sdp, sizeof(*sgp));
+    if (sgp == NULL) return(FAILURE);
+    *sgp = *csgp;
+    if (sip == NULL) {
+	iop->sip = sip = Malloc(sdp, sizeof(*sip) );
+	if (sip == NULL) {
+	    free(sgp);
+	    return(FAILURE);
+	}
+    }
+    if ( (inquiry = sip->si_inquiry) == NULL) {
+	sip->si_inquiry = inquiry = Malloc(sdp, sizeof(*inquiry) );
+	if (sip->si_inquiry == NULL) return(FAILURE);
+    }
+
+    status = Inquiry(sgp->fd, sgp->dsf, sgp->debug, sgp->errlog,
+		     NULL, &sgp, inquiry, sizeof(*inquiry), 0, 0, sgp->timeout, sgp->tsp);
+    if (status) {
+	Free(sdp, sgp);
+	return(status);
+    }
+
+    sip->si_vendor_id = Malloc(sdp, INQ_VID_LEN + 1 );
+    sip->si_product_id = Malloc(sdp, INQ_PID_LEN + 1 );
+    sip->si_revision_level = Malloc(sdp, INQ_REV_LEN + 1 );
+    (void)strncpy(sip->si_vendor_id, (char *)inquiry->inq_vid, INQ_VID_LEN);
+    (void)strncpy(sip->si_product_id, (char *)inquiry->inq_pid, INQ_PID_LEN);
+    (void)strncpy(sip->si_revision_level, (char *)inquiry->inq_revlevel, INQ_REV_LEN);
+    /* Remove trailing spaces. */
+    strip_trailing_spaces(sip->si_vendor_id);
+    strip_trailing_spaces(sip->si_product_id);
+    strip_trailing_spaces(sip->si_revision_level);
+
+    SetupIdentification(sdp, iop);
+
+    Free(sdp, sgp);
+    return (status);
+}
+
+/*
+ * Inquiry Helper Function.
+ */
+void
+SetupIdentification(scsi_device_t *sdp, io_params_t *iop)
+{
+    scsi_information_t *sip = iop->sip;
+    vendor_id_t vendor_id = VID_UNKNOWN;
+    product_id_t product_id = PID_UNKNOWN;
+    uint8_t device_type = iop->sip->si_inquiry->inq_dtype;
+
+    /*
+     * Setup Vendor Identifier from Vendor ID and Product ID strings.
+     */
+    if ( EqualStringLength(sip->si_vendor_id, "CELESTIC", 8) ) {
+	vendor_id = VID_CELESTICA; /* Ouray */
+	if ( EqualStringLength(sip->si_product_id, "X2012-MT", 8) ||
+	     EqualStringLength(sip->si_product_id, "X2024-MT", 8) ||
+	     EqualStringLength(sip->si_product_id, "2U24_STOR_ENCL", 14) ) {
+	    product_id = PID_OURAY;
+	}
+    } else if ( EqualStringLength(sip->si_vendor_id, "HGST", 4) &&
+	        EqualStringLength(sip->si_vendor_id, "4U60_STOR_ENCL", 14) ) {
+	vendor_id = VID_CELESTICA;
+	if ( EqualStringLength(sip->si_product_id, "4U60_STOR_ENCL", 14) ) {
+	    product_id = PID_KEPLER;
+	}
+    } else if ( EqualStringLength(sip->si_vendor_id, "HGST", 4) ) {
+	/*
+	 * Since we have enclosures identified as both HGST and WDC, we will 
+	 * make all enclosures look like vendor WDC (for now). We cannot do 
+	 * this with disks since each vendor has its' own unique extensions. 
+	 */
+	if (device_type == DTYPE_ENCLOSURE) {
+	    vendor_id = VID_WDC;
+	} else {
+	    vendor_id = VID_HGST;
+	}
+	if ( EqualStringLength(sip->si_product_id, "STOR ENCL JBOD", 14) ) {
+	    product_id = PID_PIKESPEAK;
+	}
+    } else if ( EqualStringLength(sip->si_vendor_id, "WDC", 3) ) {
+	vendor_id = VID_WDC;
+	if ( EqualStringLength(sip->si_product_id, "4U60G2_STOR_ENCL", 16) ) {
+	    product_id = PID_CASTLEPEAK;
+	} else if ( EqualStringLength(sip->si_product_id, "InfiniFlash A", 13) ||
+		    EqualStringLength(sip->si_product_id, "InfiniFlash P200", 16) ) {
+	    product_id = PID_MISSIONPEAK;
+	} else if ( EqualStringLength(sip->si_product_id, "Mt Madonna 4U102", 15) ) {
+	    product_id = PID_MT_MADONNA;
+	}
+    } else {
+	vendor_id = VID_UNKNOWN;
+    }
+    iop->vendor_id = vendor_id;
+    iop->product_id = product_id;
+    return;
 }
 
 void
@@ -338,5 +458,6 @@ report_standard_scsi_information(scsi_device_t *sdp, io_params_t *iop)
 	Printf(sdp, "%30.30s%s\n",
 	       "Management Network Address: ", sip->si_mgmt_address);
     }
+    Printf(sdp, "\n");
     return;
 }

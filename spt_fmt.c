@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 1988 - 2013			    *
+ *			  COPYRIGHT (c) 1988 - 2017			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -32,6 +32,25 @@
  *
  * Modification History:
  *
+ * November 8th, 2017 by Robin T. Miller
+ *      Add "%adsf" to format the alternate device name.
+ * 
+ * November 3rd, 2017 by Robin T. Miller
+ * 	Update emit control strings to support descriptor sense format.
+ *      Add support for unpacking SATA ASCII data (byte swap words).
+ * 
+ * October 13th, 2017 by Robin T. Miller
+ *      Handle sense data in both fixed and descriptor formats.
+ *      Note: Still need to handle individual sense descriptors!
+ *      This affects: %info* %cspec_data %fru %ili sense formats.
+ *      TODO: Also need to add control strings for HGST specific.
+ * 
+ * September 29th, 2017 by Robin T. Miller
+ *      Add support for unpacking bit fields.
+ * 
+ * September 14th, 2016 by Robin T. Miller
+ *      When formatting emit status string, handle no sense data.
+ * 
  * June 15th, 2014 by Robin T. Miller
  * 	Add %dir and %length to formatting of emit status.
  *
@@ -39,6 +58,7 @@
  * 	Integrating dt's formatting functions into spt.
  */
 #include "spt.h"
+#include <ctype.h>
 
 /*
  * Forward References:
@@ -48,6 +68,8 @@ time_t get_elapsed_time(scsi_device_t *sdp);
 uint64_t get_total_bytes_transferred(scsi_device_t *sdp, time_t *secs);
 uint64_t get_total_blocks_transferred(scsi_device_t *sdp, time_t *secs);
 uint64_t get_total_operations(scsi_device_t *sdp, time_t *secs);
+
+int verify_unpack_range(scsi_device_t *sdp, int offset, int size, int limit);
 
 /*
  * FmtEmitStatus() - Format the Exit Status String.
@@ -85,6 +107,7 @@ uint64_t get_total_operations(scsi_device_t *sdp, time_t *secs);
  *	%xfer = The bytes transferred. (or %bytes)
  *	%sense_data = All the sense data.
  * 	%scsi_name = The SCSI opcode name.
+ *      %adsf = The alternate device.
  * 	%dsf = The 1st device special file.
  * 	%dsf1 = The 2nd device special file.
  * 	%src = The source device(s).
@@ -164,6 +187,14 @@ FmtEmitStatus(scsi_device_t *sdp, io_params_t *uiop, scsi_generic_t *usgp, char 
 		to += slen;
 		from += 7;
 		length -= 6;
+		continue;
+	    } else if (strncasecmp(key, "adsf", 4) == 0) {
+		if (sgp->adsf) {
+		    slen = Sprintf(to, "%s", sgp->adsf);
+		    to += slen;
+		}
+		from += 5;
+		length -= 4;
 		continue;
 	    } else if (strncasecmp(key, "dsf1", 4) == 0) {
 		/* Switch to dsf1. (mirror device) */
@@ -340,13 +371,14 @@ FmtEmitStatus(scsi_device_t *sdp, io_params_t *uiop, scsi_generic_t *usgp, char 
 		length -= 10;
 		continue;
 	    } else if (strncasecmp(key, "sense_code", 10) == 0) {
-		slen = Sprintf(to, "%x", ssp->error_code);
+		uint8_t error_code = (ssp) ? ssp->error_code : 0;
+		slen = Sprintf(to, "%x", error_code);
 		to += slen;
 		from += 11;
 		length -= 10;
 		continue;
 	    } else if (strncasecmp(key, "sense_msg", 9) == 0) {
-		char *sense_msgp = SenseCodeMsg(ssp->error_code);
+		char *sense_msgp = (ssp) ? SenseCodeMsg(ssp->error_code) : "None";
 		slen = Sprintf(to, "%s", sense_msgp);
 		to += slen;
 		from += 10;
@@ -471,95 +503,140 @@ FmtEmitStatus(scsi_device_t *sdp, io_params_t *uiop, scsi_generic_t *usgp, char 
 		continue;
 	    } else if (strncasecmp(key, "sense_data", 10) == 0) {
 		unsigned char *bp = sgp->sense_data;
-		int sense_len = (8 + ssp->addl_sense_len);
-		while (sense_len--) {
-		    slen = Sprintf(to, "%02x ", *bp++);
-		    to += slen;
+		int sense_len = (ssp) ? (8 + ssp->addl_sense_len) : 8;
+		if (bp) {
+		    while (sense_len--) {
+			slen = Sprintf(to, "%02x ", *bp++);
+			to += slen;
+		    }
+		    --to; *to = '\0'; /* remove last space */
 		}
-		--to; *to = '\0'; /* remove last space */
 		from += 11;
 		length -= 10;
 		continue;
 	    } else if (strncasecmp(key, "cspec_data", 10) == 0) {
-		uint32_t cmd_spec_value;
-		cmd_spec_value = (uint32_t)StoH(ssp->cmd_spec_info);
-		slen = Sprintf(to, "%x", cmd_spec_value);
+		uint64_t cmd_spec_value = 0;
+		if (ssp) {
+		    GetSenseCmdSpecific(ssp, &cmd_spec_value);
+		}
+		slen = Sprintf(to, LUF, cmd_spec_value);
 		to += slen;
 		from += 11;
 		length -= 10;
 		continue;
 	    } else if (strncasecmp(key, "info_valid", 10) == 0) {
-		slen = Sprintf(to, "%u", ssp->info_valid);
+		uint8_t info_valid = 0;
+		uint64_t info_value = 0;
+		if (ssp) {
+		    GetSenseInformation(ssp, &info_valid, &info_value);
+		}
+		slen = Sprintf(to, "%u", info_valid);
 		to += slen;
 		from += 11;
 		length -= 10;
 		continue;
 	    } else if (strncasecmp(key, "info_data", 9) == 0) {
-		uint32_t info_value;
-		info_value = (uint32_t)StoH(ssp->info_bytes);
-		slen = Sprintf(to, "%x", info_value);
+		uint8_t info_valid = 0;
+		uint64_t info_value = 0;
+		if (ssp) {
+		    GetSenseInformation(ssp, &info_valid, &info_value);
+		}
+		slen = Sprintf(to, LUF, info_value);
 		to += slen;
 		from += 10;
 		length -= 9;
 		continue;
 	    } else if (strncasecmp(key, "sense_key", 9) == 0) {
-		slen = Sprintf(to, "%x", ssp->sense_key);
+		uint8_t sense_key = 0, asc = 0, asq = 0;
+		if (ssp) {
+		    GetSenseErrors(ssp, &sense_key, &asc, &asq);
+		}
+		slen = Sprintf(to, "%x", sense_key);
 		to += slen;
 		from += 10;
 		length -= 9;
 		continue;
 	    } else if (strncasecmp(key, "skey_msg", 8) == 0) {
-		char *skey_msg = SenseKeyMsg(ssp->sense_key);
+		uint8_t sense_key = 0, asc = 0, asq = 0;
+		char *skey_msg = "None";
+		if (ssp) {
+		    GetSenseErrors(ssp, &sense_key, &asc, &asq);
+		    skey_msg = SenseKeyMsg(sense_key);
+		}
 		slen = Sprintf(to, "%s", skey_msg);
 		to += slen;
 		from += 9;
 		length -= 8;
 		continue;
 	    } else if (strncasecmp(key, "ili", 3) == 0) {
-		slen = Sprintf(to, "%u", ssp->illegal_length);
+		uint8_t illegal_length = (ssp) ? ssp->illegal_length : 0;
+		slen = Sprintf(to, "%u", illegal_length);
 		to += slen;
 		from += 4;
 		length -= 3;
 		continue;
 	    } else if (strncasecmp(key, "eom", 3) == 0) {
-		slen = Sprintf(to, "%u", ssp->end_of_medium);
+		uint8_t end_of_medium = (ssp) ? ssp->end_of_medium : 0;
+		slen = Sprintf(to, "%u", end_of_medium);
 		to += slen;
 		from += 4;
 		length -= 3;
 		continue;
 	    } else if (strncasecmp(key, "fm", 2) == 0) {
-		slen = Sprintf(to, "%u", ssp->file_mark);
+		uint8_t file_mark = (ssp) ? ssp->file_mark : 0;
+		slen = Sprintf(to, "%u", file_mark);
 		to += slen;
 		from += 3;
 		length -= 2;
 		continue;
 	    } else if (strncasecmp(key, "ascq_msg", 8) == 0) {
-		char *ascq_msg = ScsiAscqMsg(ssp->asc, ssp->asq);
+		uint8_t sense_key = 0, asc = 0, asq = 0;
+		char *ascq_msg = "None";
+		if (ssp) {
+		    GetSenseErrors(ssp, &sense_key, &asc, &asq);
+		    ascq_msg = ScsiAscqMsg(asc, asq);
+		}
 		slen = Sprintf(to, "%s", ascq_msg);
 		to += slen;
 		from += 9;
 		length -= 8;
 		continue;
 	    } else if (strncasecmp(key, "ascq", 4) == 0) {
-		slen = Sprintf(to, "%02x%02x", ssp->asc, ssp->asq);
+		uint8_t sense_key = 0, asc = 0, asq = 0;
+		if (ssp) {
+		    GetSenseErrors(ssp, &sense_key, &asc, &asq);
+		}
+		slen = Sprintf(to, "%02x%02x", asc, asq);
 		to += slen;
 		from += 5;
 		length -= 4;
 		continue;
 	    } else if (strncasecmp(key, "asc", 3) == 0) {
-		slen = Sprintf(to, "%02x", ssp->asc);
+		uint8_t sense_key = 0, asc = 0, asq = 0;
+		if (ssp) {
+		    GetSenseErrors(ssp, &sense_key, &asc, &asq);
+		}
+		slen = Sprintf(to, "%02x", asc);
 		to += slen;
 		from += 4;
 		length -= 3;
 		continue;
 	    } else if (strncasecmp(key, "asq", 3) == 0) {
-		slen = Sprintf(to, "%02x", ssp->asq);
+		uint8_t sense_key = 0, asc = 0, asq = 0;
+		if (ssp) {
+		    GetSenseErrors(ssp, &sense_key, &asc, &asq);
+		}
+		slen = Sprintf(to, "%02x", asq);
 		to += slen;
 		from += 4;
 		length -= 3;
 		continue;
 	    } else if (strncasecmp(key, "fru", 3) == 0) {
-		slen = Sprintf(to, "%x", ssp->fru_code);
+		uint8_t fru_code = 0;
+		if (ssp) {
+		    GetSenseFruCode(ssp, &fru_code);
+		}
+		slen = Sprintf(to, "%x", fru_code);
 		to += slen;
 		from += 4;
 		length -= 3;
@@ -712,7 +789,7 @@ FmtEmitStatus(scsi_device_t *sdp, io_params_t *uiop, scsi_generic_t *usgp, char 
 	} /* end if '%' */
     } /* while (length-- > 0) */
     *to = '\0';	      /* NULL terminate! */
-    return ( strlen(buffer) );
+    return ( (int)strlen(buffer) );
 }
 
 clock_t
@@ -806,8 +883,10 @@ get_total_operations(scsi_device_t *sdp, time_t *secs)
  * Special Format Control Strings:
  *
  *      %date = The date string.
- *	%et = The elapsed time.
- * 	%dsf = The device name only.
+ *      %et = The elapsed time.
+ *      %tod = The time of day.
+ *      %etod = Elapsed time of day.
+ *      %dsf = The device name only.
  *	%dfs = The directory file separator. (Unix: '/' or Windows: '\')
  *	%host = The host name.
  * 	%job = The job ID.
@@ -1001,6 +1080,28 @@ FmtString(scsi_device_t *sdp, char *format, hbool_t filepath_flag)
 		from += 4;
 		length -= 3;
 		continue;
+            } else if (strncasecmp(key, "tod", 3) == 0) {
+                *&sdp->ptod = *&sdp->gtod;
+                (void)gettimeofday(&sdp->gtod, NULL);
+                to += Sprintf(to, "%d.%06d", sdp->gtod.tv_sec, sdp->gtod.tv_usec);
+                if (sdp->ptod.tv_sec == 0) {
+                    *&sdp->ptod = *&sdp->gtod;
+                }
+                from += 4;
+                length -= 3;
+                continue;
+            } else if (strncasecmp(key, "etod", 4) == 0) {
+                int secs, usecs;
+                secs = sdp->gtod.tv_sec;
+                usecs = sdp->gtod.tv_usec;
+                if (usecs < sdp->ptod.tv_usec) {
+                    secs--;
+                    usecs += uSECS_PER_SEC;
+                }
+                to += Sprintf(to, "%d.%06d", (secs - sdp->ptod.tv_sec), (usecs - sdp->ptod.tv_usec));
+                from += 5;
+                length -= 4;
+                continue;
 	    } else if (strncasecmp(key, "et", 2) == 0) {
 		clock_t et = get_elapsed_ticks(sdp);
 		if (!sdp->start_ticks) et = 0;
@@ -1057,4 +1158,245 @@ FmtString(scsi_device_t *sdp, char *format, hbool_t filepath_flag)
     }
     *to = '\0';
     return( strdup(buffer) );
+}
+
+/*
+ * FmtUnpackString() - Format Unpack String. 
+ *  
+ * Description: 
+ *      This function unpacks received data based on the unpack format string.
+ *  
+ * Special Format Control Strings:
+ *  
+ *      %O[FFSET]:value = The data offset.
+ *      %B[YTE][:index] = Decode a 8-bit value.
+ *      %S[HORT][:index] = Decode a 16-bit value.
+ *      %W[ORD][:index] = Decode a 32-bit value.
+ *      %L[ONG][:index] = Decode a 64-bit value.
+ *      %C[HAR][:index]:length = Decode length characters.
+ *      %F[IELD][:index]:start:length = Extract a bit field.
+ *  
+ * Inputs: 
+ *      sdp = The SCSI device pointer.
+ *      format = The unpack format control string.
+ *      data = The received data.
+ *      count = The received data count.
+ */
+char *
+FmtUnpackString(scsi_device_t *sdp, char *format, unsigned char *data, size_t count)
+{
+    char	buffer[LOG_BUFSIZE];
+    char	*from = format;
+    char	*to = buffer;
+    ssize_t	length = strlen(format);
+    char	*eptr = NULL;
+    uint32_t	offset = 0;
+
+    *to = '\0';
+    while (length--) {
+	if (*from == '%') {
+	    char *key = (from + 1);
+	    /* Format: %C[HAR]:index:length */
+	    if ( match(&key, "C:") || match(&key, "CHAR:") ) {
+		int i, len;
+		/* The index is optional, so '::length' is valid. */
+		if (*key != ':') {
+		    offset = strtoul(key, &eptr, 10);
+		    if (eptr) key = eptr;
+		}
+		/* The length is required. */
+		if ( match(&key, ":") ) {
+		    len = strtol(key, &eptr, 10);
+		    key = eptr;
+		} else {
+		    Eprintf(sdp, "Missing ':', format is: %%C[HAR]:index:length\n");
+		    return(NULL);
+		}
+		from = key;
+		length -= (key - from);
+		if (sdp->sata_device_flag) {
+		    uint16_t *words = (uint16_t *)&data[offset];
+		    union {
+			uint8_t bytes[sizeof(uint16_t)];
+			uint16_t word;
+		    } w;
+		    for (i = 0; i < len; i += 2) {
+			int ii;
+			w.word = *words++;
+			/* Swap the SATA ASCII bytes. */
+			for (ii = sizeof(uint16_t); ii; ii--) {
+			    uint8_t byte = w.bytes[ii - 1];
+			    if (isprint(byte)) {
+				*to++ = byte;
+			    } else {
+				/* Show hex for non-printable characters. */
+				to += sprintf(to, "%02x", byte);
+			    }
+			}
+		    }
+		    offset += len;
+		} else {
+		    for (i = 0; i < len; i++) {
+			if (isprint(data[offset])) {
+			    *to++ = data[offset++];
+			} else {
+			    /* Show hex for non-printable characters. */
+			    to += sprintf(to, "%02x", data[offset++]);
+			}
+		    }
+		}
+		continue;
+	    } else if ( match(&key, "F:") || match(&key, "FIELD:") ) {
+		uint8_t mask, bits, max_mask = 0xff, value8 = 0;
+		int len, start = 0, max_bits = 8;
+		/* The index is optional, so '::start:end' is valid. */
+		if (*key != ':') {
+		    offset = strtoul(key, &eptr, 10);
+		    if (eptr) key = eptr;
+		}
+		if ( verify_unpack_range(sdp, offset, sizeof(uint8_t), (int)count) ) {
+		    return(NULL);
+		}
+		/* The starting bit is optional, defailts to 0. */
+		if ( match(&key, ":") && *key != ':' ) {
+		    start = strtol(key, &eptr, 10);
+		    key = eptr;
+		}
+		/* The length is required. */
+		if ( match(&key, ":") ) {
+		    len = strtol(key, &eptr, 10);
+		    if (len > max_bits) {
+			Eprintf(sdp, "Bit field length is too large, max is %u bits\n", max_bits);
+			return(NULL);
+		    }
+		    key = eptr;
+		} else {
+		    Eprintf(sdp, "Missing ':end', format is: %%F[IELD]:index:start:length\n");
+		    return(NULL);
+		}
+		from = key;
+		length -= (key - from);
+		value8 = data[offset];
+		mask = (max_mask >> (max_bits - len));
+		bits = ((value8 >> start) & mask);
+		to += sprintf(to, (sdp->unpack_data_fmt == DEC_FMT) ? "%u" : "0x%x", bits);
+		/* We don't adjust offset, since we may extract other bit fields. */
+		continue;
+	    } else if ( match(&key, "O:") || match(&key, "OFFSET:") ) {
+		if ( verify_unpack_range(sdp, offset, 0, (int)count) ) {
+		    return(NULL);
+		}
+		offset = strtoul(key, &eptr, 10);
+		if (eptr) key = eptr;
+		from = key;
+		length -= (key - from);
+		continue;
+	    } else if ( match(&key, "B") ) {
+		/* Format: %B[YTE][:index] */
+		uint8_t value8 = 0;
+		(void)match(&key, "YTE");
+		if (match(&key, ":")) {
+		    offset = strtol(key, &eptr, 10);
+		    if (eptr) key = eptr;
+		}
+		if ( verify_unpack_range(sdp, offset, sizeof(uint8_t), (int)count) ) {
+		    return(NULL);
+		}
+		value8 = data[offset];
+		to += sprintf(to, (sdp->unpack_data_fmt == DEC_FMT) ? "%u" : "0x%x", value8);
+		from = key;
+		length -= (key - from);
+		offset += sizeof(value8);
+		continue;
+	    } else if ( match(&key, "S") ) {
+		/* Format: %S[HORT][:index] */
+		uint16_t value16 = 0;
+		(void)match(&key, "HORT");
+		if ( match(&key, ":") ) {
+		    offset = strtol(key, &eptr, 10);
+		    if (eptr) key = eptr;
+		}
+		if ( verify_unpack_range(sdp, offset, sizeof(uint16_t), (int)count) ) {
+		    return(NULL);
+		}
+		value16 = (uint16_t)stoh(&data[offset], sizeof(value16));
+		to += sprintf(to, (sdp->unpack_data_fmt == DEC_FMT) ? "%u" : "0x%x", value16);
+		from = key;
+		length -= (key - from);
+		offset += sizeof(value16);
+		continue;
+	    } else if (  match(&key, "W") ) {
+		/* Format: %W[ORD][:index] */
+		uint32_t value32 = 0;
+		(void)match(&key, "ORD");
+		if ( match(&key, ":") ) {
+		    offset = strtol(key, &eptr, 10);
+		    if (eptr) key = eptr;
+		}
+		if ( verify_unpack_range(sdp, offset, sizeof(uint32_t), (int)count) ) {
+		    return(NULL);
+		}
+		value32 = (uint32_t)stoh(&data[offset], sizeof(value32));
+		to += sprintf(to, (sdp->unpack_data_fmt == DEC_FMT) ? "%u" : "0x%x", value32);
+		from = key;
+		length -= (key - from);
+		offset += sizeof(value32);
+		continue;
+	    } else if ( match(&key, "L") ) {
+		/* Format: %L[ONG][:index] */
+		uint64_t value64 = 0;
+		(void)match(&key, "ONG");
+		if ( match(&key, ":") ) {
+		    offset = strtol(key, &eptr, 10);
+		    if (eptr) key = eptr;
+		}
+		if ( verify_unpack_range(sdp, offset, sizeof(uint64_t), (int)count) ) {
+		    return(NULL);
+		}
+		value64 = stoh(&data[offset], sizeof(value64));
+		to += sprintf(to, (sdp->unpack_data_fmt == DEC_FMT) ? LUF : LXF, value64);
+		from = key;
+		length -= (key - from);
+		offset += sizeof(value64);
+		continue;
+	    }
+	}
+	/* Not '%' nor a match for the above. */
+	if (*from == '\\') {
+	    switch (*(from + 1)) {
+		case 'n': {
+		  to += Sprintf(to, "\n");
+		  break;
+		}
+		case 't': {
+		  to += Sprintf(to, "\t");
+		  break;
+		}
+		default: {
+		  *to++ = *from;
+		  *to++ = *(from + 1);
+		  break;
+		}
+	    } /* end switch */
+	    length--;
+	    from += 2;
+	    continue;
+	} else { /* not '%' or '\\' */
+	    *to++ = *from++;
+	    continue;
+	} /* end if '%' */
+    }
+    *to = '\0';
+    return( strdup(buffer) );
+}
+
+int
+verify_unpack_range(scsi_device_t *sdp, int offset, int size, int limit)
+{
+    if ( (offset + size) > limit) {
+	Eprintf(sdp, "The offset %d + size %d, exceeds the range of 0-%d!\n", offset, size, (limit - 1));
+	return(FAILURE);
+    } else {
+	return(SUCCESS);
+    }
 }

@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2014			    *
+ *			  COPYRIGHT (c) 2006 - 2017			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -25,6 +25,15 @@
 #if !defined(INQUIRY_INCLUDE)
 #define INQUIRY_INCLUDE 1
 
+#if !defined(_BITFIELDS_LOW_TO_HIGH_) && !defined(_BITFIELDS_HIGH_TO_LOW_)
+#   error "bitfield ordering is NOT defined!"
+#endif /* !defined(_BITFIELDS_LOW_TO_HIGH_) || !defined(_BITFIELDS_HIGH_TO_LOW_) */
+
+#if defined(__IBMC__)
+/* IBM aligns bit fields to 32-bits by default! */
+#  pragma options align=bit_packed
+#endif /* defined(__IBMC__) */
+
 #include "include.h"
 
 /* %Z%%M% %I% %E% 1990 by Robin Miller. */
@@ -40,23 +49,29 @@
 /*
  * Defined Device Types:
  */
-#define	DTYPE_DIRECT		0x00	/* Direct access.		*/
-#define	DTYPE_SEQUENTIAL	0x01	/* Sequential access.		*/
-#define	DTYPE_PRINTER		0x02	/* Printer.			*/
-#define	DTYPE_PROCESSOR		0x03	/* Processor.			*/
-#define	DTYPE_WORM		0x04	/* Write-Once/Read Many.	*/
-#define	DTYPE_RODIRECT		0x05	/* Read-Only direct access.	*/
-#define DTYPE_MULTIMEDIA	0x05	/* SCSI-3 Multi-media device.	*/
-#define	DTYPE_SCANNER		0x06	/* Scanner.			*/
-#define	DTYPE_OPTICAL		0x07	/* Optical.			*/
-#define	DTYPE_CHANGER		0x08	/* Changer.			*/
-#define DTYPE_COMM		0x09	/* Communications device.	*/
-#define DTYPE_PREPRESS_0	0x0A	/* Graphics pre-press device.	*/
-#define DTYPE_PREPRESS_1	0x0B	/* Graphics pre-press device.	*/
+#define	DTYPE_DIRECT		0x00	/* Direct access block device.	*/
+#define	DTYPE_SEQUENTIAL	0x01	/* Sequential access device.	*/
+#define	DTYPE_PRINTER		0x02	/* Printer device.		*/ /* SPC-5 Obsolete */
+#define	DTYPE_PROCESSOR		0x03	/* Processor device.		*/
+#define	DTYPE_WORM		0x04	/* Write-Once/Read Many.	*/ /* SPC-5 Obsolete */
+#define DTYPE_MULTIMEDIA	0x05	/* CD/DVD device.		*/
+#define	DTYPE_SCANNER		0x06	/* Scanner device.		*/ /* SPC-5 Reserved */
+#define	DTYPE_OPTICAL		0x07	/* Optical memory device.	*/
+#define	DTYPE_CHANGER		0x08	/* Media changer device.	*/
+#define DTYPE_COMMUNICATIONS	0x09	/* Communications device.	*/ /* SPC-5 Reserved */
+#define DTYPE_PREPRESS_0	0x0A	/* Graphics pre-press device.	*/ /* SPC-5 Reserved */
+#define DTYPE_PREPRESS_1	0x0B	/* Graphics pre-press device.	*/ /* SPC-5 Reserved */
 #define DTYPE_RAID		0x0C	/* Array controller device.	*/
 #define DTYPE_ENCLOSURE		0x0D	/* Storage enclosure services.	*/
-#define DTYPE_UTILITY		0x0E	/* Utility device.		*/
-					/* 0x0F-0x1E are reserved.	*/
+#define DTYPE_SIMPLIFIED_DIRECT	0x0E	/* Simplified direct-access.	*/
+#define DTYPE_OPTICAL_CARD	0x0F	/* Optical card reader/writer.	*/
+#define DTYPE_RESERVED_10	0x10	/* Reserved 0x10		*/ /* SPC-5 Reserved */
+#define DTYPE_OBJECT_STORAGE	0x11	/* Object storage device.	*/
+#define DTYPE_AUTOMATION_DRIVE	0x12	/* Automation/drive interface.	*/
+#define DTYPE_OBSOLETE_13	0x13	/* Obsolete 0x13		*/ /* SPC-5 Obsolete */
+#define DTYPE_HOST_MANAGED	0x14	/* Host managed zoned block.	*/
+					/* 0x15-0x1D are reserved.	*/
+#define DTYPE_WELL_KNOWN_LUN	0x1E	/* Well known logical unit.	*/
 #define	DTYPE_NOTPRESENT	0x1F	/* Unknown or no device type.	*/
 
 /*
@@ -69,9 +84,8 @@
  */
 #define ALL_RANDOM_DEVICES	(BITMASK(DTYPE_DIRECT) |		\
 				 BITMASK(DTYPE_OPTICAL) |		\
-				 BITMASK(DTYPE_RODIRECT) |		\
+				 BITMASK(DTYPE_MULTIMEDIA) |		\
 				 BITMASK(DTYPE_WORM))
-
 /*
  * ANSI Approved Versions:
  *
@@ -106,51 +120,50 @@
 #define INQ_PID_LEN		16	/* The Product ident length.	*/
 #define INQ_REV_LEN		4	/* The revision level length.	*/
 
+/*
+ * Note: These bits fields and union below are historic and allowed us 
+ * to access these fields as both a byte or via bit fields. This was 
+ * done since older versions of the spec these fields were reserved. 
+ */
 typedef struct inquiry_sflags {
 #if defined(_BITFIELDS_LOW_TO_HIGH_)
-	uint8_t	inqf_addr16	: 1,	/* 				(b0) */
-		inqf_res_6_b1	: 1,	/* Reserved.			(b1) */
-		inqf_res_6_b2	: 1,	/* Reserved.			(b2) */
-		inqf_mchngr	: 1,	/* Medium changer support.	(b3) */
-		inqf_multip	: 1,	/* Multiport device support.	(b4) */
-		inqf_vs_6_b5	: 1,	/* Vendor specific.		(b5) */
-		inqf_encserv	: 1,	/* Enclosure services.		(b6) */
-		inqf_bque	: 1;	/* Basic command queuing.	(b7) */
+    bitfield_t				/*				 [6] */
+	inqf_obsolete_byte6_b0	: 1,	/* Obsolete			(b0) */
+	inqf_reserved_byte6_b1_2: 2,	/* Reserved.		      (b1:2) */
+	inqf_obsolete_byte6_b3	: 1,	/* Obsolete.			(b3) */
+	inqf_multip		: 1,	/* Multiple SCSI ports.		(b4) */
+	inqf_vs_byte6_b5	: 1,	/* Vendor specific.		(b5) */
+	inqf_encserv		: 1,	/* Enclosure services.		(b6) */
+	inqf_obsolete_byte6_b7	: 1;	/* Obsolete.			(b7) */
 #elif defined(_BITFIELDS_HIGH_TO_LOW_)
-	uint8_t	inqf_bque	: 1,	/* Basic command queuing.	(b7) */
-		inqf_encserv	: 1,	/* Enclosure services.		(b6) */
-		inqf_vs_6_b5	: 1,	/* Vendor specific.		(b5) */
-		inqf_multip	: 1,	/* Multiport device support.	(b4) */
-		inqf_mchngr	: 1,	/* Medium changer support.	(b3) */
-		inqf_res_6_b2	: 1,	/* Reserved.			(b2) */
-		inqf_res_6_b1	: 1,	/* Reserved.			(b1) */
-		inqf_addr16	: 1;	/* 				(b0) */
-#else
-#	error "bitfield ordering is NOT defined!"
+    bitfield_t				/*				 [6] */
+	inqf_obsolete_byte6_b7	: 1,	/* Obsolete.			(b7) */
+	inqf_encserv		: 1,	/* Enclosure services.		(b6) */
+	inqf_vs_byte6_b5	: 1,	/* Vendor specific.		(b5) */
+	inqf_multip		: 1,	/* Multiple SCSI ports.		(b4) */
+	inqf_obsolete_byte6_b3	: 1,	/* Obsolete.			(b3) */
+	inqf_reserved_byte6_b1_2: 2,	/* Reserved.		      (b1:2) */
+	inqf_obsolete_byte6_b0	: 1;	/* Obsolete			(b0) */
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
 } inquiry_sflags_t;
 
 typedef struct inquiry_flags {
 #if defined(_BITFIELDS_LOW_TO_HIGH_)
-	uint8_t	inqf_vs_7_b0	: 1,	/* Vendor Specific.	 	(b0) */
-		inqf_cmdque	: 1,	/* Command queuing support.	(b1) */
-		inqf_obsolete_b2: 1,	/* Obsolete.			(b2) */
-		inqf_linked	: 1,	/* Linked command support.	(b3) */
-		inqf_sync	: 1,	/* Synchronous data transfers.	(b4) */
-		inqf_wbus16	: 1, 	/* Support for 16 bit transfers.(b5) */
-		inqf_obsolete_b6: 1,	/* Obsolete.			(b6) */
-		inqf_obsolete_b7: 1;	/* Obsolete.			(b7) */
+    bitfield_t				/*				 [7] */
+	inqf_vs_byte7_b0	: 1,	/* Vendor Specific.	 	(b0) */
+	inqf_cmdque		: 1,	/* Command queuing support.	(b1) */
+	inqf_reserved_byte7_b2	: 1,	/* Reserved.			(b2) */
+	inqf_obsolete_byte7_b3_3: 3,	/* Obsolete.		      (b3:3) */
+	inqf_reserved_byte7_b6	: 1,	/* Reserved.			(b6) */
+	inqf_obsolete_byte7_b7	: 1;	/* Obsolete.			(b7) */
 #elif defined(_BITFIELDS_HIGH_TO_LOW_)
-	uint8_t	inqf_obsolete_b7: 1,	/* Obsolete.i			(b7) */
-		inqf_obsolete_b6: 1,	/* Obsolete.			(b6) */
-		inqf_wbus16	: 1, 	/* Support for 16 bit transfers.(b5) */
-		inqf_sync	: 1,	/* Synchronous data transfers.	(b4) */
-		inqf_linked	: 1,	/* Linked command support.	(b3) */
-		inqf_obsolete_b2: 1,	/* Obsolete.			(b2) */
-		inqf_cmdque	: 1,	/* Command queuing support.	(b1) */
-		inqf_vs_7_b0	: 1;	/* Vendor Specific.	 	(b0) */
-#else
-#	error "bitfield ordering is NOT defined!"
+    bitfield_t				/*				 [7] */
+	inqf_obsolete_byte7_b7	: 1,	/* Obsolete.			(b7) */
+	inqf_reserved_byte7_b6	: 1,	/* Reserved.			(b6) */
+	inqf_obsolete_byte7_b3_3: 3,	/* Obsolete.		      (b3:3) */
+	inqf_reserved_byte7_b2	: 1,	/* Reserved.			(b2) */
+	inqf_cmdque		: 1,	/* Command queuing support.	(b1) */
+	inqf_vs_byte7_b0	: 1;	/* Vendor Specific.	 	(b0) */
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
 } inquiry_flags_t;
 
@@ -159,88 +172,81 @@ typedef struct inquiry_flags {
  */
 typedef struct {
 #if defined(_BITFIELDS_LOW_TO_HIGH_)
-	uint8_t	inq_dtype	: 5,	/* Peripheral device type.	[0] */
-		inq_pqual	: 3;	/* Peripheral qualifier.	    */
+    bitfield_t				/*				 [0] */
+	inq_dtype		: 5,	/* Peripheral device type.    (b0:5) */
+	inq_pqual		: 3;	/* Peripheral qualifier.      (b6:3) */
 #elif defined(_BITFIELDS_HIGH_TO_LOW_)
-	uint8_t	inq_pqual	: 3,	/* Peripheral qualifier.	    */
-		inq_dtype	: 5;	/* Peripheral device type.	[0] */
-#else
-#	error "bitfield ordering is NOT defined!"
+    bitfield_t				/*				 [0] */
+	inq_pqual		: 3,	/* Peripheral qualifier.      (b6:3) */
+	inq_dtype		: 5;	/* Peripheral device type.    (b0:5) */
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
 #if defined(_BITFIELDS_LOW_TO_HIGH_)
-	uint8_t	inq_dtypmod	: 7,	/* Device type modifier.	[1] */
-		inq_rmb		: 1;	/* Removable media.		    */
+    bitfield_t				/*			         [1] */
+	inq_reserved_byte1_b0_5	: 6,	/* Reserved.		      (b0:6) */
+	inq_lu_cong     	: 1,    /* Logical unit conglomerate.   (b6) */
+	inq_rmb         	: 1;    /* Removable media.             (b7) */
 #elif defined(_BITFIELDS_HIGH_TO_LOW_)
-	uint8_t	inq_rmb		: 1,	/* Removable media.		    */
-		inq_dtypmod	: 7;	/* Device type modifier.	[1] */
-#else
-#	error "bitfield ordering is NOT defined!"
+    bitfield_t				/*				 [1] */
+	inq_rmb         	: 1,    /* Removable media.             (b7) */
+	inq_lu_cong     	: 1,    /* Logical unit conglomerate.   (b6) */
+	inq_reserved_byte1_b0_5	: 6;	/* Reserved.		      (b0:6) */
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+	uint8_t inq_ansi_version;	/* ANSI version.		 [2] */
 #if defined(_BITFIELDS_LOW_TO_HIGH_)
-	uint8_t	inq_ansi	: 3,	/* ANSI version.		[2] */
-		inq_ecma	: 3,	/* ECMA version.		    */
-		inq_iso		: 2;	/* ISO version.			    */
+    bitfield_t				/*				 [3] */
+	inq_rdf			: 4,	/* Response data format.      (b0:3) */
+	inq_hisup		: 1,	/* Historical support.	        (b4) */
+	inq_normaca		: 1,	/* Normal ACA supported.	(b5) */
+	inq_reserved_byte3_b6_7	: 2;	/* Reserved.		      (b6:2) */
 #elif defined(_BITFIELDS_HIGH_TO_LOW_)
-	uint8_t	inq_iso		: 2,	/* ISO version.			    */
-		inq_ecma	: 3,	/* ECMA version.		    */
-		inq_ansi	: 3;	/* ANSI version.		[2] */
-#else
-#	error "bitfield ordering is NOT defined!"
+    bitfield_t				/*				 [3] */
+	inq_reserved_byte3_b6_7	: 2,	/* Reserved.		      (b6:2) */
+	inq_normaca		: 1,	/* Normal ACA supported.	(b5) */
+	inq_hisup		: 1,	/* Historical support.          (b4) */
+	inq_rdf			: 4;	/* Response data format.      (b0:3) */
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+	uint8_t	inq_addlen;		/* Additional length.		 [4] */
 #if defined(_BITFIELDS_LOW_TO_HIGH_)
-	uint8_t	inq_rdf		: 4,	/* Response data format.  [3] (b0:3) */
-		inq_hisup	: 1,	/* Hierarchical support.        (b4) */
-		inq_normaca	: 1,	/* Normal ACA supported.	(b5) */
-		inq_obs_3_b6	: 1,	/* Obsolete.			(b6) */
-		inq_aenc	: 1;	/* Async event notification.	(b7) */
+    bitfield_t				/*				 [5] */
+	inq_protect		: 1,	/* Supports Protection Info.	(b0) */
+	inq_reserved_byte5_b1_2	: 2,	/* Reserved.		      (b1:2) */
+	inq_3pc			: 1,	/* 3rd Party Copy Support.	(b3) */
+	inq_tpgs		: 2,	/* Target Port Group Support. (b4:2) */
+	inq_obsolete_byte5_b6	: 1,	/* Reserved.			(b6) */
+	inq_sccs		: 1;	/* Storage Controller Components(b7) */
 #elif defined(_BITFIELDS_HIGH_TO_LOW_)
-	uint8_t	inq_aenc	: 1,	/* Async event notification.	(b7) */
-		inq_res_3_b6	: 1,	/* Obsolete.			(b6) */
-		inq_normaca	: 1,	/* Normal ACA supported.	(b5) */
-		inq_hisup	: 1,	/* Hierarchical support.        (b4) */
-		inq_rdf		: 4;	/* Response data format.  [3] (b0:3) */
-#else
-#	error "bitfield ordering is NOT defined!"
-#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
-	uint8_t	inq_addlen;		/* Additional length.		[4] */
-#if defined(_BITFIELDS_LOW_TO_HIGH_)
-	uint8_t	inq_protect	: 1,	/* Supports Protection Information. */
-		inq_res_5_b1_b2	: 2,	/* Reserved bits (1:2).		    */
-		inq_3pc		: 1,	/* 3rd Party Copy Support.	    */
-		inq_tpgs	: 2,	/* Target Port Group Support.	    */
-		inq_acc		: 1,	/* Access Controls Coordinator.	    */
-		inq_sccs	: 1;	/* Storage Controller Components.   */
-#elif defined(_BITFIELDS_HIGH_TO_LOW_)
-        uint8_t	inq_sccs	: 1,	/* Storage Controller Components[5] */
-	        inq_acc		: 1,	/* Access Controls Coordinator.	    */
-		inq_tpgs	: 2,	/* Target Port Group Support.	    */
-		inq_3pc		: 1,	/* 3rd Party Copy Support.	    */ 
-		inq_res_5_b1_b2	: 2,	/* Reserved bits (1:2).		    */
-		inq_protect	: 1;	/* Supports Protection Information. */
-#else
-#	error "bitfield ordering is NOT defined!"
+    bitfield_t				/*				 [5] */
+        inq_sccs		: 1,	/* Storage Controller Components(b7) */
+	inq_obsolete_byte5_b6	: 1,	/* Reserved.			(b6) */
+	inq_tpgs		: 2,	/* Target Port Group Support. (b4:2) */
+	inq_3pc			: 1,	/* 3rd Party Copy Support.	(b3) */ 
+	inq_reserved_byte5_b1_2	: 2,	/* Reserved.		      (b1:2) */
+	inq_protect		: 1;	/* Supports Protection Info.	(b0) */
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
 	union {
 		uint8_t sflags;		/* SCSI-3 capability flags.	[6] */
 		struct inquiry_sflags bits;
 	} s3un;
-#define inq_sflags	s3un.sflags
-#define inq_reserved_6	inq_sflags	/* Ref: Reserved for non-SCSI-3.    */
-#define inq_mchngr	s3un.bits.inqf_mchngr
-#define inq_multip	s3un.bits.inqf_multip
-#define inq_vs_6_b5	s3un.bits.inqf_vs_6_b5
-#define inq_encserv	s3un.bits.inqf_encserv
-#define inq_bque	s3un.bits.inqf_bque
+#define inq_sflags		s3un.sflags
+#define inq_obsolete_byte6_b0	s3un.bits.inqf_obsolete_byte6_b0
+#define inq_reserved_byte6_b1_2	s3un.bits.inqf_reserved_byte6_b1_2
+#define inq_obsolete_byte6_b3	s3un.bits.inqf_obsolete_byte6_b3
+#define inq_multip		s3un.bits.inqf_multip
+#define inq_vs_byte6_b5		s3un.bits.inqf_vs_byte6_b5
+#define inq_port		s3un.bits.inqf_vs_byte6_b5	/* HGST */
+#define inq_encserv		s3un.bits.inqf_encserv
+#define inq_obsolete_byte6_b7	s3un.bits.inqf_obsolete_byte6_b7
 	union {
 		uint8_t flags;		/* Device capability flags.	[7] */
 		struct inquiry_flags bits;
 	} un;
-#define inq_flags	un.flags
-#define inq_vs_7_b0	un.bits.inqf_vs_7_b0
-#define inq_cmdque	un.bits.inqf_cmdque
-#define inq_linked	un.bits.inqf_linked
-#define inq_sync	un.bits.inqf_sync
-#define inq_wbus16	un.bits.inqf_wbus16
+#define inq_flags		un.flags
+#define inq_vs_byte7_b0		un.bits.inqf_vs_byte7_b0
+#define inq_cmdque		un.bits.inqf_cmdque
+#define inq_reserved_byte7_b2	un.bits.inqf_reserved_byte7_b2
+#define inq_obsolete_byte7_b3_3	un.bits.inqf_obsolete_byte7_b3_3
+#define inq_reserved_byte7_b6	un.bits.inqf_reserved_byte7_b6
+#define inq_obsolete_byte7_b7	un.bits.inqf_obsolete_byte7_b7
 	uint8_t	inq_vid[INQ_VID_LEN];	/* Vendor ID.		     [8-15] */
 	uint8_t	inq_pid[INQ_PID_LEN];	/* Product ID.		    [16-31] */
 	uint8_t	inq_revlevel[INQ_REV_LEN];/* Revision level.	    [32-35] */
@@ -268,17 +274,33 @@ typedef struct {
 #define INQ_MP_POLICY_PAGE	0x87	/* Mode Page Policy.		*/
 #define INQ_SCSI_PORTS_PAGE	0x88	/* SCSI Ports.			*/
 #define INQ_ATA_INFO_PAGE	0x89	/* ATA Information.		*/
+#define INQ_POWER_CONDITION     0x8A    /* Power condition.             */
+#define INQ_POWER_CONSUMPTION	0x8D	/* Power consumption.		*/
+#define INQ_PROTO_LUN_INFO      0x90    /* Protocol Logical Unit Info.  */
+#define INQ_PROTO_PORT_INFO     0x91    /* Protocol Specific Port Info. */
+#define INQ_THIRD_PARTY_COPY    0x8F    /* Third party copy.            */
 #define INQ_BLOCK_LIMITS_PAGE	0xB0	/* Block limits.		*/
 #define INQ_LOGICAL_BLOCK_PROVISIONING_PAGE 0xB2
 					/* Logical block provisioning.	*/
+#define INQ_BLOCK_CHAR_VPD_PAGE 0xB1    /* Block Device Characteristics VPD. */
 
 #define INQ_ASCIIINFO_START	0x01	/* ASCII Info starting page.	*/
 #define INQ_ASCIIINFO_END	0x07	/* ASCII Info ending page value	*/
+#define INQ_ASCIIINFO_PAGE01	0x01
+#define INQ_ASCIIINFO_PAGE02	0x02
+#define INQ_ASCIIINFO_PAGE03	0x03
+#define INQ_ASCIIINFO_PAGE04	0x04
+#define INQ_ASCIIINFO_PAGE05	0x05
+#define INQ_ASCIIINFO_PAGE06	0x06
+#define INQ_ASCIIINFO_PAGE07	0x07
+
 #define INQ_RESERVED_START	0x84	/* Reserved starting page value	*/
 #define INQ_RESERVED_END	0xBF	/* Reserved ending page value.	*/
 #define INQ_VENDOR_START	0xC0	/* Vendor-specific start value.	*/
 #define INQ_VENDOR_END		0xFF	/* Vendor-specific ending value	*/
 #define MAX_INQUIRY_PAGE	0xFF	/* Maximum inquiry page code.	*/
+
+#define INQ_PAGE_UNKNOWN	-1
 
 /*
  * Declarations/Definitions for Inquiry Command:
@@ -295,11 +317,9 @@ typedef struct inquiry_header {
 #elif defined(_BITFIELDS_HIGH_TO_LOW_)
 	uint8_t	inq_pqual	: 3,	/* Peripheral qualifier.	    */
 		inq_dtype	: 5;	/* Peripheral device type.	[0] */
-#else
-#	error "bitfield ordering is NOT defined!"
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
 	uint8_t	inq_page_code;		/* The inquiry page code.	[1] */
-	uint8_t	inq_reserved;		/* Reserved.			[2] */
+	uint8_t	inq_reserved_byte2;	/* Reserved.			[2] */
 	uint8_t	inq_page_length;	/* The page code length.	[3] */
 					/* Variable length data follows.    */
 } inquiry_header_t;
@@ -328,8 +348,6 @@ struct opdef_param {
 #elif defined(_BITFIELDS_HIGH_TO_LOW_)
 	uint8_t	savimp	: 1,		/* Operating def can be saved.	*/
 		opdef	: 7;		/* Operating definition.	*/
-#else
-#	error "bitfield ordering is NOT defined!"
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
 };
 
@@ -344,8 +362,6 @@ typedef struct inquiry_opdef_page {
 #elif defined(_BITFIELDS_HIGH_TO_LOW_)
 	uint8_t			: 1,	/* Reserved.			*/
 		current_opdef	: 7;	/* Current operating definition */
-#else
-#	error "bitfield ordering is NOT defined!"
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
 #if defined(_BITFIELDS_LOW_TO_HIGH_)
 	uint8_t	default_opdef	: 7,	/* Default operating definition	*/
@@ -353,14 +369,12 @@ typedef struct inquiry_opdef_page {
 #elif defined(_BITFIELDS_HIGH_TO_LOW_)
 	uint8_t	default_savimp	: 1,	/* Operating def can be saved.	*/
 		default_opdef	: 7;	/* Default operating definition	*/
-#else
-#	error "bitfield ordering is NOT defined!"
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
 	uint8_t	support_list[10];	/* Supported definition list.	*/
 } inquiry_opdef_page_t;
 
 /*
- * Device Indentification Page Definitions:
+ * Device Identification Page Definitions:
  */
 #define IID_CODE_SET_RESERVED	0x00	/* Reserved.			*/
 #define IID_CODE_SET_BINARY	0x01	/* Identifier field is binary.	*/
@@ -378,7 +392,6 @@ typedef struct inquiry_opdef_page {
 #define IID_ID_TYPE_MD5LOGUNIT  0x07    /* MD5 logical unit identifier. */
 #define IID_ID_TYPE_SCSI_NAME   0x08    /* SCSI name string identifier. */
 					/* 0x09-0x0F are reserved.	*/
-
 /*
  * Association Definitions:
  */
@@ -401,8 +414,6 @@ typedef struct inquiry_ident_descriptor {
 #elif defined(_BITFIELDS_HIGH_TO_LOW_)
 	uint8_t	iid_proto_ident	: 4,	/* Protocol identifier.		    */
 		iid_code_set	: 4;	/* The code set.		[0] */
-#else
-#	error "bitfield ordering is NOT defined!"
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
 #if defined(_BITFIELDS_LOW_TO_HIGH_)
 	uint8_t	iid_ident_type	: 4,	/* The identifier type.		[1] */
@@ -414,8 +425,6 @@ typedef struct inquiry_ident_descriptor {
                                 : 1,    /* Reserved.                        */
 		iid_association	: 2,	/* Association.			    */
 		iid_ident_type	: 4;	/* The identifier type.		[1] */
-#else
-#	error "bitfield ordering is NOT defined!"
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
 	uint8_t	iid_reserved;		/* Reserved.			[2] */
 	uint8_t	iid_ident_length;	/* The identifier length.	[3] */
@@ -434,5 +443,11 @@ typedef struct inquiry_network_service_page {
     uint8_t address_length[2];
     uint8_t address[1];
 } inquiry_network_service_page_t;
+
+/* ============================================================================================== */
+
+#if defined(__IBMC__)
+#  pragma options align=reset
+#endif /* defined(__IBMC__) */
 
 #endif /* !defined(INQUIRY_INCLUDE) */

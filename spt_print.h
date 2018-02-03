@@ -27,6 +27,7 @@ typedef enum logLevel {
 #define NUMERIC_FIELD	"%38.38s: %u"
 #define DEC_HEX_FIELD	"%38.38s: %u (%#lx)"
 #define HEX_FIELD	"%38.38s: %#x"
+#define HEXP_FIELD	"%38.38s: " LLHXFMT
 #define HEX_DEC_FIELD	"%38.38s: %#x (%u)"
 #define FIELD_WIDTH	40		/* The field width (see above).	*/
 #define DEFAULT_WIDTH   132			/* tty display width.   */
@@ -34,6 +35,7 @@ typedef enum logLevel {
 #define LNUMERIC_FIELD	"%38.38s: " LUF
 #define LDEC_HEX_FIELD	"%38.38s: " LUF " (" LXF ")"
 #define LHEX_FIELD	"%38.38s: " LXF
+#define LHEXP_FIELD	"%38.38s: " LLFXFMT
 #define LHEX_DEC_FIELD	"%38.38s: " LXF " (" LUF ")"
 
 #define DNL		0			/* Disable newline.	*/
@@ -77,12 +79,14 @@ extern void PrintNumeric(scsi_device_t *sdp, char *field_str, uint32_t numeric_v
 extern void PrintDecimal(scsi_device_t *sdp, char *field_str, uint32_t numeric_value, int nl_flag);
 extern void PrintDecHex(scsi_device_t *sdp, char *field_str, uint32_t numeric_value, int nl_flag);
 extern void PrintHex(scsi_device_t *sdp, char *field_str, uint32_t numeric_value, int nl_flag);
+extern void PrintHexP(scsi_device_t *sdp, char *field_str, uint32_t numeric_value, int nl_flag);
 extern void PrintHexDec(scsi_device_t *sdp, char *field_str, uint32_t numeric_value, int nl_flag);
 extern void PrintAscii(scsi_device_t *sdp, char *field_str, char *ascii_str, int nl_flag);
 extern void PrintLongLong(scsi_device_t *sdp, char *field_str, uint64_t numeric_value, int nl_flag);
 extern void PrintLongDec(scsi_device_t *sdp, char *field_str, uint64_t numeric_value, int nl_flag);
 extern void PrintLongDecHex(scsi_device_t *sdp, char *field_str, uint64_t numeric_value, int nl_flag);
 extern void PrintLongHex(scsi_device_t *sdp, char *field_str, uint64_t numeric_value, int nl_flag);
+extern void PrintLongHexP(scsi_device_t *sdp, char *field_str, uint64_t numeric_value, int nl_flag);
 extern void PrintLongHexDec(scsi_device_t *sdp, char *field_str, uint64_t numeric_value, int nl_flag);
 extern void PrintBoolean( scsi_device_t	*sdp,
 			  hbool_t	numeric,
@@ -104,5 +108,27 @@ extern void PrintYesNo( scsi_device_t	*sdp,
 			char		*field_str,
 			hbool_t		boolean_flag,
 			hbool_t		nl_flag);
+
+extern int FormatAsciiData(char *text, int offset, uint8_t *bptr, int length);
+extern int PrintAsciiData(scsi_device_t *sdp, int offset, uint8_t *bptr, int length);
+extern void PrintFieldData(scsi_device_t *sdp, char *field, int offset, char *data);
+extern int FormatHexData(char *text, int offset, uint8_t *bptr, int length);
+extern int PrintHexData(scsi_device_t *sdp, int offset, uint8_t *bptr, int length);
+#if defined(INLINE_FUNCS)
+INLINE int
+PrintHexDebug(scsi_device_t *sdp, int offset, uint8_t *ucp, int length)
+{
+    if (sdp->DebugFlag) {
+	offset = PrintHexData(sdp, offset, ucp, length);
+    } else {
+	offset += length;
+    }
+    return(offset);
+}
+#else /* !defined(INLINE_FUNCS) */
+extern int PrintHexDebug(scsi_device_t *sdp, int offset, uint8_t *bptr, int length);
+#endif /* defined(INLINE_FUNCS) */
+extern int FormatHexBytes(char *text, int offset, uint8_t *bptr, int length);
+extern char *FormatQuotedText(char *text, char *tp, int length);
 
 #endif /* !defined(SPT_PRINT_H) */

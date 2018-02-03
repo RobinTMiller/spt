@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2014			    *
+ *			  COPYRIGHT (c) 2006 - 2017			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -144,12 +144,12 @@ CvtStrtoValue(char *nstr, char **eptr, int base)
                 n *= MBYTE_SIZE;
                 continue;
 
-#if defined(QuadIsLong)
+#if defined(QuadIsLong) && !defined(_WIN64)
             case 't':
             case 'T':
                 n *= TBYTE_SIZE;
                 continue;
-#endif /* defined(QuadIsLong) */
+#endif /* defined(QuadIsLong) && !defined(_WIN64) */
 
             case 'w':
             case 'W':           /* Word count. */
@@ -968,7 +968,7 @@ read_file(scsi_device_t *sdp, char *file, HANDLE fd, unsigned char *buffer, size
 {
     ssize_t count;
 #if defined(_WIN32)
-    if (!ReadFile(fd, buffer, length, &count, NULL)) count = -1;
+    if (!ReadFile(fd, buffer, (DWORD)length, (LPDWORD)&count, NULL)) count = -1;
 #else /* !defined(_WIN32) */
     count = read(fd, buffer, length);
 #endif /* defined(_WIN32) */
@@ -984,7 +984,7 @@ write_file(scsi_device_t *sdp, char *file, HANDLE fd, unsigned char *buffer, siz
 {
     ssize_t count;
 #if defined(_WIN32)
-    if (!WriteFile(fd, buffer, length, &count, NULL)) count = -1;
+    if (!WriteFile(fd, buffer, (DWORD)length, (LPDWORD)&count, NULL)) count = -1;
 #else /* !defined(_WIN32) */
     count = write(fd, buffer, length);
 #endif /* defined(_WIN32) */
@@ -1105,11 +1105,11 @@ OpenScriptFile(scsi_device_t *sdp, char *file)
     }
     /*
      * Logic:
-     *   o	If default extension was specified, then attempt to locate
-     *	the specified script file.
-     *   o	If default extension was not specified, then attempt to
-     *	locate the file with default extension first, and if that
-     *	fails, attempt to locate the file without default extension.
+     *   o If default extension was specified, then attempt to locate
+     *	   the specified script file.
+     *   o If default extension was NOT specified, then attempt to
+     *	   locate the file with default extension first, and if that
+     *	   fails, attempt to locate the file without default extension.
      */
     if ( strstr (scriptfile, ScriptExtension) ) {
         (void) strcpy (fnp, scriptfile);
@@ -1158,4 +1158,20 @@ FormatElapstedTime(char *buffer, clock_t ticks)
     bp += Sprintf(bp, "%02d.", sec);
     bp += Sprintf(bp, "%02ds", frac);
     return( (int)(bp - buffer) );
+}
+
+/*
+ * Check for all hex characters in string.
+ */
+hbool_t
+isHexString(char *s)
+{
+    if ( (*s == '0') &&
+         ((*(s+1) == 'x') || (*(s+1) == 'X')) ) {
+        s += 2; /* Skip over "0x" or "0X" */
+    }
+    while (*s) {
+        if ( !isxdigit((int)*s++) ) return(False);
+    }
+    return(True);
 }

@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2016			    *
+ *			  COPYRIGHT (c) 2006 - 2017			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -31,6 +31,10 @@
  *	This file contains definitions, structures, and declarations for spt.
  *
  * Modification History:
+ * 
+ * December 27th, 2016 by Robin T. Miller
+ *      Increased the dump limit default to 1024 or 1 Kbytes.
+ *      Added support for Storage Enclosure Services (SES).
  * 
  * February 25th, 2016 by Robin T. Miller
  * 	Increased the log file buffer size to accomodate very long
@@ -83,8 +87,9 @@
 #include "libscsi.h"
 #include "inquiry.h"
 #include "scsi_opcodes.h"
+#include "scsi_ses.h"
 #if defined(_WIN32)
-#  include "spt_win32.h"
+#  include "spt_win.h"
 #else /* !defined(_WIN32) */
 #  include "spt_unix.h"
 #  include <pthread.h>
@@ -125,14 +130,13 @@
 #define DeviceOpenFlagDefault	True
 #define ErrorsFlagDefault	True
 #define ImageModeFlagDefault	False
+#define JsonPrettyFlagDefault	True
 #define PreWriteFlagDefault	True
 #define ReadAfterWriteDefault	False
 #define UniquePatternDefault	True
 
-/* Note: To retain backwards compatibility, disable! */
-#define ScsiInformationDefault	False
-
 #define LogHeaderFlagDefault	False
+#define MapDeviceToScsiDefault	False
 #define RecoveryDelayDefault	2
 #define RecoveryRetriesDefault	60
 #define RecoveryFlagDefault	False
@@ -140,13 +144,17 @@
 #define RetryLimitDefault	1
 #define RangeCountDefault	1
 #define SegmentCountDefault	1
-#define SenseFlagDefault	False
 #define ThreadsDefault		1
 #define VerboseFlagDefault	True
+#define VerifyFlagDefault	False
 #define WarningsFlagDefault	True
-#define DumpLimitDefault	512
+#define DumpLimitDefault	KBYTE_SIZE
 #define ScriptLevels		5
 #define IOT_SEED		0x01010101 /* Default IOT pattern seed.	*/
+
+#define SataDeviceFlagDefault	False	/* Controls SATA ASCII decoding.*/
+#define SenseFlagDefault	True
+#define ScsiInformationDefault	False
 #define ScsiReadTypeDefault	scsi_read16_cdb
 #define ScsiWriteTypeDefault	scsi_write16_cdb
 #define ScsiIoLengthDefault	65536	/* This is 64K (in bytes) folks! */
@@ -167,26 +175,28 @@
 
 typedef enum bfmt {DEC_FMT, HEX_FMT} bfmt_t;
 typedef enum dfmt {NONE_FMT, BYTE_FMT, SHORT_FMT, WORD_FMT, QUAD_FMT} dfmt_t;
+typedef enum ofmt {ASCII_FMT, CVS_FMT, JSON_FMT} ofmt_t;
+typedef enum rfmt {REPORT_BRIEF, REPORT_FULL, REPORT_NONE} rfmt_t;
 
 /*
  * Expected Data Definitions: (parameter data)
  */
-#define EXP_DATA_ENTRIES	64
+#define EXP_DATA_ENTRIES	64	/* Match SCSIT simulator (for now). */
 
 typedef struct exp_data {
-    uint32_t	exp_byte_index;	/* Index into received data, */
-    uint8_t	exp_byte_value; /* Byte value at this index. */
+    uint32_t	exp_byte_index;		/* Index into received data, */
+    uint8_t	exp_byte_value;		/* Byte value at this index. */
 } exp_data_t;
 
 /*
  * Expected Data Types: (for input parsing)
  */
 typedef enum exp_type {
-    EXP_CHAR = 0,		/* Character strings. */
-    EXP_BYTE,			/* 8-bit data value.  */
-    EXP_SHORT,			/* 16-bit data value. */
-    EXP_WORD,			/* 32-bit data value. */
-    EXP_LONG			/* 64-bit data value. */
+    EXP_CHAR = 0,			/* Character strings. */
+    EXP_BYTE,				/* 8-bit data value.  */
+    EXP_SHORT,				/* 16-bit data value. */
+    EXP_WORD,				/* 32-bit data value. */
+    EXP_LONG				/* 64-bit data value. */
 } exp_type_t;
 
 /*
@@ -216,12 +226,53 @@ typedef volatile jstate_t vjstate_t;
 typedef volatile tstate_t vtstate_t;
 #endif /* 0 */
 
+/*
+ * Vendor Identification:
+ *
+ * This identifier is used to control vendor unique commands, as well as
+ * looking up the additional sense code/qualifier for error messages.
+ */
+typedef enum vendor_ident {
+    VID_UNKNOWN		= -1,		/* Unknown vendor identity.     */
+    VID_ALL		= 0,		/* Support for all vendors.	*/
+    VID_CELESTICA,			/* Celestica vendor identity.   */
+    VID_HGST,				/* HGST vendor identity.        */
+    VID_WDC				/* Western Digital identity.    */
+} vendor_id_t;
+
+typedef enum product_ident {
+    PID_UNKNOWN		= -1,		/* Unknown product identity.	*/
+    PID_ALL		= 0,		/* Support for all products.	*/
+    PID_CASTLEPEAK,			/* Castle Peak enclosure.	*/
+    PID_MISSIONPEAK,			/* Mission Peak enclosure.	*/
+    PID_KEPLER,				/* Kepler enclosure.		*/
+    PID_PIKESPEAK,			/* Pikes Peak enclosure.	*/
+    PID_OURAY,				/* Ouray enclosure.		*/
+    PID_MT_MADONNA                      /* Mount Madonna enclosure.     */
+} product_id_t;
+
 typedef enum iomode {
     IOMODE_COPY,
     IOMODE_MIRROR,
     IOMODE_TEST,
     IOMODE_VERIFY
 } iomode_t;
+
+/*
+ * Type of Command:
+ */
+typedef enum cmd_type { CMD_TYPE_NONE, CMD_TYPE_CLEAR, CMD_TYPE_GET, CMD_TYPE_SET } cmd_type_t;
+
+/*
+ * Clear/Get/Set Type:
+ */
+typedef enum cgs_type {
+    CGS_TYPE_NONE,
+    CGS_TYPE_DEVOFF,
+    CGS_TYPE_FAULT,
+    CGS_TYPE_IDENT,
+    CGS_TYPE_UNLOCK,
+} cgs_type_t;
 
 /*
  * Type of Operations:
@@ -279,6 +330,8 @@ typedef struct scsi_information {
  */ 
 typedef struct {
     scsi_opcode_t *sop;			/* The SCSI opcode data.	*/
+    vendor_id_t	vendor_id;		/* The vendor ID (internal).	*/
+    product_id_t product_id;		/* The product ID (internal).	*/
     uint8_t	device_type;		/* The Inquiry device type.	*/
     hbool_t	user_cdb_size;		/* User specified a CDB size.	*/
     hbool_t	cloned_device;		/* The primary device is cloned.*/
@@ -357,6 +410,15 @@ typedef struct {
     uint8_t	provisioning_type;	/* The provisioning type.	*/
     hbool_t	warning_displayed;	/* Multiple warnings flag.	*/
 
+#if defined(HGST)
+    /* Parameters for collecting E6 logs. */
+    uint8_t     *e6_modes;              /* The E6 modes list.           */
+    uint8_t     e6_modes_entries;       /* The number of E6 modes.      */
+    uint8_t     e6_modes_index;         /* The E6 modes index.          */
+    uint32_t    e6_mode_data_size;      /* The mode data size.          */
+    uint32_t    e6_mode_offset;         /* The E6 mode offset.          */
+#endif /* defined(HGST) */
+
     scsi_information_t *sip;		/* Various SCSI information.	*/
 
     /* per device SCSI pass-through data */
@@ -385,6 +447,7 @@ typedef struct scsi_device {
 				    	/* The script file pointers.	*/
     int		script_lineno[ScriptLevels];
 				    	/* The script file line number.	*/
+    hbool_t	script_verify;		/* Flag to control script echo. */
     /*
      * Test Control Information:
      */
@@ -395,7 +458,11 @@ typedef struct scsi_device {
     hbool_t	tDebugFlag;		/* Timer (alarm) debug flag.	*/
     hbool_t	xDebugFlag;		/* Extra program debug flag.	*/
     int		status;			/* The SCSI IOCTL status.	*/
+    ofmt_t      output_format;          /* The output format type.      */
+    rfmt_t      report_format;		/* The output report format.	*/
     iomode_t	iomode;			/* The I/O mode (see above).	*/
+    cmd_type_t  cmd_type;               /* The command type.            */
+    cgs_type_t  cgs_type;               /* The clear/get/set type.      */
     spt_op_t    op_type;		/* The SCSI operation type.	*/
     hbool_t	tmf_flag;		/* Task Management Function.	*/
     hbool_t	decode_flag;		/* SCSI CDB decode control flag	*/
@@ -417,9 +484,11 @@ typedef struct scsi_device {
     hbool_t	genspt_flag;		/* Generate spt command flag.	*/
     hbool_t	image_copy;		/* Image copy flag (strict).	*/
     hbool_t	iot_pattern;		/* IOT test pattern selected.	*/
+    hbool_t	json_pretty;		/* JSON pretty output control.	*/
     hbool_t	log_header_flag;	/* The log header control flag.	*/
     hbool_t	prewrite_flag;		/* Prewrite data blocks flag.	*/
     hbool_t	read_after_write;	/* The read after write flag.	*/
+    hbool_t	sata_device_flag;	/* The SATA device flag.	*/
     hbool_t	scsi_info_flag;		/* The SCSI information flag.	*/
     hbool_t	sense_flag;		/* Display full sense flag.	*/
     hbool_t	unique_pattern;		/* Unique pattern per process.	*/
@@ -429,11 +498,21 @@ typedef struct scsi_device {
     uint32_t	iot_seed_per_pass;	/* The per pass IOT seed value.	*/
     uint32_t	pattern;		/* The 32-bit pattern to use.	*/
     void	*pattern_buffer;	/* The pattern buffer.		*/
+    /* Page Control Information: */
+    uint8_t     page_code;              /* The command page code.       */
+    uint8_t     page_subcode;           /* The command page subcode.    */
+    uint8_t	page_control;		/* The page control (Log Sense).*/
+    uint8_t	page_control_field;	/* The page control field.	*/
+    hbool_t     page_format;            /* Controls page format bit.    */
+    hbool_t     page_code_valid;        /* Controls page code valid bit.*/
+    hbool_t	page_specified;		/* User specified page code.	*/
+    /* Parameter Data In/Out Information: */
     hbool_t	pin_data;		/* Parameter input data flag.	*/
     uint32_t	pin_length;		/* Parameter input data length.	*/
     void	*pin_buffer;		/* Paramater input data buffer.	*/
     hbool_t	user_sname;		/* User specified SCSI name.	*/
     hbool_t	verbose;		/* Controls verbose output.	*/
+    hbool_t	verify_data;		/* Verify data after setting.	*/
     hbool_t	warnings_flag;		/* Controls warning messages.	*/
     hbool_t	emit_all;		/* Emit status for all cmds.	*/
     char	*emit_status;		/* The emit status string.	*/
@@ -446,6 +525,8 @@ typedef struct scsi_device {
     time_t	loop_time;		/* Time for last test loop.	*/
     clock_t	start_ticks;		/* Test start time (in ticks).	*/
     clock_t	end_ticks;		/* Test end time (in ticks).	*/
+    struct timeval gtod;		/* Current GTOD information.    */
+    struct timeval ptod;		/* Previous GTOD information.   */
     
     /* Keepalive Information: */
     time_t	keepalive_time;		/* Frequesncy of keepalives.	*/
@@ -460,7 +541,7 @@ typedef struct scsi_device {
 
     /* Prefix String Information: (Note: Not currently implemented!) */
     char	*fprefix_string;	/* The formatted prefix string.	*/
-    int		fprefix_size;		/* The formatted prefix size.i	*/
+    int		fprefix_size;		/* The formatted prefix size.	*/
 
     /* Recovery Parameters: (these get propagated to SCSI generic) */
     hbool_t	recovery_flag;		/* The recovery control flag.	*/
@@ -492,6 +573,12 @@ typedef struct scsi_device {
     char	dir_sep;		/* The directory separator.	*/
     char	*file_sep;		/* The inter-file separator.	*/
     char	*file_postfix;		/* The file name postfix.	*/
+
+    /*
+     * Pack and Unpack Information:
+     */
+    char	*unpack_format;		/* The unpack format string.	*/
+    bfmt_t	unpack_data_fmt;	/* The unpack data format.	*/
     
     /* Slice Information: */
     uint32_t	slices;			/* Number of slices to create.	*/
@@ -528,7 +615,7 @@ typedef struct scsi_device {
     uint32_t	rrti_data_length;	/* The RRTI data length.	*/
     int		segment_count;		/* The number of segments.	*/
     /*
-     * Unmap Information:
+     * Unmap and Punch Hole Information:
      */ 
     int		range_count;		/* The range descriptors.	*/
 
@@ -550,6 +637,26 @@ typedef struct scsi_device {
     hbool_t	io_multiple_sources;	/* Muletiple source devices.	*/
     io_params_t	io_params[MAX_DEVICES];	/* The I/O parameters.		*/
 
+    /*
+     * Storage Enclosure Services (SES) Parameters:
+     */
+    element_status_t ses_element_status;/* The element status.		*/
+    element_type_t ses_element_type;	/* The element type.		*/
+    hbool_t	ses_element_flag;	/* Element number specified.	*/
+    int		ses_element_index;	/* The element index.		*/
+
+    /*
+     * Shared Library Parameters:
+     */
+    hbool_t     shared_library;         /* Shared library interface.    */
+#if defined(SHARED_LIBRARY)
+    char        *stderr_buffer;         /* The callers' stderr buffer.  */
+    char        *stderr_bufptr;         /* Updated stderr buffer ptr.   */
+    char        *stdout_buffer;         /* The callers' stdout buffer.  */
+    char        *stdout_bufptr;         /* Updated stdout buffer ptr.   */
+    int         stderr_buflen;          /* The stderr buffer length.    */
+    int         stdout_buflen;          /* The stdout buffer length.    */
+#endif /* defined(SHARED_LIBRARY) */
 } scsi_device_t;
 
 #if 0
@@ -593,24 +700,30 @@ extern clock_t hertz;
 /*
  * External Declarations:
  */
+/* spt.c */
 extern char *OurName;
 extern hbool_t DebugFlag, InteractiveFlag, mDebugFlag, PipeModeFlag;
 extern volatile hbool_t CmdInterruptedFlag;
+extern hbool_t match(char **sptr, char *s);
+
+/* spt_inquiry.c */
+extern int inquiry_encode(void *arg);
+extern int inquiry_decode(void *arg);
+extern int setup_inquiry(scsi_device_t *sdp, scsi_generic_t *sgp, size_t data_length, uint8_t page);
+extern uint8_t find_inquiry_page_code(scsi_device_t *sdp, char *page_name, int *status);
 
 /* scsi_opcodes.c */
+int setup_read_capacity16(scsi_device_t *sdp, scsi_generic_t *sgp);
 extern void ShowScsiOpcodes(scsi_device_t *sdp);
 
 /* spt_fmt.c */
 extern int FmtEmitStatus(scsi_device_t *sdp, io_params_t *uiop, scsi_generic_t *usgp, char *format, char *buffer);
 extern char *FmtString(scsi_device_t *sdp, char *format, hbool_t filepath_flag);
+extern char *FmtUnpackString(scsi_device_t *sdp, char *format, unsigned char *data, size_t count);
 /* Consolidated into one function now. */
 #define FmtLogFile	FmtString
 #define FmtFilePath	FmtString
 #define FmtLogPrefix	FmtString
-
-/* spt_inquiry.c */
-extern int inquiry_encode(void *arg);
-extern int inquiry_decode(void *arg);
 
 /* spt_mem.c */
 extern void report_nomem(scsi_device_t *sdp, size_t bytes);
@@ -621,6 +734,10 @@ extern void report_nomem(scsi_device_t *sdp, size_t bytes);
 #if defined(INLINE_FUNCS)
 
 #define Free(sdp,ptr)		free(ptr)
+#define FreeMem(sdp,ptr,size)	\
+  if (ptr) { memset(ptr, 0xdd, size); free(ptr); }
+#define FreeStr(dip,ptr)	\
+  if (ptr) { memset(ptr, 0xdd, strlen(ptr)); free(ptr); }
 
 INLINE void* Malloc(scsi_device_t *sdp, size_t bytes)
 {
@@ -651,6 +768,8 @@ Realloc(scsi_device_t *sdp, void *ptr, size_t bytes)
 #else /* !defined(INLINE_FUNCS) */
 
 extern void Free(scsi_device_t *sdp, void *ptr);
+extern void FreeMem(scsi_device_t *sdp, void *ptr, size_t size);
+extern void FreeStr(scsi_device_t *sdp, void *ptr);
 extern void *Malloc(scsi_device_t *sdp, size_t bytes);
 extern void *Realloc(scsi_device_t *sdp, void *bp, size_t bytes);
 
@@ -688,6 +807,7 @@ extern void clone_scsi_information(io_params_t *iop, io_params_t *ciop);
 extern void free_scsi_information(io_params_t *iop);
 extern int get_scsi_information(scsi_device_t *sdp, io_params_t *iop);
 extern int get_standard_scsi_information(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp);
+extern int get_inquiry_information(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *csgp);
 extern void report_scsi_information(scsi_device_t *sdp);
 extern void report_standard_scsi_information(scsi_device_t *sdp, io_params_t *iop);
 
@@ -732,6 +852,7 @@ extern int read_file(scsi_device_t *sdp, char *file, HANDLE fd, unsigned char *b
 extern int write_file(scsi_device_t *sdp, char *file, HANDLE fd, unsigned char *buffer, size_t length);
 extern int FormatElapstedTime(char *buffer, clock_t ticks);
 extern int Fputs(char *str, FILE *stream);
+extern hbool_t isHexString(char *s);
 
 /*
  * OS Specific Functions: (dtunix.c and dtwin.c)

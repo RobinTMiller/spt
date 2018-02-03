@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2016			    *
+ *			  COPYRIGHT (c) 2006 - 2017			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -39,12 +39,11 @@
 #include <sys/types.h>
 
 #include "spt.h"
+#include "spt_version.h"
 
 /*
  * Version, usage, and help text.
  */
-char *version_str = "Date: May 26th, 2017, Version: 2.50, Author: Robin T. Miller";
-
 #define P       Print
 #define D       Fprint
 
@@ -59,7 +58,20 @@ Usage(scsi_device_t *sdp)
 void
 Version(scsi_device_t *sdp)
 {
-    P (sdp, "    --> %s <--\n", version_str);
+    if (sdp->output_format == JSON_FMT) {
+	char text[STRING_BUFFER_SIZE];
+	char *tp = text;
+	tp += sprintf(tp, "{ \"Author\": \"%s\", ", ToolAuthor);
+	tp += sprintf(tp, "\"Date\": \"%s\", ", ToolDate);
+	tp += sprintf(tp, "\"Version\": \"%s\" }", ToolRevision);
+	if (sdp->shared_library) {
+	    ; // sdp->stdout_bufptr += sprintf(sdp->stdout_bufptr, "%s", text);
+	} else {
+	    P(sdp, "%s\n", text);
+	}
+    } else {
+	P (sdp, "    --> " ToolVersion " <--\n");
+    }
     return;
 }
 
@@ -82,9 +94,13 @@ void Help(scsi_device_t *sdp)
     
     P (sdp, "\tlog=filename          The log file name to write.\n");
     P (sdp, "\tlogprefix=string      The per line logging prefix.\n");
+    P (sdp, "\toutput-format=string  The output format to: ascii or json. (Default: %s)\n",
+       (sdp->output_format == ASCII_FMT) ? "ascii" : "json");
+    P (sdp, "\treport-format=string  The report format to: brief or full (Default: %s).\n",
+       (sdp->report_format == REPORT_BRIEF) ? "brief": "full");
     
     P (sdp, "\taborts=value          Set the abort frequency.  (Default: 0)\n");
-    P (sdp, "\tabort_timeout=value   Set the abort timeout. (Default: %ums)\n",
+    P (sdp, "\tabort_timeout=value   Set the abort timeout.    (Default: %ums)\n",
        sdp->abort_timeout);
     P (sdp, "\tboff=string           Set the buffer offsets to: dec or hex (Default: %s)\n",
        (sdp->boff_format == DEC_FMT) ? "dec" : "hex");
@@ -105,6 +121,7 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\tmaxbad=value          Set maximum bad blocks to display. (Default: %d)\n",
        sdp->max_bad_blocks);
     P (sdp, "\tonerr=action          The error action: {continue or stop}.\n");
+    P (sdp, "\tpage={value|string}   The page code (command specific).\n");
     P (sdp, "\tpath=value            The (MPIO) path to issue command.\n");
     P (sdp, "\tpattern=value         The 32 bit hex data pattern to use.\n");
     P (sdp, "\tpin='hh hh ...'       The parameter in data to compare.\n");
@@ -131,8 +148,35 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\t!CMD                  Same as above, short hand.\n");
     P (sdp, "\tshell                 Startup a system shell.\n");
     P (sdp, "\tversion               Display the version information.\n");
-    P (sdp, "\tscsiopcodes           Display the SCSI operation codes.\n");
+    P (sdp, "\tshowopcodes           Display the SCSI operation codes.\n");
     P (sdp, "\n    Note: din/dout file can be '-' for stdin/stdout.\n");
+
+    P (sdp, "\n    Shorthand Commands:\n");
+    P (sdp, "\tinquiry {page=value}  Show Inquiry or specific page.\n");
+    P (sdp, "\tlogsense {page=value} Show Log pages supported or page.\n");
+    P (sdp, "\tzerolog {page=value}  Zero all Log pages or specific page.\n");
+    P (sdp, "\treadcapacity16        Show disk capacity (16 byte CDB).\n");
+    P (sdp, "\n    Examples:\n");
+    P (sdp, "\t# spt inquiry page=ascii_info\n");
+    P (sdp, "\t# spt logsense page=protocol\n");
+    P (sdp, "\n");
+    P (sdp, "    Note: Only a few Inquiry/Log pages are decoded today!\n");
+
+    P (sdp, "\n    Storage Enclosure Services (SES) Specific Options:\n");
+    P (sdp, "\telement_index=value   The element index.       (or element=)\n");
+    P (sdp, "\telement_tcode=value   The element type code.   (or etcode=)\n");
+    P (sdp, "\telement_scode=value   The element status code. (or escode=)\n");
+    P (sdp, "\telement_type=string   The element type.        (or etype=)\n");
+    P (sdp, "\telement_status=string The element status.      (or estatus=)\n");
+    P (sdp, "\trcvdiag               Issue a receive diagnostic command.\n");
+    P (sdp, "\tsenddiag              Issue a send diagnostic command.\n");
+    P (sdp, "\tshowhelp              Show enclosure help text diagnostic page.\n");
+    P (sdp, "\tses {clear|set}={devoff|fail/fault|ident/locate|unlock}\n");
+    P (sdp, "\t                      Modify SES control elements.\n");
+    P (sdp, "\n    Examples:\n");
+    P (sdp, "\t# spt rcvdiag page=3\n");
+    P (sdp, "\t# spt senddiag page=4 pout=\"02 00\"\n");
+    P (sdp, "\t# spt ses set=ident etype=array element=1\n");
 
     P (sdp, "\n    Expect Data Options:\n");
     P (sdp, "\texp_radix={any,dec,hex} The default is any radix.\n\n");
@@ -140,10 +184,36 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\tWhere type is:\n");
     P (sdp, "\t    C[HAR]            Character strings to expect.\n");
     P (sdp, "\t    B[YTE]            Byte (8 bit) values to expect.\n");
-    P (sdp, "\t    S[SHORT]          Short (16 bit) values to expect.\n");
+    P (sdp, "\t    S[HORT]           Short (16 bit) values to expect.\n");
     P (sdp, "\t    W[ORD]            Word (32 bit) values to expect.\n");
     P (sdp, "\t    L[ONG]            Long (64 bit) values to expect.\n");
     P (sdp, "\n\tNote: Byte index and values are taken as decimal (by default).\n");
+    P (sdp, "\n    Inquiry Verify Example:\n");
+    P (sdp, "\t# spt dsf=/dev/sg3                                          \\\n");
+    P (sdp, "\t      cdb='12 00 00 00 ff 00' dir=read length=255           \\\n");
+    P (sdp, "\t      expect=BYTE:0:0x0d,0x00,0x06,0x02,0x5b,0x00,0x40,0x02 \\\n");
+    P (sdp, "\t      expect=C:8:'HGST    ','STOR ENCL JBOD  '              \\\n");
+    P (sdp, "\t      expect=CHAR:32:'0116' disable=verbose\n");
+    P (sdp, "\n    Please see Test Check Options below for more test controls.\n");
+
+    P (sdp, "\n    Unpack Data Options:\n");
+    P (sdp, "\tunpack=string         The unpack format string.\n");
+    P (sdp, "\tunpack_fmt={dec,hex}  The unpack data format. (Default: dec)\n\n");
+    P (sdp, "\tWhere unpack format string is:\n");
+    P (sdp, "\t    C[HAR]:[index]:length       Character of length.\n");
+    P (sdp, "\t    F[IELD]:[index]:[start]:length Extract bit field.\n");
+    P (sdp, "\t    O[FFSET]:index              Set the buffer offset.\n");
+    P (sdp, "\t    B[YTE][:index]              Decode byte (8 bit) value.\n");
+    P (sdp, "\t    S[HORT][:index]             Decode short (16 bit) value.\n");
+    P (sdp, "\t    W[ORD][:index]              Decode word (32 bit) values.\n");
+    P (sdp, "\t    L[ONG][:index]              Decode long (64 bit) values.\n");
+    P (sdp, "\n    Inquiry Unpack Examples:\n");
+    P (sdp, "\t# spt dsf=/dev/sdb inquiry disable=decode \\\n");
+    P (sdp, "\t      unpack='Device Type: %BYTE, Vendor: %%CHAR:8:8, Product: %%C::16, Revision: %%C::4\\n'\n");
+    P (sdp, "    OR Create your own JSON: (multiple unpack's permitted)\n");
+    P (sdp, "\t# spt dsf=/dev/sdb inquiry disable=decode \\\n");
+    P (sdp, "\t      unpack='{ \"Device Type\": %%BYTE, \"Vendor\": \"%%C:8:8\",' \\\n");
+    P (sdp, "\t      unpack=' \"Product\": \"%%C::16\", \"Revision\": \"%%C::4\" }\\n'\n");
 
     P (sdp, "\n    I/O Options:\n");
     P (sdp, "\tlba=value             The logical block address.\n");
@@ -156,6 +226,15 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\tslices=value          The slices to divide capacity between.\n");
     P (sdp, "\tstep=value            The bytes to step after each request.\n");
 
+    P (sdp, "\n    I/O Range Options:\n");
+    P (sdp, "\tmin=value             Set the minumum size to transfer.\n");
+    P (sdp, "\tmax=value             Set the maximum size to transfer.\n");
+    P (sdp, "\tincr=value            Set the increment size.\n");
+    P (sdp, "    or\tincr=var[iable]       Enables variable increments.\n");
+    P (sdp, "\n");
+    P (sdp, "    Note: These options are only supported for Unmap (at present).\n");
+    P (sdp, "          For Unmap, the values specified are range block sizes.\n");
+
     P (sdp, "\n    Error Recovery Options:\n");
     P (sdp, "\trecovery_delay=value   The amount of time to delay before retrying. (Default: %u secs)\n",
        RecoveryDelayDefault);
@@ -163,25 +242,36 @@ void Help(scsi_device_t *sdp)
        RecoveryRetriesDefault);
     P (sdp, "\n");
     P (sdp, "    Errors retried are OS specific, plus SCSI Busy and Unit Attention\n");
-    P (sdp, "    Note: Errors are NOT automatically retried, enable=recovery is required.\n");
+    P (sdp, "    Note: Errors are NOT automatically retried, use enable=recovery required.\n");
 
+#if 0
     P (sdp, "\n    Extended Copy Options:\n");
     P (sdp, "\tsrc=device            The source special file.\n");
     P (sdp, "\tdst=device            The destination special file.\n");
     P (sdp, "\treadlength=value      The SCSI read length (in bytes).\n");
     P (sdp, "\treadtype=string       The SCSI read type (read8, read10, read16).\n");
     P (sdp, "\twritetype=string      The SCSI write type (write8, write10, write16, writev16).\n");
+    P (sdp, "\tlistid=value          The list identifier.\n");
     P (sdp, "\tranges=value          The block device range descriptors.\n");
+    P (sdp, "\trod_timeout=value     The ROD inactivity timeout (in secs).\n");
+    P (sdp, "\trod_token=file        The extended copy ROD token file.\n");
+    P (sdp, "\tsegments=value        The number of extended copy segments.\n");
     P (sdp, "\n");
     P (sdp, "    These can be used in conjunction with the I/O options.\n");
     P (sdp, "    Note: The read options are only used with data compares.\n");
+    //P (sdp, "    Also Note: Token based xcopy is *not* fully supported.\n");
+#endif /* 0 */
 
     P (sdp, "\n    Test Check Options:\n");
-    P (sdp, "\tresid=value           The expected residual.\n");
+    P (sdp, "\tresid=value           The expected residual count.\n");
+    P (sdp, "\ttransfer=value        The expected transfer count.\n");
     P (sdp, "\tstatus=value          The expected SCSI status.\n");
     P (sdp, "\tskey=value            The expected SCSI sense key.\n");
     P (sdp, "\tasc=value             The expected SCSI sense code.\n");
     P (sdp, "\tasq=value             The expected SCSI sense qualifier.\n");
+    P (sdp, "\n    Example:\n");
+    P (sdp, "\tcdb='1c 01 01 ff fc 00' dir=read length=65532 \\\n");
+    P (sdp, "\ttransfer=240 disable=verbose exp_radix=hex expect=BYTE:0:01:...");
     P (sdp, "\n    Note: The enable=wait option can be used to wait for status.\n");
 
     P (sdp, "\n");
@@ -199,7 +289,7 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\tACA_ACTIVE           aca_active  0x30 \n");
     P (sdp, "\tTASK_ABORTED         aborted     0x40 \n");
     P (sdp, "\n    Example:\n");
-    P (sdp, "\t# spt status=good resid=0 repeat=100 msleep=10 enable=wait qtag=simple cdb=0\n");
+    P (sdp, "\t# spt cdb=0 status=good retry=100 msleep=100 enable=wait\n");
  
     P (sdp, "\n    Flags to enable/disable:\n");
     P (sdp, "\tadapter          SPT via HBA driver.        (Default: %s)\n", disabled_str);
@@ -224,6 +314,10 @@ void Help(scsi_device_t *sdp)
                                 (sdp->log_header_flag) ? enabled_str : disabled_str);
     P (sdp, "\timage            Image mode copy.           (Default: %s)\n",
                                 (sdp->image_copy) ? enabled_str : disabled_str);
+    P (sdp, "\tjson_pretty      JSON pretty control.       (Default: %s)\n",
+                                (sdp->json_pretty) ? enabled_str : disabled_str);
+    P (sdp, "\tmapscsi          Map device to SCSI device. (Default: %s)\n",
+			 	(sgp->mapscsi) ? enabled_str : disabled_str);
     P (sdp, "\tmulti            Multiple commands.         (Default: %s)\n",
 			 	(InteractiveFlag) ? enabled_str : disabled_str);
     P (sdp, "\tpipes            Pipe mode flag.            (Default: %s)\n",
@@ -234,6 +328,8 @@ void Help(scsi_device_t *sdp)
 			 	(sgp->recovery_flag) ? enabled_str : disabled_str);
     P (sdp, "\tread_after_write Read after write (or raw). (Default: %s)\n",
 			 	(sdp->read_after_write) ? enabled_str : disabled_str);
+    P (sdp, "\tsata             SATA device handling.	   (Default: %s)\n",
+                                (sdp->sata_device_flag) ? enabled_str : disabled_str);
     P (sdp, "\tscsi             Report SCSI information.   (Default: %s)\n",
                                 (sdp->scsi_info_flag) ? enabled_str : disabled_str);
     P (sdp, "\tsense            Display sense data flag.   (Default: %s)\n",
@@ -242,9 +338,13 @@ void Help(scsi_device_t *sdp)
 			 	(sdp->unique_pattern) ? enabled_str : disabled_str);
     P (sdp, "\tverbose          Verbose output flag.       (Default: %s)\n",
 			 	(sdp->verbose) ? enabled_str : disabled_str);
+    P (sdp, "\tverify           Verify data flag.          (Default: %s)\n",
+			 	(sdp->verify_data) ? enabled_str : disabled_str);
     P (sdp, "\twarnings         Warnings control flag.     (Default: %s)\n",
 			 	(sdp->warnings_flag) ? enabled_str : disabled_str);
     P (sdp, "\twait             Wait for SCSI status.      (Default: %s)\n", disabled_str);
+//  P (sdp, "\tzerorod          Zero ROD token flag.       (Default: %s)\n",
+//				(sdp->zero_rod_flag) ? enabled_str : disabled_str);
 
     P (sdp, "\n    Operation Types:\n");
     P (sdp, "\tabort_task_set   Abort task set (ats).\n");
@@ -293,6 +393,9 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\t              %%cdb = The SCSI CDB bytes.\n");
     P (sdp, "\t              %%dir = The data direction.\n");
     P (sdp, "\t           %%length = The data length.\n");
+#if defined(__linux__)
+    P (sdp, "\t             %%adsf = The alternate special file.\n");
+#endif
     P (sdp, "\t              %%dsf = The device special file.\n");
     P (sdp, "\t             %%dsf1 = The 2nd device special file.\n");
     P (sdp, "\t              %%dst = The destination device name.\n");
@@ -363,7 +466,9 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\t    %%ymd    = The year,month,day.     %%hms    = The hour,day,seconds.\n");
     P (sdp, "\t    %%dfs    = The directory separator ('%c')\n", sdp->dir_sep);
     P (sdp, "\t    %%date   = The date string.        %%et     = The elapsed time.\n");
+    P (sdp, "\t    %%tod    = The time of day.        %%etod   = Elapsed time of day.\n");
     P (sdp, "\t    %%secs   = Seconds since start.    %%seq    = The sequence number.\n");
+    P (sdp, "\t    %%tmpdir = The temporary directory.\n");
     P (sdp, "\n");
     P (sdp, "      Examples: log='spt_%%host-j%%jobt%%thread.log'\n");
     P (sdp, "                logprefix='%%et %%prog (j:%%job t:%%thread): '\n");
@@ -418,6 +523,22 @@ void Help(scsi_device_t *sdp)
     P (sdp, "    Persistent Reserve Out (Register):\n");
     P (sdp, "\t# spt cdb='5f 00 00 00 00 00 00 00 18 00' length=24 \\\n"
 	    "\t      pout='00 00 00 00 00 00 00 00 11 22 33 44 55 66 77 88 00 00 00 00 01 00 00 00'\n"); 
+    
+#if 0
+    P (sdp, "    Extended Copy: (source lun to destination lun)\n");
+    P (sdp, "\t# spt cdb=0x83 src=/dev/sdj dst=/dev/sdd enable=sense'\n");
+    P (sdp, "    Extended Copy (Populate Token): (List ID 0A, two block range descriptors)\n");
+    P (sdp, "\t# spt cdb='83 10 00 00 00 00 00 00 00 0A 00 00 00 30 00 00' length=48 \\\n"
+	    "\t      pout='0 2e 0 0  0 0 0 0  0 0 0 0 0 0  0 20  0 0 0 0 0 0 0 20  0 0 0 10  0 0 0 0  0 0 0 0 0 0 0 40  0 0 0 10  0 0 0 0'\n"); 
+    P (sdp, "    Receive ROD Token Information (RRTI): (write ROD token to file 'token.dat')\n");
+    P (sdp, "\t# spt cdb='84 07 00 00 00 0A 00 00 00 00 00 00 02 26' dir=read length=550 rod_token=token.dat\n");
+    P (sdp, "    Write Using Token (WUT): (List ID 0E, one descriptor, read ROD token from file 'token.dat')\n");
+    P (sdp, "\t# spt cdb='83 11 00 00 00 00 00 00 00 0E 00 00 02 28 00 00' length=552 rod_token=token.dat \\\n"
+	    "\t      pout='0 2e 0 0  0 0 0 0  0 0 0 0 0 0  0 20  0 0 0 0 0 0 0 20  0 0 0 10  0 0 0 0'\n"); 
+    
+    P (sdp, "    Compare and Write(16): (with read-after-write)\n");
+    P (sdp, "\t# spt cdb=89 starting=0 limit=25m ptype=iot enable=raw\n");
+#endif /* 0 */
     P (sdp, "    Read(6) 1 block: (lba 2097151)\n");
     P (sdp, "\t# spt cdb='08 1f ff ff 01 00' dir=read length=512\n");         
     P (sdp, "    Read(10) 1 block: (lba 134217727)\n");
@@ -458,6 +579,10 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\t# spt cdb='91 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00'\n");
     P (sdp, "    Test Unit Ready:\n");
     P (sdp, "\t# spt cdb='00 00 00 00 00 00'\n"); 
+#if 0
+    P (sdp, "    Unmap: [ all blocks ]\n");
+    P (sdp, "\t# spt cdb=42 starting=0 enable=sense,recovery\n");
+#endif /* 0 */
     P (sdp, "    Verify(10): [ lba 65535 for 64K blocks ]\n");
     P (sdp, "\t# spt cdb='2f 00 00 00 ff ff 00 ff ff 00'\n");
     P (sdp, "    Verify(16): [ lba 65535 for 64K blocks ]\n");
@@ -483,21 +608,35 @@ void Help(scsi_device_t *sdp)
     P (sdp, "    Target Reset:\n");
     P (sdp, "\t# spt op=target_reset enable=debug\n");
 
-    P (sdp, "\n    Using I/O parameters, CDB/parameter data is automatically generated:\n");
-    P (sdp, "    Write(16) IOT pattern to all blocks first:\n");
-    P (sdp, "\t# spt cdb=8a dir=write length=32k slices=10 starting=0 ptype=iot\n");
-
     P (sdp, "\n    Builtin Support Examples:\n\n");
     P (sdp, "    Inquiry Information: (human readable)\n");
     P (sdp, "\t# spt cdb=12 enable=encode,decode disable=verbose\n");
     P (sdp, "    Read Capacity(16): (shows thin provisioning)\n");
     P (sdp, "\t# spt cdb='9e 10' enable=encode,decode disable=verbose\n");
+#if 0
     P (sdp, "    Write and Read/Compare IOT Pattern: (32k, all blocks)\n");
     P (sdp, "\t# spt cdb=8a dir=write length=32k enable=compare,recovery,sense starting=0 ptype=iot\n");
+#endif /* 0 */
     P (sdp, "    Read and Compare IOT Pattern: (32k, all blocks)\n");
     P (sdp, "\t# spt cdb=88 dir=read length=32k enable=compare,recovery,sense starting=0 ptype=iot\n");
+    P (sdp, "    Write and Read/Compare IOT Pattern: (64k, 1g data)\n");
+    P (sdp, "\t# spt cdb=8a starting=0 bs=64k limit=1g ptype=iot enable=raw\n");
+    P (sdp, "    Write Same: (all blocks)\n");
+    P (sdp, "\t# spt cdb='93' starting=0 dir=write length=4k blocks=4m/b\n");
+#if 0
     P (sdp, "    Write Same w/Unmap: (all blocks)\n");
     P (sdp, "\t# spt cdb='93 08' starting=0 dir=write length=512 blocks=4m/b\n");
+    P (sdp, "    Unmap All Blocks: (incrementing blocks per range)\n");
+    P (sdp, "\t# spt cdb=42 starting=0 ranges=64 min=8 max=128 incr=8\n");
+    P (sdp, "    Get LBA Status: (reports mapped/deallocated blocks)\n");
+    P (sdp, "\t# spt cdb='9e 12' starting=0\n");
+    P (sdp, "    Extended Copy Operation: (non-token based, used by VMware)\n");
+    P (sdp, "\t# spt cdb=83 src=${SRC} starting=0 dst=${DST} starting=0 enable=compare,recovery,sense\n");
+    P (sdp, "    Extended Copy Operation: (token based, used by Microsoft)\n");
+    P (sdp, "\t# spt cdb='83 11' src=${SRC} starting=0 dst=${DST} starting=0 enable=compare,recovery,sense\n");
+    P (sdp, "    Zero ROD Token: (10 slices, all blocks, space allocation needs enabled)\n");
+    P (sdp, "\t# spt cdb='83 11' dsf=${DST} starting=0 enable=zerorod slices=10 enable=recovery,sense\n");
+#endif /* 0 */
     P (sdp, "    Copy/Verify Source to Destination Device: (uses read/write operations)\n");
     P (sdp, "\t# spt iomode=copy length=32k dsf=${SRC} starting=0 dsf1=${DST} starting=0 enable=compare,recovery,sense\n");
     P (sdp, "    Write Source and Verify with Mirror Device: (10 threads for higher performance)\n");
@@ -508,7 +647,7 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\t# export SPT_EMIT_STATUS='Status: %%status, SCSI Status: %%scsi_status, Sense Code: %%sense_code, "
        "Sense Key: %%sense_key, Ascq: %%ascq, Resid: %%resid'\n");
 
-    P (sdp, "\n    --> %s <--\n", version_str);
+    P (sdp, "\n    --> " ToolVersion " <--\n");
 
     return;
 }

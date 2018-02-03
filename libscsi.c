@@ -34,6 +34,9 @@
  * 
  * Modification History:
  * 
+ * October 13th, 2017 by Robin T. Miller
+ *      Handle sense data in both fixed and descriptor formats.
+ * 
  * October 3rd, 2014 by Robin T. Miller
  * 	Modified SCSI generic opaque pointer to tool_specific information,
  * so we can pass more tool specific information (e.g. dt versus spt).
@@ -61,7 +64,7 @@
 
 /* Note: Added for os_sleep()! */
 #if defined(_WIN32)
-#  include "spt_win32.h"
+#  include "spt_win.h"
 #else /* !defined(_WIN32) */
 #  include "spt_unix.h"
 #endif /* defined(_WIN32) */
@@ -82,6 +85,7 @@ scsi_generic_t *init_scsi_generic(tool_specific_t *tsp);
 hbool_t	isSenseRetryable(scsi_generic_t *sgp, int scsi_status, scsi_sense_t *ssp);
 
 int verify_inquiry_header(inquiry_t *inquiry, inquiry_header_t *inqh, unsigned char page);
+int verify_vdisk_headers(scsi_generic_t *sgp, void *data, unsigned char page);
 
 /* ======================================================================== */
 
@@ -132,20 +136,23 @@ hbool_t
 isSenseRetryable(scsi_generic_t *sgp, int scsi_status, scsi_sense_t *ssp)
 {
     hbool_t retriable = False;
+    unsigned char sense_key, asc, asq;
+
+    GetSenseErrors(ssp, &sense_key, &asc, &asq);
 
     if (sgp->debug == True) {
-	print_scsi_status(sgp, scsi_status, ssp->sense_key, ssp->asc, ssp->asq);
+	print_scsi_status(sgp, scsi_status, sense_key, asc, asq);
     }
     if ( (scsi_status == SCSI_BUSY) ||
 	 (scsi_status == SCSI_QUEUE_FULL) ) {
 	retriable = True;
     } else if (scsi_status == SCSI_CHECK_CONDITION) {
-	if (ssp->sense_key == SKV_UNIT_ATTENTION) {
-	    if (ssp->asc != ASC_RECOVERED_DATA) {
+	if (sense_key == SKV_UNIT_ATTENTION) {
+	    if (asc != ASC_RECOVERED_DATA) {
 		retriable = True;
 	    }
-	} else if ( (ssp->sense_key == SKV_NOT_READY) &&
-		    (ssp->asc == ASC_NOT_READY) ) {
+	} else if ( (sense_key == SKV_NOT_READY) &&
+		    (asc == ASC_NOT_READY) ) {
 	    /* Lots of reasons, but we retry them all! */
 	    /* Includes:
 	     * "Logical unit is in process of becoming ready"
@@ -180,7 +187,8 @@ libIsRetriable(scsi_generic_t *sgp)
 	    retriable = isSenseRetryable(sgp, sgp->scsi_status, ssp);
 	    if (retriable == False) {
 		/*
-		 * Note: For XCOPY, there may be additional SCSI sense data.
+		 * Note: For XCOPY, there may be additional SCSI sense data. 
+		 * Also Note: This only works for fixed sesne data! 
 		 */
 		if ( (sgp->cdb[0] == SOPC_EXTENDED_COPY) &&
 		     (ssp->sense_key == SKV_COPY_ABORTED) ) {
@@ -325,7 +333,12 @@ libReportScsiError(scsi_generic_t *sgp, hbool_t warn_on_error)
     char *host_msg = os_host_status_msg(sgp);
     char *driver_msg = os_driver_status_msg(sgp);
     scsi_sense_t *ssp = sgp->sense_data;
-    char *ascq_msg = ScsiAscqMsg(ssp->asc, ssp->asq);
+    unsigned char sense_key, asc, asq;
+    char *ascq_msg;
+
+    /* Get sense key and sense code/qualifiers. */
+    GetSenseErrors(ssp, &sense_key, &asc, &asq);
+    ascq_msg = ScsiAscqMsg(asc, asq);
 
     Fprintf(opaque, "%s: Error occurred on %s",
 	    (warn_on_error == True) ? "Warning" : "ERROR",
@@ -348,13 +361,12 @@ libReportScsiError(scsi_generic_t *sgp, hbool_t warn_on_error)
 		sgp->host_status, sgp->driver_status);
     }
     Fprintf(opaque, "Sense Key = %d = %s, Sense Code/Qualifier = (%#x, %#x)",
-	    ssp->sense_key, SenseKeyMsg(ssp->sense_key),
-	    ssp->asc, ssp->asq);
+	    sense_key, SenseKeyMsg(sense_key), asc, asq);
     if (ascq_msg) {
       Fprint(opaque, " - %s", ascq_msg);
     }
     Fprintnl(opaque);
-    if (sgp->debug && ssp->error_code) {
+    if ( ssp->error_code && (sgp->debug || sgp->sense_flag) ) {
 	DumpSenseData(sgp, False, ssp);
     }
     return;
@@ -364,12 +376,14 @@ void
 libReportScsiSense(scsi_generic_t *sgp, int scsi_status, scsi_sense_t *ssp)
 {
     void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
-    char *ascq_msg = ScsiAscqMsg(ssp->asc, ssp->asq);
+    unsigned char sense_key, asc, asq;
+    char *ascq_msg;
 
+    GetSenseErrors(ssp, &sense_key, &asc, &asq);
+    ascq_msg = ScsiAscqMsg(asc, asq);
     Fprintf(opaque, "SCSI Status = %#x (%s)\n", scsi_status, ScsiStatus(scsi_status));
     Fprintf(opaque, "Sense Key = %d = %s, Sense Code/Qualifier = (%#x, %#x)",
-	    ssp->sense_key, SenseKeyMsg(ssp->sense_key),
-	    ssp->asc, ssp->asq);
+	    sense_key, SenseKeyMsg(sense_key), asc, asq);
     if (ascq_msg) {
       Fprint(opaque, " - %s", ascq_msg);
     }
@@ -380,6 +394,50 @@ libReportScsiSense(scsi_generic_t *sgp, int scsi_status, scsi_sense_t *ssp)
 /* ======================================================================== */
 
 #include "inquiry.h"
+
+#if 0
+/*
+ * Declarations/Definitions for Inquiry Command:
+ */
+#define InquiryName           "Inquiry"
+#define InquiryOpcode         0x12
+#define InquiryCdbSize        6
+#define InquiryTimeout        ScsiDefaultTimeout
+
+/*
+ * Inquiry Command Descriptor Block:
+ */
+struct Inquiry_CDB {
+	u_char	opcode;			/* Operation Code.		[0] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+	u_char	evpd	: 1,		/* Enable Vital Product Data.	[1] */
+			: 4,		/* Reserved.			    */
+		lun	: 3;		/* Logical Unit Number.		    */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+	u_char	lun	: 3,		/* Logical Unit Number.		    */
+			: 4,		/* Reserved.			    */
+		evpd	: 1;		/* Enable Vital Product Data.	[1] */
+#else
+#	error "bitfield ordering is NOT defined!"
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+	u_char	pgcode	: 8;		/* EVPD Page Code.		[2] */
+	u_char		: 8;		/* Reserved.			[3] */
+	u_char	alclen;			/* Allocation Length.		[4] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+	u_char	link	: 1,		/* Link.			[5] */
+		flag	: 1,		/* Flag.			    */
+			: 4,		/* Reserved.			    */
+		vendor	: 2;		/* Vendor Unique.		    */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+	u_char	vendor	: 2,		/* Vendor Unique.		    */
+			: 4,		/* Reserved.			    */
+		flag	: 1,		/* Flag.			    */
+		link	: 1;		/* Link.			[5] */
+#else
+#	error "bitfield ordering is NOT defined!"
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+};
+#endif /* 0 */
 
 /*
  * Inquiry() - Send a SCSI Inquiry Command.
@@ -1415,6 +1473,90 @@ Write16(scsi_generic_t *sgp, uint64_t lba, uint32_t blocks, uint32_t bytes)
 
     return(error);
 }
+
+#if 0
+
+/* ======================================================================== */
+
+/*
+ * PopulateToken() - Send XCOPY Populate Token CDB.
+ *
+ * Inputs:
+ * 	sgp = The SCSI generic data.
+ * 	listid = The list identifier.
+ * 	buffer = The data buffer address.
+ * 	bytes = The number of data bytes to transfer.
+ *
+ * Return Value:
+ *	Returns the status from the IOCTL request which is:
+ *	    0 = Success, -1 = Failure
+ */
+int
+PopulateToken(scsi_generic_t *sgp, unsigned int listid, void *data, unsigned int bytes)
+{
+    scsi_populate_token_cdb *cdb = (scsi_populate_token_cdb *)sgp->cdb;
+    int error;
+
+    memset(sgp->cdb, 0, sizeof(sgp->cdb));
+    cdb             = (scsi_populate_token_cdb *)sgp->cdb;
+    cdb->opcode     = SOPC_EXTENDED_COPY;
+    cdb->service_action = SCSI_XCOPY_POPULATE_TOKEN;
+    HtoS(cdb->list_id, listid);
+    HtoS(cdb->parameter_list_length, bytes);
+    sgp->cdb_size   = sizeof(*cdb);
+    sgp->cdb_name   = "XCOPY - Populate Token";
+    sgp->data_dir   = scsi_data_write;
+    sgp->data_buffer = data;
+    sgp->data_length = bytes;
+    if (!sgp->timeout) {
+	sgp->timeout = WriteTimeout;
+    }
+    
+    error = libExecuteCdb(sgp);
+
+    return(error);
+}
+
+/*
+ * ReceiveRodTokenInfo() - Receieve ROD Token Information.
+ *
+ * Inputs:
+ * 	sgp = The SCSI generic data.
+ * 	listid = The list identifier.
+ * 	buffer = The data buffer address.
+ * 	bytes = The number of data bytes to transfer.
+ *
+ * Return Value:
+ *	Returns the status from the IOCTL request which is:
+ *	    0 = Success, -1 = Failure
+ */
+int
+ReceiveRodTokenInfo(scsi_generic_t *sgp, unsigned int listid, void *data, unsigned int bytes)
+{
+    scsi_receive_copy_results *cdb;
+    int error;
+
+    memset(sgp->cdb, 0, sizeof(sgp->cdb));
+    cdb             = (scsi_receive_copy_results *)sgp->cdb;
+    cdb->opcode     = SOPC_RECEIVE_ROD_TOKEN_INFO;
+    cdb->service_action = SCSI_TGT_RECEIVE_ROD_TOKEN_INFORMATION;
+    HtoS(cdb->list_id, listid);
+    HtoS(cdb->allocation_length, bytes);
+    sgp->cdb_size   = sizeof(*cdb);
+    sgp->cdb_name   = "Receive ROD Token Information";
+    sgp->data_dir   = scsi_data_read;
+    sgp->data_buffer = data;
+    sgp->data_length = bytes;
+    if (!sgp->timeout) {
+	sgp->timeout = ReadTimeout;
+    }
+    
+    error = libExecuteCdb(sgp);
+
+    return(error);
+}
+
+#endif /* 0 */
 
 /* ======================================================================== */
 

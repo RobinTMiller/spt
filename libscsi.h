@@ -180,6 +180,7 @@ typedef struct scsi_generic {
     char          *dsf;                 /* Device special file.             */
     char          *adsf;                /* Adapter device special file.     */
     hbool_t       dopen;		/* Open device and adapter files.   */
+    hbool_t       mapscsi;		/* Map device name to SCSI device.  */
     unsigned int  flags;                /* Command control flags.           */
     unsigned int  sflags;               /* OS SCSI specific flags.          */
     scsi_addr_t   scsi_addr;            /* The SCSI address information.    */
@@ -363,10 +364,6 @@ typedef struct scsi_sense_desc {
 #define SENSE_KEY_SPECIFIC_DESC_TYPE		0x02
 #define FIELD_REPLACEABLE_UNIT_DESC_TYPE	0x03
 #define BLOCK_COMMAND_DESC_TYPE			0x05
-#if defined(HGST)
-#define HGST_UNIT_ERROR_CODE_DESC_TYPE	 	0x80
-#define HGST_PHYSICAL_ERROR_RECORD_DESC_TYPE	0x81
-#endif /* defined(HGST) */
 
 typedef struct sense_data_desc_header {
     unsigned char descriptor_type;
@@ -432,26 +429,6 @@ typedef struct block_command_desc_type {
 	    reserved_b0_b4  : 5;	/* Reserved.		        [3] */
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
 } block_command_desc_type_t;
-
-#if defined(HGST)
-
-typedef struct hgst_unit_error_desc_type {
-    sense_data_desc_header_t header;	/* Descriptor header.	      [0-1] */
-    unsigned char unit_error_code[2];	/* Unit error code.	      [2-3] */
-} hgst_unit_error_desc_type_t;
-
-typedef struct hgst_physical_error_record_desc_type {
-    sense_data_desc_header_t header;	/* Descriptor header.	      [0-1] */
-    unsigned char physical_error_record[6];/* Physical error record.  [2-7] */
-} hgst_physical_error_record_desc_type_t;
-
-typedef struct hgst_physical_error_record {
-    unsigned char cylinder_number[3];	/* The cylinder number.		*/
-    unsigned char head_number;		/* The head number.		*/
-    unsigned char sector_number[2];	/* The sector number.		*/
-} hgst_physical_error_record_t;
-
-#endif /* defined(HGST) */
 
 /* --------------------------------------------------------------------------- */
 /*
@@ -607,6 +584,8 @@ typedef enum id_type {
 extern idt_t GetUniqueID(HANDLE fd, char *dsf, char **identifier, idt_t idt,
 			 hbool_t debug, hbool_t errlog, unsigned int timeout, tool_specific_t *tsp);
 extern int GetBlockLimits(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,	inquiry_block_limits_t *block_limits, tool_specific_t *tsp);
+extern int GetLogicalBlockProvisioning(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
+					   inquiry_logical_block_provisioning_t *block_provisioning, tool_specific_t *tsp);
 extern int ReadCapacity10(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
 			  scsi_addr_t *sap, scsi_generic_t **sgpp,
 			  void *data, unsigned int len, unsigned int sflags,
@@ -623,6 +602,8 @@ int WriteData(scsi_io_type_t write_type, scsi_generic_t *sgp, uint64_t lba, uint
 extern int Write6(scsi_generic_t *sgp, uint32_t lba, uint8_t length, uint32_t bytes);
 extern int Write10(scsi_generic_t *sgp, uint32_t lba, uint16_t length, uint32_t bytes);
 extern int Write16(scsi_generic_t *sgp, uint64_t lba, uint32_t length, uint32_t bytes);
+extern int PopulateToken(scsi_generic_t *sgp, unsigned int listid, void *data, unsigned int bytes);
+extern int ReceiveRodTokenInfo(scsi_generic_t *sgp, unsigned int listid, void *data, unsigned int bytes);
 extern int TestUnitReady(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
                          scsi_addr_t *sap, scsi_generic_t **sgpp,
 			 unsigned int timeout, tool_specific_t *tsp) ;
@@ -639,6 +620,10 @@ extern int GetCdbLength (unsigned char opcode);
 extern void DumpCdbData(scsi_generic_t *sgp);
 extern void GetSenseErrors(scsi_sense_t *ssp, unsigned char *sense_key,
 			   unsigned char *asc, unsigned char *asq);
+extern void *GetSenseDescriptor(scsi_sense_desc_t *ssdp, uint8_t desc_type);
+extern void GetSenseInformation(scsi_sense_t *ssp, uint8_t *info_valid, uint64_t *info_value);
+extern void GetSenseCmdSpecific(scsi_sense_t *ssp, uint64_t *cmd_spec_value);
+extern void GetSenseFruCode(scsi_sense_t *ssp, uint8_t *fru_value);
 extern void MapSenseDescriptorToFixed(scsi_sense_t *ssp);
 extern void DumpSenseData(scsi_generic_t *sgp, hbool_t recursive, scsi_sense_t *sdp);
 extern void DumpSenseDataDescriptor(scsi_generic_t *sgp, scsi_sense_desc_t *ssdp);
@@ -650,10 +635,6 @@ extern void DumpIllegalRequestSense(scsi_generic_t *sgp, scsi_sense_illegal_requ
 extern void DumpMediaErrorSense(scsi_generic_t *sgp, scsi_media_error_sense_t *mep);
 extern void DumpFieldReplaceableUnitSense(scsi_generic_t *sgp, fru_desc_type_t *frup);
 extern void DumpBlockCommandSense(scsi_generic_t *sgp, block_command_desc_type_t *bcp);
-#if defined(HGST)
-extern void DumpUnitErrorSense(scsi_generic_t *sgp, hgst_unit_error_desc_type_t *uep);
-extern void DumpPhysicalRecordErrorSense(scsi_generic_t *sgp, hgst_physical_error_record_desc_type_t *pep);
-#endif /* defined(HGST) */
 
 extern void print_scsi_status(scsi_generic_t *sgp, uint8_t scsi_status, uint8_t sense_key, uint8_t asc, uint8_t ascq);
 extern char *ScsiAscqMsg(unsigned char asc, unsigned char asq);

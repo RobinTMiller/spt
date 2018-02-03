@@ -2,7 +2,6 @@ ln ../scsilib-windows.c scsilib.c
 ln ../inquiry.h .
 ln ../libscsi.c .
 ln ../libscsi.h .
-ln ../scsi_cdbs.h .
 ln ../spt_fmt.c .
 ln ../scsidata.c .
 ln ../scsilib.h .
@@ -11,9 +10,13 @@ ln ../include.h .
 ln ../utilities.c .
 ln ../scsi_opcodes.c .
 ln ../scsilib-windows.c .
+ln ../scsi_cdbs.h .
+ln ../scsi_diag.h .
+ln ../scsi_log.h .
 ln ../scsi_opcodes.h .
 ln ../spt.h .
 ln ../spt_usage.c .
+ln ../spt_version.h .
 ln ../spt_win.c .
 ln ../spt_win.h .
 ln ../spt_inquiry.c .
@@ -24,3 +27,9 @@ ln ../spt_scsi.c .
 ln ../spt_mem.c .
 ln ../spt_print.c .
 ln ../spt_print.h .
+ln ../scsi_ses.h .
+ln ../spt_ses.c .
+ln ../spt_ses.h .
+ln ../parson.h .
+ln ../parson.c .
+ln ../spt_log.c .

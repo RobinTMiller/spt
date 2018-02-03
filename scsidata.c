@@ -32,6 +32,9 @@
  *
  * Modification History:
  *
+ * October 19th, 2017 by Robin T. Miller
+ *      Add additinal asc/ascq entries for asc 0x21 (0x4 thru 0x7 are new).
+ * 
  * April 28th, 2014 by Robin T. Miller
  * 	Fix recursive call to DumpSenseData(), which requires the SCSI generic
  * pointer for new logging, to avoid dereferencing a NULL pointer and dying.
@@ -94,8 +97,7 @@ static struct SCSI_StatusTable {
     { SCSI_ACA_ACTIVE,           "SCSI_ACA_ACTIVE",	"aca_active"},	/* 0x30 */
     { SCSI_TASK_ABORTED,         "SCSI_TASK_ABORTED",	"aborted"}	/* 0x40 */
 };
-static int scsi_StatusEntrys =
-sizeof(scsi_StatusTable) / sizeof(scsi_StatusTable[0]);
+static int scsi_StatusEntrys = sizeof(scsi_StatusTable) / sizeof(scsi_StatusTable[0]);
 
 /*
  * ScsiStatusMsg() - Translate SCSI Status to Message Text.
@@ -409,6 +411,10 @@ struct sense_entry SenseCodeTable[] = {
 	{ 0x21, 0x01, /* D T     W R O M     B K     */ "Invalid element address"				},
 	{ 0x21, 0x02, /*           R                 */ "Invalid address for write"				},
 	{ 0x21, 0x03, /*           R                 */ "Invalid write crossing layer jump"			},
+	{ 0x21, 0x04, /* D                           */ "Unaligned write command"				},
+	{ 0x21, 0x05, /* D                           */ "Write boundary violation"				},
+	{ 0x21, 0x06, /* D                           */ "Attempt to read invalid data"				},
+	{ 0x21, 0x07, /* D                           */ "Read boundary violation"				},
 	{ 0x22, 0x00, /* D                           */ "Illegal function (use 20 00, 24 00, or 26 00)"		},
 	{ 0x23, 0x00, /* D T   P             B       */ "Invalid token operation, cause not reportable"		},
 	{ 0x23, 0x01, /* D T   P             B       */ "Invalid token operation, unsupported token type"	},
@@ -936,6 +942,87 @@ GetSenseErrors(scsi_sense_t *ssp, unsigned char *sense_key,
     return;
 }
 
+void *
+GetSenseDescriptor(scsi_sense_desc_t *ssdp, uint8_t desc_type)
+{
+    unsigned char *bp = (unsigned char *)ssdp + 8;
+    int sense_length = (int)ssdp->addl_sense_len + 8;
+    void *sense_desc = NULL;
+
+    while (sense_length > 0) {
+	sense_data_desc_header_t *sdhp = (sense_data_desc_header_t *)bp;
+	int descriptor_length = sdhp->additional_length + sizeof(*sdhp);
+
+	if (sdhp->descriptor_type == desc_type) {
+	    sense_desc = bp;
+	    break;
+	}
+	sense_length -= descriptor_length;
+	bp += descriptor_length;
+    }
+    return(sense_desc);
+}
+
+void
+GetSenseInformation(scsi_sense_t *ssp, uint8_t *info_valid, uint64_t *info_value)
+{
+    *info_valid = 0;
+    *info_value = 0;
+    if ( (ssp->error_code == ECV_CURRENT_FIXED) ||
+	 (ssp->error_code == ECV_DEFERRED_FIXED) ) {
+	*info_valid = ssp->info_valid;
+	*info_value = (uint64_t)StoH(ssp->info_bytes);
+    } else if ( (ssp->error_code == ECV_CURRENT_DESCRIPTOR) ||
+		(ssp->error_code == ECV_DEFERRED_DESCRIPTOR) ) {
+	scsi_sense_desc_t *ssdp = (scsi_sense_desc_t *)ssp;
+	information_desc_type_t *idtp;
+	idtp = GetSenseDescriptor(ssdp, INFORMATION_DESC_TYPE);
+	if (idtp) {
+	    *info_valid = idtp->info_valid;
+	    *info_value = (uint64_t)StoH(idtp->information);
+	}
+    }
+    return;
+}
+
+void
+GetSenseCmdSpecific(scsi_sense_t *ssp, uint64_t *cmd_spec_value)
+{
+    *cmd_spec_value = 0;
+    if ( (ssp->error_code == ECV_CURRENT_FIXED) ||
+	 (ssp->error_code == ECV_DEFERRED_FIXED) ) {
+	*cmd_spec_value = (uint64_t)StoH(ssp->cmd_spec_info);
+    } else if ( (ssp->error_code == ECV_CURRENT_DESCRIPTOR) ||
+		(ssp->error_code == ECV_DEFERRED_DESCRIPTOR) ) {
+	scsi_sense_desc_t *ssdp = (scsi_sense_desc_t *)ssp;
+	command_specific_desc_type_t *csp;
+	csp = GetSenseDescriptor(ssdp, COMMAND_SPECIFIC_DESC_TYPE);
+	if (csp) {
+	    *cmd_spec_value = (uint64_t)StoH(csp->information);
+	}
+    }
+    return;
+}
+
+void
+GetSenseFruCode(scsi_sense_t *ssp, uint8_t *fru_value)
+{
+    *fru_value = 0;
+    if ( (ssp->error_code == ECV_CURRENT_FIXED) ||
+	 (ssp->error_code == ECV_DEFERRED_FIXED) ) {
+	*fru_value = ssp->fru_code;
+    } else if ( (ssp->error_code == ECV_CURRENT_DESCRIPTOR) ||
+		(ssp->error_code == ECV_DEFERRED_DESCRIPTOR) ) {
+	scsi_sense_desc_t *ssdp = (scsi_sense_desc_t *)ssp;
+	fru_desc_type_t *frup;
+	frup = GetSenseDescriptor(ssdp, FIELD_REPLACEABLE_UNIT_DESC_TYPE);
+	if (frup) {
+	    *fru_value = frup->fru_code;
+	}
+    }
+    return;
+}
+
 /*
  * Command Specific XCOPY Byte Definitions:
  */ 
@@ -1010,7 +1097,7 @@ DumpSenseData(scsi_generic_t *sgp, hbool_t recursive, scsi_sense_t *ssp)
 	    sksp = (scsi_sense_copy_aborted_t *)ssp->sense_key_specific;
 	    field_ptr = ((sksp->field_ptr1 << 8) + sksp->field_ptr0);
 	    PrintHex (opaque, "Bit Pointer to Field in Error", sksp->bit_pointer,
-				    (sksp->bit_pointer) ? DNL : PNL);
+				    (sksp->bpv) ? DNL : PNL);
 	    if (sksp->bpv) {
 		Print(opaque, " (valid, bit %u)\n", (sksp->bit_pointer + 1));
 	    }
@@ -1032,7 +1119,7 @@ DumpSenseData(scsi_generic_t *sgp, hbool_t recursive, scsi_sense_t *ssp)
 	    sksp = (scsi_sense_illegal_request_t *)ssp->sense_key_specific;
 	    field_ptr = ((sksp->field_ptr1 << 8) + sksp->field_ptr0);
 	    PrintHex (opaque, "Bit Pointer to Field in Error", sksp->bit_pointer,
-				    (sksp->bit_pointer) ? DNL : PNL);
+				    (sksp->bpv) ? DNL : PNL);
 	    if (sksp->bpv) {
 		Print(opaque, " (valid, bit %u)\n", (sksp->bit_pointer + 1));
 	    }
@@ -1107,6 +1194,16 @@ DumpSenseData(scsi_generic_t *sgp, hbool_t recursive, scsi_sense_t *ssp)
 	}
 	Printf(opaque, "\n");
 	//DumpXcopyData(sgp);
+#if 0
+    } else if ( (recursive == False) &&
+		((sgp->cdb[0] == SOPC_EXTENDED_COPY && (sgp->cdb[1] == SCSI_XCOPY_POPULATE_TOKEN))) ) {
+	Printf(opaque, "\n");
+	DumpPTData(sgp);
+    } else if ( (recursive == False) &&
+		((sgp->cdb[0] == SOPC_EXTENDED_COPY && (sgp->cdb[1] == SCSI_XCOPY_WRITE_USING_TOKEN))) ) {
+	Printf(opaque, "\n");
+	DumpWUTData(sgp);
+#endif /* 0 */
     } else {
 	DumpCdbData(sgp);
     }
@@ -1178,16 +1275,6 @@ DumpSenseDescriptors(scsi_generic_t *sgp, scsi_sense_desc_t *ssdp, int sense_len
 		DumpBlockCommandSense(sgp, (block_command_desc_type_t *)bp);
 		break;
 
-#if defined(HGST)
-	    case HGST_UNIT_ERROR_CODE_DESC_TYPE:
-		DumpUnitErrorSense(sgp, (hgst_unit_error_desc_type_t *)bp);
-		break;
-
-	    case HGST_PHYSICAL_ERROR_RECORD_DESC_TYPE:
-		DumpPhysicalRecordErrorSense(sgp, (hgst_physical_error_record_desc_type_t *)bp);
-		break;
-
-#endif /* defined(HGST) */
 	    default:
 		Wprintf(opaque, "Unknown descriptor type %#x\n", sdhp->descriptor_type);
 		break;
@@ -1316,51 +1403,6 @@ DumpBlockCommandSense(scsi_generic_t *sgp, block_command_desc_type_t *bcp)
     PrintHex(opaque, "ili bit", bcp->ili, PNL);
     return;
 }
-
-#if defined(HGST)
-
-void
-DumpUnitErrorSense(scsi_generic_t *sgp, hgst_unit_error_desc_type_t *uep)
-{
-    void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
-    uint16_t unit_error_code = (uint16_t)StoH(uep->unit_error_code);
-    /*
-     * This field gives detailed information about the error. It contains a
-     * unique code which describes where the error was detected and which piece
-     * of hardware or microcode detected the error depending on current operation. 
-     *  
-     * Note: I don't know where these error codes are documented! (Robin)
-     */
-    PrintHexDec(opaque, "Unit Error Code", unit_error_code, PNL); 
-    return;
-}
-
-void
-DumpPhysicalRecordErrorSense(scsi_generic_t *sgp, hgst_physical_error_record_desc_type_t *pep)
-{
-    void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
-    scsi_sense_desc_t *ssdp = (scsi_sense_desc_t *)sgp->sense_data;
-    int i;
-
-    PrintAscii(opaque, "Physical Record Error", "", DNL);
-    for (i = 0; i < (int)sizeof(pep->physical_error_record); i++) {
-	Print(opaque, "%02x ", pep->physical_error_record[i]);
-    }
-    Print(opaque, "\n");
-    if ( (ssdp->sense_key == SKV_RECOVERED) ||
-	 (ssdp->sense_key == SKV_MEDIUM_ERROR) ||
-	 (ssdp->sense_key == SKV_HARDWARE_ERROR) ) {
-	hgst_physical_error_record_t *perp = (hgst_physical_error_record_t *)&pep->physical_error_record;
-	uint32_t cylinder = (uint32_t)StoH(perp->cylinder_number);
-	uint16_t sector = (uint16_t)StoH(perp->sector_number);
-	PrintDecimal(opaque, "Cylinder Number", cylinder, PNL);
-	PrintDecimal(opaque, "Head Number", perp->head_number, PNL);
-	PrintDecimal(opaque, "Sector Number", sector, PNL);
-    }
-    return;
-}
-
-#endif /* defined(HGST) */
 
 void
 DumpCdbData(scsi_generic_t *sgp)

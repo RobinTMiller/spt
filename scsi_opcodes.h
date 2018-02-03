@@ -59,31 +59,24 @@ typedef struct scsi_opcodes {
 #define SCSI_MAX_BLOCKS16	0xFFFFFFFF	/* Max 16-byte blocks.	*/
 
 /* This limit keeps us from timing out. Otherwise a longer timeout is required. */
-#define VERIFY_DATA_MAX_BLOCKS16        65536   /* 256Mb/4k per request.  */
-#define WRITE_SAME_MAX_BLOCKS16         65536   /* 256Mb/4k per request.  */
-
-#define XCOPY_MAX_BLOCKS_PER_SEGMENT 0xFFFF	/* Max blocks per segment. */
-#define XCOPY_MAX_SEGMENT_LENGTH     65535	/* That's 32M-b of blocks. */
-
-#define XCOPY_PT_MAX_BLOCKS	     16384	/* Max blocks all desc.    */
-						/* That's 0x4000 or 8MB!   */
-#define XCOPY_PT_MAX_DESCRIPTORS     8		/* The max descriptors.    */
-#define XCOPY_PT_MAX_BLOCKS_PER_SEGMENT (XCOPY_PT_MAX_BLOCKS / XCOPY_PT_MAX_DESCRIPTORS)
-						/* Max blocks per segment. */
+#define VERIFY_DATA_MAX_BLOCKS16	65536	/* 256Mb/4k per request.  */
+#define WRITE_SAME_MAX_BLOCKS16		65536	/* 256Mb/4k per request.  */
 
 /* Get LBA Status Definitions: */
-#define GLS_MAX_LBA	0xFFFFFFFFFFFFFFFFLL	/* Max Get LBA Status LBA.  */
-#define GLS_MAX_BLOCKS		8192		/* Max blocks per request.  */
+#define GLS_MAX_LBA	0xFFFFFFFFFFFFFFFFLL	/* Max Get LBA Status LBA. */
+#define GLS_MAX_BLOCKS		8192		/* Max blocks per request. */
 
 /*
  * Compare and Write (CAW) Definitions:
  */
-#define CAW_DEFAULT_BLOCKS	1		/* The default CDB blocks.  */
+#define CAW_DEFAULT_BLOCKS	1		/* The default CDB blocks. */
 
 /* 
  * Unmap Definitions:
  */
 #define UNMAP_MAX_LBA	0xFFFFFFFFFFFFFFFFLL	/* Max Unmap LBA.	    */
+
+/* Note: May need to revisit this! */
 #define UNMAP_MAX_BLOCKS	0x80000	/* 256MB - Max blocks per request.  */
 #define UNMAP_MAX_PER_RANGE	0x80000		/* Max blocks per range.    */
 #define UNMAP_MAX_RANGES	128		/* Max number of ranges.    */
@@ -514,15 +507,14 @@ typedef enum {
 #define SOPC_WRITE_BUFFER			0x3B
 
 /*
- * Special Alpha Vendor-Unique command to get OpenVMS id
+ * ATA Operation Codes:
  */
-#define SCSI_OPCODE_VU_GET_DEV_ID		0xec
+#define SOPC_ATA_PASS_THROUGH_12		0xA1
+#define SOPC_ATA_PASS_THROUGH_16		0x85
 
 /*
  * External Declarations:
  */ 
-extern int inquiry_encode(void *arg);
-extern int inquiry_decode(void *arg);
 extern scsi_opcode_t *ScsiOpcodeEntry(unsigned char *cdb, unsigned short device_type);
 
 #endif /* !defined(SCSI_OPCODES_H) */
