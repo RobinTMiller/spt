@@ -1,6 +1,6 @@
 #/****************************************************************************
 # *                                                                          *
-# *                       COPYRIGHT (c) 2006 - 2014                          *
+# *                       COPYRIGHT (c) 2006 - 2016                          *
 # *                        This Software Provided                            *
 # *                                  By                                      *
 # *                       Robin's Nest Software Inc.                         *
@@ -75,7 +75,8 @@ LINTFLAGS=
 
 # end of system makefile definitions
 
-HDRS=		spt.h spt_print.h include.h inquiry.h libscsi.h scsilib.h scsi_opcodes.h
+HDRS=	spt.h spt_print.h spt_ses.h include.h inquiry.h libscsi.h scsilib.h scsi_cdbs.h \
+	scsi_diag.h scsi_log.h scsi_opcodes.h scsi_ses.h parson.h
 
 ### MKMF:SOURCES ###
 
@@ -87,9 +88,11 @@ SPT_CFILES=	spt.c		\
 		spt_fmt.c	\
 		spt_inquiry.c	\
 		spt_iot.c	\
+		spt_log.c	\
 		spt_mem.c	\
 		spt_print.c	\
 		spt_scsi.c	\
+		spt_ses.c	\
 		spt_unix.c	\
 		spt_usage.c	\
 		scsi_opcodes.c
@@ -101,7 +104,8 @@ COMMON_CFILES=	libscsi.c	\
 		scsidata.c	\
 		scsilib.c	\
 		utilities.c	\
-		spt_mtrand64.c
+		spt_mtrand64.c	\
+		parson.c
 
 ALL_CFILES=	${CFILES} ${SPT_CFILES} ${COMMON_CFILES}
 
@@ -182,31 +186,23 @@ makedep: ${CFILES}
 devid.o devid.ln: devid.c \
  include.h libscsi.h scsilib.h inquiry.h
 mon_vdisk.o mon_vdisk.ln: mon_vdisk.c \
- include.h libscsi.h scsilib.h
-spt.o spt.ln: spt.c \
- include.h libscsi.h scsilib.h inquiry.h spt.h scsi_opcodes.h spt_unix.h
-spt_fmt.o spt_fmt.ln: spt_fmt.c spt.h
-spt_inquiry.o spt_inquiry.ln: spt_inquiry.c \
- libscsi.h include.h scsilib.h inquiry.h spt.h
-spt_iot.o spt_iot.ln: spt_iot.c spt.h include.h
+ include.h libscsi.h scsilib.h netapp_vdisk.h
+parson.o parson.ln: parson.c parson.h
+spt.o spt.ln: spt.c $(HDRS) spt_version.h
+spt_fmt.o spt_fmt.ln: spt_fmt.c $(HDRS)
+spt_inquiry.o spt_inquiry.ln: spt_inquiry.c $(HDRS)
+spt_iot.o spt_iot.ln: spt_iot.c $(HDRS)
+spt_log.o spt_log.ln: spt_log.c $(HDRS)
 spt_mtrand64.o spt_mtrand64.ln: spt_mtrand64.c spt_mtrand64.h
-spt_print.o spt_print.ln: spt_print.c spt_print.h spt.h include.h
-spt_scsi.o spt_scsi.ln: spt_scsi.c \
- include.h libscsi.h scsilib.h inquiry.h spt.h scsi_opcodes.h spt_unix.h
+spt_print.o spt_print.ln: spt_print.c $(HDRS)
+spt_scsi.o spt_scsi.ln: spt_scsi.c $(HDRS)
+spt_ses.o spt_ses.ln: spt_ses.c $(HDRS)
 spt_usage.o spt_usage.ln: spt_usage.c \
- include.h libscsi.h scsilib.h spt.h scsi_opcodes.h 
-libscsi.o libscsi.ln: libscsi.c \
- include.h libscsi.h scsilib.h scsi_opcodes.h scsi_cdbs.h inquiry.h
-scsidata.o scsidata.ln: scsidata.c \
- libscsi.h include.h scsilib.h inquiry.h spt.h
-scsilib.o scsilib.ln: scsilib.c \
- libscsi.h include.h scsilib.h inquiry.h spt.h spt_unix.h
-scsi_opcodes.o scsi_opcodes.ln: scsi_opcodes.c \
- libscsi.h include.h scsilib.h inquiry.h spt.h scsi_opcodes.h \
- scsi_cdbs.h
-spt_mem.o spt_mem.ln: spt_mem.c \
- spt.h include.h libscsi.h scsilib.h
-spt_unix.o spt_unix.ln: spt_unix.c \
- spt.h spt_unix.h include.h 
-utilities.o utilities.ln: utilities.c \
- include.h libscsi.h scsilib.h spt.h scsi_opcodes.h
+ include.h libscsi.h scsilib.h spt.h scsi_opcodes.h spt_version.h
+libscsi.o libscsi.ln: libscsi.c $(HDRS)
+scsidata.o scsidata.ln: scsidata.c $(HDRS)
+scsilib.o scsilib.ln: scsilib.c $(HDRS)
+scsi_opcodes.o scsi_opcodes.ln: scsi_opcodes.c $(HDRS) 
+spt_mem.o spt_mem.ln: spt_mem.c $(HDRS)
+spt_unix.o spt_unix.ln: spt_unix.c $(HDRS)
+utilities.o utilities.ln: utilities.c $(HDRS)
