@@ -1,6 +1,5 @@
-Robin@rtm-asus-pc ~
 $ ./spt help
-Usage: C:\cygwin64\home\Robin\spt.exe options...
+Usage: spt options...
 
     Where options are:
         dsf=device            The device special file.
@@ -11,11 +10,13 @@ Usage: C:\cygwin64\home\Robin\spt.exe options...
         keepalivet=time       The keepalive message frequency.
         log=filename          The log file name to write.
         logprefix=string      The per line logging prefix.
+        output-format=string  The output format to: ascii or json. (Default: ascii)
+        report-format=string  The report format to: brief or full (Default: full).
         aborts=value          Set the abort frequency.  (Default: 0)
-        abort_timeout=value   Set the abort timeout. (Default: 1ms)
+        abort_timeout=value   Set the abort timeout.    (Default: 1ms)
         boff=string           Set the buffer offsets to: dec or hex (Default: hex)
         dfmt=string           Set the data format to: byte or word (Default: word)
-        dlimit=value          Set the dump data buffer limit. (Default: 512)
+        dlimit=value          Set the dump data buffer limit. (Default: 1024)
         emit=string OR        Emit status format control string.
         emit={default|multi}  Default or multi devices emit strings.
         exit or quit          Exit when running in pipe mode.
@@ -27,6 +28,7 @@ Usage: C:\cygwin64\home\Robin\spt.exe options...
         op=string             The operation type (see below).
         maxbad=value          Set maximum bad blocks to display. (Default: 10)
         onerr=action          The error action: {continue or stop}.
+        page={value|string}   The page code (command specific).
         path=value            The (MPIO) path to issue command.
         pattern=value         The 32 bit hex data pattern to use.
         pin='hh hh ...'       The parameter in data to compare.
@@ -53,9 +55,38 @@ Usage: C:\cygwin64\home\Robin\spt.exe options...
         !CMD                  Same as above, short hand.
         shell                 Startup a system shell.
         version               Display the version information.
-        scsiopcodes           Display the SCSI operation codes.
+        showopcodes           Display the SCSI operation codes.
 
     Note: din/dout file can be '-' for stdin/stdout.
+
+    Shorthand Commands:
+        inquiry {page=value}  Show Inquiry or specific page.
+        logsense {page=value} Show Log pages supported or page.
+        zerolog {page=value}  Zero all Log pages or specific page.
+        readcapacity16        Show disk capacity (16 byte CDB).
+
+    Examples:
+        # spt inquiry page=ascii_info
+        # spt logsense page=protocol
+
+    Note: Only a few Inquiry/Log pages are decoded today!
+
+    Storage Enclosure Services (SES) Specific Options:
+        element_index=value   The element index.       (or element=)
+        element_tcode=value   The element type code.   (or etcode=)
+        element_scode=value   The element status code. (or escode=)
+        element_type=string   The element type.        (or etype=)
+        element_status=string The element status.      (or estatus=)
+        rcvdiag               Issue a receive diagnostic command.
+        senddiag              Issue a send diagnostic command.
+        showhelp              Show enclosure help text diagnostic page.
+        ses {clear|set}={devoff|fail/fault|ident/locate|unlock}
+                              Modify SES control elements.
+
+    Examples:
+        # spt rcvdiag page=3
+        # spt senddiag page=4 pout="02 00"
+        # spt ses set=ident etype=array element=1
 
     Expect Data Options:
         exp_radix={any,dec,hex} The default is any radix.
@@ -65,11 +96,41 @@ Usage: C:\cygwin64\home\Robin\spt.exe options...
         Where type is:
             C[HAR]            Character strings to expect.
             B[YTE]            Byte (8 bit) values to expect.
-            S[SHORT]          Short (16 bit) values to expect.
+            S[HORT]           Short (16 bit) values to expect.
             W[ORD]            Word (32 bit) values to expect.
             L[ONG]            Long (64 bit) values to expect.
 
         Note: Byte index and values are taken as decimal (by default).
+
+    Inquiry Verify Example:
+        # spt dsf=/dev/sg3                                          \
+              cdb='12 00 00 00 ff 00' dir=read length=255           \
+              expect=BYTE:0:0x0d,0x00,0x06,0x02,0x5b,0x00,0x40,0x02 \
+              expect=C:8:'HGST    ','STOR ENCL JBOD  '              \
+              expect=CHAR:32:'0116' disable=verbose
+
+    Please see Test Check Options below for more test controls.
+
+    Unpack Data Options:
+        unpack=string         The unpack format string.
+        unpack_fmt={dec,hex}  The unpack data format. (Default: dec)
+
+        Where unpack format string is:
+            C[HAR]:[index]:length       Character of length.
+            F[IELD]:[index]:[start]:length Extract bit field.
+            O[FFSET]:index              Set the buffer offset.
+            B[YTE][:index]              Decode byte (8 bit) value.
+            S[HORT][:index]             Decode short (16 bit) value.
+            W[ORD][:index]              Decode word (32 bit) values.
+            L[ONG][:index]              Decode long (64 bit) values.
+
+    Inquiry Unpack Examples:
+        # spt dsf=/dev/sdb inquiry disable=decode \
+              unpack='Device Type: %BYTE, Vendor: %CHAR:8:8, Product: %C::16, Revision: %C::4\n'
+    OR Create your own JSON: (multiple unpack's permitted)
+        # spt dsf=/dev/sdb inquiry disable=decode \
+              unpack='{ "Device Type": %BYTE, "Vendor": "%C:8:8",' \
+              unpack=' "Product": "%C::16", "Revision": "%C::4" }\n'
 
     I/O Options:
         lba=value             The logical block address.
@@ -82,49 +143,51 @@ Usage: C:\cygwin64\home\Robin\spt.exe options...
         slices=value          The slices to divide capacity between.
         step=value            The bytes to step after each request.
 
+    I/O Range Options:
+        min=value             Set the minumum size to transfer.
+        max=value             Set the maximum size to transfer.
+        incr=value            Set the increment size.
+    or  incr=var[iable]       Enables variable increments.
+
+    Note: These options are only supported for Unmap (at present).
+          For Unmap, the values specified are range block sizes.
+
     Error Recovery Options:
         recovery_delay=value   The amount of time to delay before retrying. (Default: 2 secs)
         recovery_retries=value The number of times to retry a SCSI request. (Default: 60)
 
     Errors retried are OS specific, plus SCSI Busy and Unit Attention
-    Note: Errors are NOT automatically retried, enable=recovery is required.
-
-    Extended Copy Options:
-        src=device            The source special file.
-        dst=device            The destination special file.
-        readlength=value      The SCSI read length (in bytes).
-        readtype=string       The SCSI read type (read8, read10, read16).
-        writetype=string      The SCSI write type (write8, write10, write16, writev16).
-        ranges=value          The block device range descriptors.
-
-    These can be used in conjunction with the I/O options.
-    Note: The read options are only used with data compares.
+    Note: Errors are NOT automatically retried, use enable=recovery required.
 
     Test Check Options:
-        resid=value           The expected residual.
+        resid=value           The expected residual count.
+        transfer=value        The expected transfer count.
         status=value          The expected SCSI status.
         skey=value            The expected SCSI sense key.
         asc=value             The expected SCSI sense code.
         asq=value             The expected SCSI sense qualifier.
 
+    Example:
+        cdb='1c 01 01 ff fc 00' dir=read length=65532 \
+        transfer=240 disable=verbose exp_radix=hex expect=BYTE:0:01:...
     Note: The enable=wait option can be used to wait for status.
 
         SCSI Status         Keyword      Value
         -----------         -------      -----
-        GOOD                 good        0x00
-        CHECK_CONDITION      cc          0x02
-        CONDITION_MET        cmet        0x04
-        BUSY                 busy        0x08
-        INTERMEDIATE         inter       0x10
-        INTER_COND_MET       icmet       0x14
-        RESERVATION_CONFLICT rescon      0x18
-        COMMAND_TERMINATED   term        0x22
-        QUEUE_FULL           qfull       0x28
-        ACA_ACTIVE           aca_active  0x30
-        TASK_ABORTED         aborted     0x40
+        GOOD                 good        0x00 
+        CHECK_CONDITION      cc          0x02 
+        CONDITION_MET        cmet        0x04 
+        BUSY                 busy        0x08 
+        INTERMEDIATE         inter       0x10 
+        INTER_COND_MET       icmet       0x14 
+        RESERVATION_CONFLICT rescon      0x18 
+        COMMAND_TERMINATED   term        0x22 
+        QUEUE_FULL           qfull       0x28 
+        ACA_ACTIVE           aca_active  0x30 
+        TASK_ABORTED         aborted     0x40 
 
     Example:
-        # spt status=good resid=0 repeat=100 msleep=10 enable=wait qtag=simple cdb=0
+        # spt cdb=0 status=good retry=100 msleep=100 enable=wait
 
     Flags to enable/disable:
         adapter          SPT via HBA driver.        (Default: disabled)
@@ -141,15 +204,19 @@ Usage: C:\cygwin64\home\Robin\spt.exe options...
         genspt           Generate spt command.      (Default: disabled)
         header           Log header control flag.   (Default: disabled)
         image            Image mode copy.           (Default: disabled)
+        json_pretty      JSON pretty control.       (Default: enabled)
+        mapscsi          Map device to SCSI device. (Default: disabled)
         multi            Multiple commands.         (Default: disabled)
         pipes            Pipe mode flag.            (Default: disabled)
         prewrite         Prewrite data blocks.      (Default: enabled)
         recovery         Automatic error recovery.  (Default: disabled)
         read_after_write Read after write (or raw). (Default: disabled)
+        sata             SATA device handling.     (Default: disabled)
         scsi             Report SCSI information.   (Default: disabled)
-        sense            Display sense data flag.   (Default: disabled)
+        sense            Display sense data flag.   (Default: enabled)
         unique           Unique pattern flag.       (Default: enabled)
         verbose          Verbose output flag.       (Default: enabled)
+        verify           Verify data flag.          (Default: disabled)
         warnings         Warnings control flag.     (Default: enabled)
         wait             Wait for SCSI status.      (Default: disabled)
 
@@ -180,7 +247,7 @@ Usage: C:\cygwin64\home\Robin\spt.exe options...
         Special Characters:
             w = words (4 bytes)            q = quadwords (8 bytes)
             b = blocks (512 bytes)         k = kilobytes (1024 bytes)
-            m = megabytes (1048576 bytes)
+            m = megabytes (1048576 bytes)  
             g = gigabytes (1073741824 bytes)
             t = terabytes (1099511627776 bytes)
             inf or INF = infinity (18446744073709551615 bytes)
@@ -201,11 +268,12 @@ Usage: C:\cygwin64\home\Robin\spt.exe options...
         right to left without precedence, and parenthesis are not permitted.
 
     Emit Status Format Control:
-                 %progname = Our program name (C:\cygwin64\home\Robin\spt.exe).
+                 %progname = Our program name (spt).
                    %thread = The thread number.
                       %cdb = The SCSI CDB bytes.
                       %dir = The data direction.
                    %length = The data length.
+                     %adsf = The alternate special file.
                       %dsf = The device special file.
                      %dsf1 = The 2nd device special file.
                       %dst = The destination device name.
@@ -236,7 +304,7 @@ Usage: C:\cygwin64\home\Robin\spt.exe options...
                    %ending = The ending logical block.
              %total_blocks = The total blocks transferred.
          %total_operations = The total operations executed.
-                     %xfer = The bytes transferred. (or bytes)
+                     %xfer = The bytes transferred. (or %bytes)
                %total_xfer = The total bytes transferred.
                 %sense_key = The sense key.
                  %skey_msg = The sense key message.
@@ -274,9 +342,11 @@ Usage: C:\cygwin64\home\Robin\spt.exe options...
             %tid    = The thread ID.          %thread = The thread number.
             %pid    = The process ID.         %prog   = The program name.
             %ymd    = The year,month,day.     %hms    = The hour,day,seconds.
-            %dfs    = The directory separator ('\')
+            %dfs    = The directory separator ('/')
             %date   = The date string.        %et     = The elapsed time.
+            %tod    = The time of day.        %etod   = Elapsed time of day.
             %secs   = Seconds since start.    %seq    = The sequence number.
+            %tmpdir = The temporary directory.
 
       Examples: log='spt_%host-j%jobt%thread.log'
                 logprefix='%et %prog (j:%job t:%thread): '
@@ -395,22 +465,18 @@ Usage: C:\cygwin64\home\Robin\spt.exe options...
     Target Reset:
         # spt op=target_reset enable=debug
 
-    Using I/O parameters, CDB/parameter data is automatically generated:
-    Write(16) IOT pattern to all blocks first:
-        # spt cdb=8a dir=write length=32k slices=10 starting=0 ptype=iot
-
     Builtin Support Examples:
 
     Inquiry Information: (human readable)
         # spt cdb=12 enable=encode,decode disable=verbose
     Read Capacity(16): (shows thin provisioning)
         # spt cdb='9e 10' enable=encode,decode disable=verbose
-    Write and Read/Compare IOT Pattern: (32k, all blocks)
-        # spt cdb=8a dir=write length=32k enable=compare,recovery,sense starting=0 ptype=iot
     Read and Compare IOT Pattern: (32k, all blocks)
         # spt cdb=88 dir=read length=32k enable=compare,recovery,sense starting=0 ptype=iot
-    Write Same w/Unmap: (all blocks)
-        # spt cdb='93 08' starting=0 dir=write length=512 blocks=4m/b
+    Write and Read/Compare IOT Pattern: (64k, 1g data)
+        # spt cdb=8a starting=0 bs=64k limit=1g ptype=iot enable=raw
+    Write Same: (all blocks)
+        # spt cdb='93' starting=0 dir=write length=4k blocks=4m/b
     Copy/Verify Source to Destination Device: (uses read/write operations)
         # spt iomode=copy length=32k dsf=${SRC} starting=0 dsf1=${DST} starting=0 enable=compare,recovery,sense
     Write Source and Verify with Mirror Device: (10 threads for higher performance)
@@ -420,8 +486,5 @@ Usage: C:\cygwin64\home\Robin\spt.exe options...
         # export SPT_DEVICE='/dev/sdi'
         # export SPT_EMIT_STATUS='Status: %status, SCSI Status: %scsi_status, Sense Code: %sense_code, Sense Key: %sense_key, Ascq: %ascq, Resid: %resid'
 
-    --> Date: May 26th, 2017, Version: 2.50, Author: Robin T. Miller <--
-
-Robin@rtm-asus-pc ~
-$
-
+    --> Date: December 15th, 2017, Version: 2.78, Author: Robin T. Miller <--
+$ 

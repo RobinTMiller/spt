@@ -1,23 +1,103 @@
-% pwd
-/u/rtmiller/spt.d/linux-rhel7x64
-% make -f ../Makefile OS=linux clean
-% make -f ../Makefile OS=linux
-cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt.o ../spt.c
-cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_fmt.o ../spt_fmt.c
-cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_inquiry.o ../spt_inquiry.c
-cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_mem.o ../spt_mem.c
-cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_print.o ../spt_print.c
-cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_scsi.o ../spt_scsi.c
-cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_unix.o ../spt_unix.c
-cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_usage.o ../spt_usage.c
-cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o scsi_opcodes.o ../scsi_opcodes.c
-cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o libscsi.o ../libscsi.c
-cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o libnetapp.o ../libnetapp.c
-cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o scsidata.o ../scsidata.c
-cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o scsilib.o scsilib.c
-cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o utilities.o ../utilities.c
-cc -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_mtrand64.o ../spt_mtrand64.c
-cc -o spt -O -I.. -D_ALL_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT  spt.o spt_fmt.o spt_inquiry.o spt_mem.o spt_print.o spt_scs
-i.o spt_unix.o spt_usage.o scsi_opcodes.o libscsi.o libnetapp.o scsidata.o scsilib.o utilities.o spt_mtrand64.o  -lpthread
+Unix builds are performed in subdirectories for each OS, and with the OS= option defined, as shown below.
+
+$ mkdir linux-rhel7x64
+$ cd linux-rhel7x64
+ make -f ../Makefile OS=linux
+cc -O -I.. -D_ALL_SOURCE -D_GNU_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt.o ../spt.c
+cc -O -I.. -D_ALL_SOURCE -D_GNU_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_fmt.o ../spt_fmt.c
+cc -O -I.. -D_ALL_SOURCE -D_GNU_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_inquiry.o ../spt_inquiry.c
+cc -O -I.. -D_ALL_SOURCE -D_GNU_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_iot.o ../spt_iot.c
+cc -O -I.. -D_ALL_SOURCE -D_GNU_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_log.o ../spt_log.c
+cc -O -I.. -D_ALL_SOURCE -D_GNU_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_mem.o ../spt_mem.c
+cc -O -I.. -D_ALL_SOURCE -D_GNU_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_print.o ../spt_print.c
+cc -O -I.. -D_ALL_SOURCE -D_GNU_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_scsi.o ../spt_scsi.c
+cc -O -I.. -D_ALL_SOURCE -D_GNU_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_ses.o ../spt_ses.c
+cc -O -I.. -D_ALL_SOURCE -D_GNU_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_unix.o ../spt_unix.c
+cc -O -I.. -D_ALL_SOURCE -D_GNU_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_usage.o ../spt_usage.c
+cc -O -I.. -D_ALL_SOURCE -D_GNU_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o scsi_opcodes.o ../scsi_opcodes.c
+cc -O -I.. -D_ALL_SOURCE -D_GNU_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o libscsi.o ../libscsi.c
+cc -O -I.. -D_ALL_SOURCE -D_GNU_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o scsidata.o ../scsidata.c
+cc -O -I.. -D_ALL_SOURCE -D_GNU_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o scsilib.o scsilib.c
+cc -O -I.. -D_ALL_SOURCE -D_GNU_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o utilities.o ../utilities.c
+cc -O -I.. -D_ALL_SOURCE -D_GNU_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o spt_mtrand64.o ../spt_mtrand64.c
+cc -O -I.. -D_ALL_SOURCE -D_GNU_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT   -c -o parson.o ../parson.c
+cc -o spt -O -I.. -D_ALL_SOURCE -D_GNU_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT  spt.o spt_fmt.o spt_inquiry.o spt_iot.o spt_log.o spt_mem.o spt_print.o spt_scsi.o spt_ses.o spt_unix.o spt_usage.o scsi_opcodes.o libscsi.o scsidata.o scsilib.o utilities.o spt_mtrand64.o parson.o  -lpthread
 done!
-% 
+hgst@DenaliStorage-TH2:~/GitHub/spt/linux-rhel7x64$ ./spt version
+    --> Date: December 15th, 2017, Version: 2.78, Author: Robin T. Miller <--
+$ 
+
+Examples:
+
+$ sudo ./spt dsf=/dev/sdm inquiry logprefix=
+
+Inquiry Information:
+
+                Peripheral Device Type: 0 (Direct Access Device)
+                  Peripheral Qualifier: 0 (Peripheral Device Connected)
+             Logical Unit Conglomerate: False
+                       Removable Media: False
+                          ANSI Version: 6 (Complies to ANSI INCITS 513 Revision 37a)
+                  Response Data Format: 2
+                    Historical Support: True
+                    Normal ACA Support: False
+                     Additional Length: 69 (0x45)
+       Supports Protection Information: False
+              Third Party Copy Support: False
+             Target Port Group Support: 0 (ALUA not supported)
+         Storage Controller Components: False
+                   Multiple SCSI Ports: False
+           Embedded Enclosure Services: False
+               Command Queuing Support: True
+                 Vendor Identification: ATA     
+                Product Identification: SDLF1DAR-480G-1J
+               Firmware Revision Level: RP41
+                    Vendor Data Length: 37 (0x25)
+                  Vendor Specific Data: 20 20 20 20 20 20 20 20 20 20 20 20 41 30 31 33 46 41 44 33 "            A013FAD3"
+                                        00 00 00 80 1e e0 04 60 04 c0 0b fd 16 23 06 20 00          "       `     #   "
+
+$ sudo ./spt dsf=/dev/sdm inquiry ofmt=json
+{
+    "Inquiry": {
+        "Length": 74,
+        "Offset": 0,
+        "Bytes": "00 00 06 12 45 00 00 02 41 54 41 20 20 20 20 20 53 44 4c 46 31 44 41 52 2d 34 38 30 47 2d 31 4a 52 50 34 31 20 20 20 20 20 20 20 20 20 20 20 20 41 30 31 33 46 41 44 33 00 00 00 80 1e e0 04 60 04 c0 0b fd 16 23 06 20 00 00",
+        "Peripheral Device Type": 0,
+        "Peripheral Device Type Description": "Direct Access Device",
+        "Peripheral Qualifier": 0,
+        "Peripheral Qualifier Description": "Peripheral Device Connected",
+        "Reserved (byte 1, bits 0:5)": 0,
+        "Logical Unit Conglomerate": false,
+        "Removable Media": false,
+        "ANSI Version": 6,
+        "ANSI Version Description": "Complies to ANSI INCITS 513 Revision 37a",
+        "Response Data Format": 2,
+        "Historical Support": true,
+        "Normal ACA Support": false,
+        "Reserved (byte 3, bits 6:2)": 0,
+        "Additional Length": 69,
+        "Supports Protection Information": false,
+        "Third Party Copy Support": false,
+        "Target Port Group Support": 0,
+        "Target Port Group Support Description": "ALUA not supported",
+        "Obsolete (byte 5, bit 6)": 0,
+        "Storage Controller Components": false,
+        "Obsolete (byte 6, bit 0)": 0,
+        "Reserved (byte 6, bits 1:2)": 0,
+        "Obsolete (byte 6, bit 3)": 0,
+        "Multiple SCSI Ports": false,
+        "Embedded Enclosure Services": false,
+        "Obsolete (byte 6, bit 7)": false,
+        "Vendor Specific (byte 7, bit 0)": false,
+        "Command Queuing Support": true,
+        "Reserved (byte 7, bit 2)": 0,
+        "Obsolete (byte 7, bits 3:3)": 0,
+        "Reserved (byte 7, bit 6)": 0,
+        "Obsolete (byte 7, bit 7)": 0,
+        "Vendor Identification": "ATA     ",
+        "Product Identification": "SDLF1DAR-480G-1J",
+        "Firmware Revision Level": "RP41",
+        "JSON Status": 0
+    }
+}
+$ 
