@@ -65,7 +65,6 @@
 #define STRING_BUFFER_SIZE	4096		/* String buffer size.	*/
 #define TIME_BUFFER_SIZE	32		/* ctime() buffer size. */
 
-
 /*
  * Note: This should be the largest file path allowed for any Host OS.
  *	 On Linux, "errno = 36 - File name too long" occurs at 4096.
@@ -238,7 +237,7 @@ typedef unsigned __int64	ptr_t;
 #else /* defined(_WIN64) */
 typedef unsigned long		ptr_t;
 #endif /* defined(_WIN64) */
-//typedef unsigned int		bool;
+typedef unsigned int		bool;
 typedef volatile unsigned int	v_bool;
 
 #else /* !defined(__alpha) && !defined(__LP64__) && !defined(_WIN64) */

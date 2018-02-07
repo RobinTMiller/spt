@@ -98,6 +98,8 @@ int get_lba_status_decode(void *arg);
 
 int report_luns_encode(void *arg);
 int report_luns_decode(void *arg);
+int request_sense_encode(void *arg);
+int request_sense_decode(void *arg);
 int rtpgs_encode(void *arg);
 int rtpgs_decode(void *arg);
 
@@ -1209,6 +1211,75 @@ extended_copy_verify_buffers(scsi_device_t  *sdp,
 
 /* ======================================================================== */
 
+int
+setup_request_sense(scsi_device_t *sdp, scsi_generic_t *sgp)
+{
+    uint32_t data_length = 0xFF;
+
+    memset(sgp->cdb, '\0', sizeof(sgp->cdb));
+    sgp->cdb[0] = SOPC_REQUEST_SENSE; 
+    sgp->data_dir = scsi_data_read;
+    sgp->data_length = data_length;
+    sgp->data_buffer = malloc_palign(sdp, sgp->data_length, 0);
+    if (sgp->data_buffer == NULL) return (FAILURE);
+    /* Setup to execute a CDB operation. */
+    sdp->op_type = SCSI_CDB_OP;
+    sdp->encode_flag = True;
+    sdp->decode_flag = True;
+    sgp->cdb_size = GetCdbLength(sgp->cdb[0]);
+    return(SUCCESS);
+}
+
+int
+request_sense_encode(void *arg)
+{
+    scsi_device_t *sdp = arg;
+    io_params_t *iop = &sdp->io_params[IO_INDEX_BASE];
+    scsi_generic_t *sgp = &iop->sg;
+    int status = SUCCESS;
+
+    /*
+     * The first time, we will allocate and initialize the page 
+     * header, so the user does not need to specify these bytes. 
+     */
+    if (iop->first_time && (sgp->data_buffer == NULL) ) {
+	size_t data_size;
+	void *data_buffer;
+
+	if ( (data_size = sgp->data_length) == 0) {
+	    data_size = 0xFF;
+	}
+	data_buffer = malloc_palign(sdp, data_size, 0);
+	if (data_buffer == NULL) {
+	    return(FAILURE);
+	}
+	sgp->data_dir = iop->sop->data_dir;
+	sgp->data_length = (unsigned int)data_size;
+	sgp->data_buffer = data_buffer;
+	iop->first_time = False;
+    }
+
+    if (sgp->data_length) {
+	sgp->cdb[4] = sgp->data_length;
+    }
+    return (status);
+}
+
+int
+request_sense_decode(void *arg)
+{
+    scsi_device_t *sdp = arg;
+    io_params_t *iop = &sdp->io_params[IO_INDEX_BASE];
+    scsi_generic_t *sgp = &iop->sg;
+    scsi_sense_t *ssp = sgp->data_buffer;
+    int status = SUCCESS;
+
+    DumpSenseData(sgp, False, ssp);
+    return(status);
+}
+
+/* ======================================================================== */
+
 /*
  * SCSI Operation Code Table.
  */
@@ -1248,7 +1319,8 @@ static scsi_opcode_t scsiOpcodeTable[] = {
     {	SOPC_READ_BUFFER,	    0x00, ALL_DEVICE_TYPES, "Read Buffer"		},
     {	SOPC_RECEIVE_DIAGNOSTIC,    0x00, ALL_DEVICE_TYPES, "Receive Diagnostic",
 	scsi_data_read, receive_diagnostic_encode, receive_diagnostic_decode		},
-    {	SOPC_REQUEST_SENSE,	    0x00, ALL_DEVICE_TYPES, "Request Sense"		},
+    {	SOPC_REQUEST_SENSE,	    0x00, ALL_DEVICE_TYPES, "Request Sense",
+	scsi_data_read, request_sense_encode, request_sense_decode			},
     {	SOPC_SEND_DIAGNOSTIC,	    0x00, ALL_DEVICE_TYPES, "Send Diagnostic",
 	scsi_data_write, send_diagnostic_encode, send_diagnostic_decode			},
     {	SOPC_TEST_UNIT_READY,	    0x00, ALL_DEVICE_TYPES, "Test Unit Ready"		},

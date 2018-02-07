@@ -261,7 +261,7 @@ typedef enum iomode {
 /*
  * Type of Command:
  */
-typedef enum cmd_type { CMD_TYPE_NONE, CMD_TYPE_CLEAR, CMD_TYPE_GET, CMD_TYPE_SET } cmd_type_t;
+typedef enum cmd_type { CMD_TYPE_NONE, CMD_TYPE_CLEAR, CMD_TYPE_GET, CMD_TYPE_SET, CMD_TYPE_RESET } cmd_type_t;
 
 /*
  * Clear/Get/Set Type:
@@ -649,14 +649,20 @@ typedef struct scsi_device {
      * Shared Library Parameters:
      */
     hbool_t     shared_library;         /* Shared library interface.    */
-#if defined(SHARED_LIBRARY)
+    struct scsi_device *master_sdp;     /* The master device pointer.   */
     char        *stderr_buffer;         /* The callers' stderr buffer.  */
     char        *stderr_bufptr;         /* Updated stderr buffer ptr.   */
     char        *stdout_buffer;         /* The callers' stdout buffer.  */
     char        *stdout_bufptr;         /* Updated stdout buffer ptr.   */
-    int         stderr_buflen;          /* The stderr buffer length.    */
-    int         stdout_buflen;          /* The stdout buffer length.    */
-#endif /* defined(SHARED_LIBRARY) */
+    char        *emit_status_buffer;    /* The emit status buffer.      */
+    char        *emit_status_bufptr;    /* The emit status buffer ptr.  */
+    /* Note: These are not currently used, but may be implemented later. */
+    int         stderr_length;          /* The stderr buffer length.    */
+    int         stderr_remaining;       /* The stderr bytes remaining.  */
+    int         stdout_length;          /* The stdout buffer length.    */
+    int         stdout_remaining;       /* The stdout bytes remaining.  */
+    int         emit_status_length;     /* The emit status buffer length*/
+    int         emit_status_remaining;  /* The emit bytes remaining.    */
 } scsi_device_t;
 
 #if 0
@@ -714,6 +720,7 @@ extern uint8_t find_inquiry_page_code(scsi_device_t *sdp, char *page_name, int *
 
 /* scsi_opcodes.c */
 int setup_read_capacity16(scsi_device_t *sdp, scsi_generic_t *sgp);
+int setup_request_sense(scsi_device_t *sdp, scsi_generic_t *sgp);
 extern void ShowScsiOpcodes(scsi_device_t *sdp);
 
 /* spt_fmt.c */

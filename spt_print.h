@@ -24,6 +24,7 @@
  * THIS SOFTWARE.							    *
  *									    *
  ****************************************************************************/
+
 typedef enum logLevel {
 	logLevelCrit = LOG_CRIT,
 	logLevelError = LOG_ERR,

@@ -1425,11 +1425,13 @@ DumpCdbData(scsi_generic_t *sgp)
 	dump_length = min(sgp->data_length, sgp->data_dump_limit);
     }
     Printf(opaque, "\n");
-    Printf(opaque, "CDB Data %s: (%u bytes)\n", 
-	   (sgp->data_dir == scsi_data_read) ? "Received" : "Sent",
-	   dump_length);
-    Printf(opaque, "\n");
-    DumpFieldsOffset(opaque, (uint8_t *)sgp->data_buffer, dump_length);
+    if (sgp->cdb[0] != SOPC_REQUEST_SENSE) {
+	Printf(opaque, "CDB Data %s: (%u bytes)\n",
+	       (sgp->data_dir == scsi_data_read) ? "Received" : "Sent",
+	       dump_length);
+	Printf(opaque, "\n");
+	DumpFieldsOffset(opaque, (uint8_t *)sgp->data_buffer, dump_length);
+    }
     return;
 }
 

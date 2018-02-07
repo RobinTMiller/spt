@@ -89,6 +89,25 @@ Free(scsi_device_t *sdp, void *ptr)
     return;
 }
 
+void
+FreeMem(scsi_device_t *sdp, void *ptr, size_t size)
+{
+    if (mDebugFlag) {
+	Printf(sdp, "Free: Deallocating buffer at address "LLPXFMT", "SUF" bytes...\n",
+	       ptr, size);
+    }
+    memset(ptr, 0xdd, size);
+    free(ptr);
+    return;
+}
+
+void
+FreeStr(scsi_device_t *sdp, void *ptr)
+{
+    FreeMem(sdp, ptr, (strlen(ptr) + 1));
+    return;
+}
+
 /*
  * Malloc() - Allocate memory with appropriate error checking.
  *

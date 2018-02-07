@@ -598,14 +598,10 @@ GetDeviceIdentifier(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
     iid = (inquiry_ident_descriptor_t *)inquiry_page->inquiry_page_data;
 
     /*
-     * Snarf'ed out of CAM's configuration logic (ccfg.c).
-     *
      * Notes:
      *	- We loop through ALL descriptors, enforcing the precedence
-     *	  order defined above (see enum pidt).  This is because some
+     *	  order defined above (see enum pidt). This is because some
      *	  devices return more than one identifier.
-     *	- This logic differs from CAM ccfg code slightly, as it
-     *	  accepts unknown BINARY device ID's, which I think is Ok.
      */
     while ( (ssize_t)page_length > 0 ) {
 	unsigned char *fptr = (unsigned char *)iid + sizeof(*iid);
@@ -613,117 +609,134 @@ GetDeviceIdentifier(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
 	switch (iid->iid_code_set) {
 	    
 	    case IID_CODE_SET_ASCII: {
-		    /* Only accept Vendor ID's of Type 1. */
-		    if ( (pid_type > TY1_VID) &&
-			 (iid->iid_ident_type == IID_ID_TYPE_T10_VID) ) {
-			int id_len = iid->iid_ident_length + sizeof(inquiry->inq_pid);
-			if (bp) {
-			    free(bp) ; bp = NULL;
-			};
-			bp = (char *)malloc(id_len + 1);
-			if (bp == NULL)	return(NULL);
-			pid_type = TY1_VID;
-			memcpy(bp, inquiry->inq_pid, sizeof(inquiry->inq_pid));
-			memcpy((bp + sizeof(inquiry->inq_pid)), fptr, iid->iid_ident_length);
-		    }
-		    /* Continue looping looking for IEEE identifier. */
-		    break;
+		/* Only accept Vendor ID's of Type 1. */
+		if ( (pid_type > TY1_VID) &&
+		     (iid->iid_ident_type == IID_ID_TYPE_T10_VID) ) {
+		    int id_len = iid->iid_ident_length + sizeof(inquiry->inq_pid);
+		    if (bp) {
+			free(bp) ; bp = NULL;
+		    };
+		    bp = (char *)malloc(id_len + 1);
+		    if (bp == NULL) return(NULL);
+		    pid_type = TY1_VID;
+		    memcpy(bp, inquiry->inq_pid, sizeof(inquiry->inq_pid));
+		    memcpy((bp + sizeof(inquiry->inq_pid)), fptr, iid->iid_ident_length);
 		}
+		/* Continue looping looking for IEEE identifier. */
+		break;
+	    } /* end case IID_CODE_SET_ASCII */
+
+	    case IID_CODE_SET_BINARY: {
 		/*
 		 * This is the preferred (unique) identifier.
 		 */
-	    case IID_CODE_SET_BINARY: {
+		switch (iid->iid_ident_type) {
+		    
+		    case IID_ID_TYPE_NAA: {
+			enum pidt npid_type;
+			int i = 0;
 
-		    switch (iid->iid_ident_type) {
-			
-			case IID_ID_TYPE_NAA: {
-				enum pidt npid_type;
-				int i = 0;
+			/*
+			 * NAA is the high order 4 bits of the 1st byte.
+			 */
+			switch ( (*fptr >> 4) & 0xF) {
 
-				/*
-				 * NAA is the high order 4 bits of the 1st byte.
-				 */
-				switch ( (*fptr >> 4) & 0xF) {
-				    /* TODO: Add defines for NAA definitions! */
-				    case 0x6:	  /* IEEE Registered */
-					npid_type = REGEXT;
-					break;
-				    case 0x5:	  /* IEEE Registered Extended */
-					npid_type = REG;
-					break;
-				    case 0x2:	  /* ???? */
-					npid_type = EXT_V;
-					break;
-				    case 0x1:	  /* ???? */
-					npid_type = EXT_0;
-					break;
-				    default:
-					/* unrecognized */
-					npid_type = BINARY;
-					break;
-				}
-				/*
-				 * If the previous precedence ID is of lower priority,
-				 * that is a higher value, then make this pid the new.
-				 */
-				if ( (pid_type > npid_type) ) {
-				    int blen = (iid->iid_ident_length * 3);
-				    char *bptr;
-				    pid_type = npid_type; /* Set the new precedence type */
-				    if (bp) {
-					free(bp) ; bp = NULL;
-				    };
-				    bptr = bp = (char *)malloc(blen);
-				    if (bp == NULL) return(NULL);
-
-				    /* Format as: xxxx-xxxx... */
-				    while (i < (int)iid->iid_ident_length) {
-					bptr += sprintf(bptr, "%02x", fptr[i++]);
-					if (( (i % 2) == 0) &&
-					    (i < (int)iid->iid_ident_length) ) {
-					    bptr += sprintf(bptr, "-");
-					}
-				    }
-				}
+			    case NAA_IEEE_REG_EXTENDED:
+				npid_type = REGEXT;
 				break;
-			    }
-			case IID_ID_TYPE_EUI64: {
-				int blen, i = 0;
-				char *bptr;
-
-				if ( (pid_type <= EUI64) ) {
-				    break;
-				}
-				pid_type = EUI64;
-				blen = (iid->iid_ident_length * 3);
-				if (bp) {
-				    free(bp) ; bp = NULL;
-				};
-				bptr = bp = (char *)malloc(blen);
-				if (bp == NULL)	return(NULL);
-
-				/* Format as: xxxx-xxxx... */
-				while (i < (int)iid->iid_ident_length) {
-				    bptr += sprintf(bptr, "%02x", fptr[i++]);
-				    if (( (i % 2) == 0) &&
-					(i < (int)iid->iid_ident_length) ) {
-					bptr += sprintf(bptr, "-");
-				    }
-				}
+			    case NAA_IEEE_REGISTERED:
+				npid_type = REG;
 				break;
-			    }
-			default: {
-				if (debug) {
-				    Fprintf(opaque, "Unknown identifier %#x\n", iid->iid_ident_type);
-				}
+			    case NAA_IEEE_EXTENDED:
+				npid_type = EXT_V;
 				break;
-			    }
-		    } /* switch (iid->iid_ident_type) */
-		} /* case IID_CODE_SET_BINARY */
+			    case 0x1:	  /* ???? */
+				npid_type = EXT_0;
+				break;
+			    default:
+				/* unrecognized */
+				npid_type = BINARY;
+				break;
+			}
+			/*
+			 * If the previous precedence ID is of lower priority,
+			 * that is a higher value, then make this pid the new.
+			 */
+			if ( (pid_type > npid_type) ) {
+			    int blen = (iid->iid_ident_length * 3);
+			    char *bptr;
+			    pid_type = npid_type; /* Set the new precedence type */
+			    if (bp) {
+				free(bp) ; bp = NULL;
+			    };
+			    bptr = bp = (char *)malloc(blen);
+			    if (bp == NULL) return(NULL);
 
-	    default:
+			    /* Format as: xxxx-xxxx... */
+			    while (i < (int)iid->iid_ident_length) {
+				bptr += sprintf(bptr, "%02x", fptr[i++]);
+				if (( (i % 2) == 0) &&
+				    (i < (int)iid->iid_ident_length) ) {
+				    bptr += sprintf(bptr, "-");
+				}
+			    }
+			}
+			break;
+		    }
+		    case IID_ID_TYPE_EUI64: {
+			int blen, i = 0;
+			char *bptr;
+
+			if ( (pid_type <= EUI64) ) {
+			    break;
+			}
+			pid_type = EUI64;
+			blen = (iid->iid_ident_length * 3);
+			if (bp) {
+			    free(bp) ; bp = NULL;
+			};
+			bptr = bp = (char *)malloc(blen);
+			if (bp == NULL)	return(NULL);
+
+			/* Format as: xxxx-xxxx... */
+			while (i < (int)iid->iid_ident_length) {
+			    bptr += sprintf(bptr, "%02x", fptr[i++]);
+			    if (( (i % 2) == 0) &&
+				(i < (int)iid->iid_ident_length) ) {
+				bptr += sprintf(bptr, "-");
+			    }
+			}
+			break;
+		    }
+		    case IID_ID_TYPE_VS:
+		    case IID_ID_TYPE_T10_VID:
+		    case IID_ID_TYPE_RELTGTPORT:
+		    case IID_ID_TYPE_TGTPORTGRP:
+		    case IID_ID_TYPE_LOGUNITGRP:
+		    case IID_ID_TYPE_MD5LOGUNIT:
+		    case IID_ID_TYPE_SCSI_NAME:
+		    case IID_ID_TYPE_PROTOPORT:
+			break;
+
+		    default: {
+			if (debug) {
+			    Fprintf(opaque, "Unknown identifier type %#x\n", iid->iid_ident_type);
+			}
+			break;
+		    }
+		} /* switch (iid->iid_ident_type) */
+		break;
+	    } /* end case IID_CODE_SET_BINARY */
+
+	    case IID_CODE_SET_ISO_IEC:
 		break;
 
+	    default: {
+		if (debug) {
+		    Fprintf(opaque, "Unknown identifier code set %#x\n", iid->iid_code_set);
+		}
+		break;
+	    } /* end case of code set. */
 	} /* switch (iid->iid_code_set) */
 
 	page_length -= iid->iid_ident_length + sizeof(*iid);

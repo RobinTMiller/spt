@@ -24,8 +24,9 @@
  * THIS SOFTWARE.							    *
  *									    *
  ****************************************************************************/
+
 #define ToolAuthor	"Robin T. Miller"
-#define ToolDate	"December 15th, 2017"
+#define ToolDate	"February 2nd, 2018"
 #define ToolRevision	"2.78"
 #define ToolVersion	"Date: "ToolDate", Version: "ToolRevision", Author: "ToolAuthor
 

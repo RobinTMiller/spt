@@ -46,11 +46,16 @@
 #include "parson.h"
 
 /*
+ * External References:
+ */
+extern char *find_protocol_identifier(uint8_t protocol_identifier);
+
+/*
  * Forward References:
  */ 
 int standard_inquiry(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp, inquiry_t *inquiry);
 
-char *standard_inquiry_json(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp, inquiry_t *inquiry, char *page_name);
+char *standard_inquiry_to_json(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp, inquiry_t *inquiry, char *page_name);
 
 int PrintInquiryPageHeader(scsi_device_t *sdp, int offset,
 			   inquiry_header_t *ihdr, vendor_id_t vendor_id);
@@ -72,8 +77,14 @@ static char *get_code_mode_type(uint32_t code_mode_type);
 
 /* Page 0x80 */
 int inquiry_serial_number_decode(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp, inquiry_header_t *ihdr);
-char *inquiry_serial_number_decode_json(scsi_device_t *sdp, io_params_t *iop,
-					scsi_generic_t *sgp, inquiry_header_t *ihdr, char *page_name);
+char *inquiry_serial_number_to_json(scsi_device_t *sdp, io_params_t *iop,
+				    scsi_generic_t *sgp, inquiry_header_t *ihdr, char *page_name);
+
+/* Page 0x83 */
+int inquiry_device_identification_decode(scsi_device_t *sdp, io_params_t *iop,
+					 scsi_generic_t *sgp, inquiry_header_t *ihdr);
+char *inquiry_device_identification_to_json(scsi_device_t *sdp, io_params_t *iop,
+					    scsi_generic_t *sgp, inquiry_header_t *ihdr, char *page_name);
 
 char *GetDeviceType(uint8_t device_type);
 char *GetPeripheralQualifier(inquiry_t *inquiry, hbool_t fullname);
@@ -122,6 +133,27 @@ static int opdef_entries = (sizeof(opdef_table) / sizeof(char *));
 
 char *reserved_str = "Reserved";
 char *vendor_specific_str = "Vendor Specific";
+
+/*
+ * Designator Types:
+ */
+static char *ident_types[] = {
+    "Vendor Specific Identifier",		/* 0x0 */
+    "T10 Vendor ID Based",			/* 0x1 */
+    "EUI-64 Based Identifier",			/* 0x2 */
+    "Name Address Authority",			/* 0x3 */
+    "Relative Target Port Identifier",		/* 0x4 */
+    "Target Port Group Identifier",		/* 0x5 */
+    "Logical Unit Group Identifier",		/* 0x6 */
+    "MD5 Logical Unit Identifier",		/* 0x7 */
+    "SCSI Name String Identifier",		/* 0x8 */
+    "Protocol Specific Port ID",		/* 0x9 */
+    "UUID Identifier"				/* 0xA */
+				    /* 0xB to 0xF reserved */
+};
+static int ident_entries = (sizeof(ident_types) / sizeof(char *));
+
+/* ============================================================================================== */
 
 int
 setup_inquiry(scsi_device_t *sdp, scsi_generic_t *sgp, size_t data_length, uint8_t page)
@@ -208,6 +240,8 @@ inquiry_decode(void *arg)
 	status = inquiry_supported_decode(sdp, iop, sgp, ihdr);			/* Page 0x00 */
     } else if (ihdr->inq_page_code == INQ_SERIAL_PAGE) {
 	status = inquiry_serial_number_decode(sdp, iop, sgp, ihdr);		/* Page 0x80 */
+    } else if (ihdr->inq_page_code == INQ_DEVICE_PAGE) {
+	status = inquiry_device_identification_decode(sdp, iop, sgp, ihdr);	/* Page 0x83 */
     } else {
 	sdp->verbose = True;
     }
@@ -355,7 +389,7 @@ standard_inquiry(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp, inqu
 
     if (sdp->output_format == JSON_FMT) {
 	char *json_string = NULL;
-	json_string = standard_inquiry_json(sdp, iop, sgp, inquiry, "Inquiry");
+	json_string = standard_inquiry_to_json(sdp, iop, sgp, inquiry, "Inquiry");
 	if (json_string) {
 	    PrintLines(sdp, json_string);
 	    Printnl(sdp);
@@ -494,7 +528,8 @@ standard_inquiry(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp, inqu
 }
 
 char *
-standard_inquiry_json(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp, inquiry_t *inquiry, char *page_name)
+standard_inquiry_to_json(scsi_device_t *sdp, io_params_t *iop,
+			 scsi_generic_t *sgp, inquiry_t *inquiry, char *page_name)
 {
     JSON_Value	*root_value;
     JSON_Object *root_object;
@@ -758,7 +793,7 @@ inquiry_serial_number_decode(scsi_device_t *sdp, io_params_t *iop, scsi_generic_
 
     if (sdp->output_format == JSON_FMT) {
 	char *json_string = NULL;
-	json_string = inquiry_serial_number_decode_json(sdp, iop, sgp, ihdr, page_name);
+	json_string = inquiry_serial_number_to_json(sdp, iop, sgp, ihdr, page_name);
 	if (json_string) {
 	    PrintLines(sdp, json_string);
 	    Printnl(sdp);
@@ -784,8 +819,8 @@ inquiry_serial_number_decode(scsi_device_t *sdp, io_params_t *iop, scsi_generic_
 }
 
 char *
-inquiry_serial_number_decode_json(scsi_device_t *sdp, io_params_t *iop,
-				  scsi_generic_t *sgp, inquiry_header_t *ihdr, char *page_name)
+inquiry_serial_number_to_json(scsi_device_t *sdp, io_params_t *iop,
+			      scsi_generic_t *sgp, inquiry_header_t *ihdr, char *page_name)
 {
     inquiry_page_t *inquiry_page = (inquiry_page_t *)ihdr;
     JSON_Value	*root_value;
@@ -829,6 +864,409 @@ inquiry_serial_number_decode_json(scsi_device_t *sdp, io_params_t *iop,
     text[page_length] = '\0';
 
     json_status = json_object_set_string(object, "Product Serial Number", text);
+
+finish:
+    (void)json_object_set_number(object, "JSON Status", (double)json_status);
+    if (sdp->json_pretty) {
+	json_string = json_serialize_to_string_pretty(root_value);
+    } else {
+	json_string = json_serialize_to_string(root_value);
+    }
+    json_value_free(root_value);
+    return(json_string);
+}
+
+/* ============================================================================================== */
+
+int
+inquiry_device_identification_decode(scsi_device_t *sdp, io_params_t *iop,
+				     scsi_generic_t *sgp, inquiry_header_t *ihdr)
+{
+    inquiry_page_t *inquiry_page = (inquiry_page_t *)ihdr;
+    uint8_t device_type = iop->sip->si_inquiry->inq_dtype;
+    uint8_t page_code = ihdr->inq_page_code;
+    inquiry_ident_descriptor_t *iid;
+    int page_length = ihdr->inq_page_length;
+    char *page_name = get_inquiry_page_name(device_type, page_code, iop->vendor_id);
+    char *bp = NULL;
+    char *identifier = NULL;
+    char text[STRING_BUFFER_SIZE];
+    uint8_t *ucp = NULL;
+    int length = 0;
+    int offset = 0;
+    int status = SUCCESS;
+
+    if (sdp->output_format == JSON_FMT) {
+	char *json_string = NULL;
+	json_string = inquiry_device_identification_to_json(sdp, iop, sgp, ihdr, page_name);
+	if (json_string) {
+	    PrintLines(sdp, json_string);
+	    Printnl(sdp);
+	    json_free_serialized_string(json_string);
+	}
+	return(status);
+    }
+    offset = PrintInquiryPageHeader(sdp, offset, ihdr, iop->vendor_id);
+
+    iid = (inquiry_ident_descriptor_t *)inquiry_page->inquiry_page_data;
+
+    while ((ssize_t)page_length > 0) {
+	if (sdp->DebugFlag) {
+	    Printf(sdp, "\n");
+	    ucp = (uint8_t *)iid;
+	    length = sizeof(*iid) + iid->iid_ident_length;
+	    offset = PrintHexDebug(sdp, offset, ucp, length);
+	} else {
+	    Printf(sdp, "\n");
+	}
+	PrintHex(sdp, "Code Set", iid->iid_code_set, DNL);
+	if (iid->iid_code_set == IID_CODE_SET_BINARY) {
+	    Print(sdp, " (identifier is binary)\n");
+	} else if (iid->iid_code_set == IID_CODE_SET_ASCII) {
+	    Print(sdp, " (identifier is ASCII)\n");
+	} else if (iid->iid_code_set == IID_CODE_SET_ISO_IEC) {
+	    Print(sdp, " (ISO/IEC identifier)\n");
+	} else {
+	    Print(sdp, " (identifier is reserved)\n");
+	}
+	PrintHex(sdp, "Protocol Identifier", iid->iid_proto_ident, DNL);
+	if (iid->iid_proto_valid) {
+	    identifier = find_protocol_identifier(iid->iid_proto_ident);
+	    Print(sdp, " (%s)\n", identifier);
+	} else {
+	    Print(sdp, "\n");
+	}
+	PrintHex(sdp, "Identifier Type", iid->iid_ident_type, DNL);
+	if (iid->iid_ident_type < ident_entries) {
+	    identifier = ident_types[iid->iid_ident_type];
+	} else {
+	    identifier = "Reserved Identifier";
+	}
+	Print(sdp, " (%s)\n", identifier);
+	PrintHex(sdp, "Association", iid->iid_association, DNL);
+	if (iid->iid_association == IID_ASSOC_LOGICAL_UNIT) {
+	    Print(sdp, " (logical unit)\n");
+	} else if (iid->iid_association == IID_ASSOC_TARGET_PORT) {
+	    Print(sdp, " (target port)\n");
+	} else if (iid->iid_association == IID_ASSOC_TARGET_DEVICE) {
+	    Print(sdp, " (target device)\n");
+	} else {
+	    Print(sdp, " (reserved)\n");
+	}
+	if (iid->iid_reserved_byte1_b6 || sdp->DebugFlag) {
+	    PrintHex(sdp, "Reserved (byte 1, bit 6)", iid->iid_reserved_byte1_b6, PNL);
+	}
+	PrintYesNo(sdp, FALSE, "Protocol Identifier Valid", iid->iid_proto_valid, PNL);
+	PrintNumeric(sdp, "Identifier Length", iid->iid_ident_length, PNL);
+
+	/* TODO: Create idenfifier data structures. */
+	switch (iid->iid_code_set) {
+	    case IID_CODE_SET_BINARY: {
+		uint8_t *fptr = (u_char *)iid + sizeof(*iid);
+		switch (iid->iid_ident_type) {
+
+		    case IID_ID_TYPE_NAA:
+			/*
+			 * NAA is the high order 4 bits of the 1st byte.
+			 */
+			switch ( (*fptr >> 4) & 0xF) {
+			  case NAA_IEEE_EXTENDED:	/* 8 bytes */
+			    identifier = "IEEE Extended Identifier";
+			    break;
+			case NAA_LOCALLY_ASSIGNED:	/* 8 bytes */
+			    identifier = "Locally Assigned";
+			    break;
+			  case NAA_IEEE_REGISTERED:	/* 8 bytes */
+			    identifier = "IEEE Registered Identifier";
+			    break;
+			  case NAA_IEEE_REG_EXTENDED:	/* 16 bytes */
+			    identifier = "IEEE Registered Extended Identifier";
+			    break;
+			  default:
+			    break;
+			}
+			/* Fall through... */
+		    case IID_ID_TYPE_EUI64: {	/* 8, 12, or 16 bytes */
+			/* Note: The company and vendor parts are not displayed. */
+			int i = 0;
+			PrintAscii(sdp, identifier, "0x", DNL);
+			/* Note: Variable length identifier (designator). */
+			ucp = text;
+			while (i < (int)iid->iid_ident_length) {
+			    ucp += sprintf(ucp, "%02x", fptr[i++]);
+			}
+			Print(sdp, "%s\n", text);
+			break;
+		    }
+		    case IID_ID_TYPE_RELTGTPORT: {
+			if (iid->iid_association == IID_ASSOC_TARGET_PORT) {
+			    int target_port = (fptr[2] << 8) | fptr[3];
+			    PrintDecimal(sdp, identifier, target_port, PNL);
+			    break;
+			}
+			/* Fall through... */
+		    }
+		    default:
+			PrintAscii(sdp, identifier, "", DNL);
+			PrintFields(sdp, fptr, iid->iid_ident_length);
+			break;
+		}
+		break;
+	    }
+	    case IID_CODE_SET_ASCII:
+	    case IID_CODE_SET_ISO_IEC: {
+		char *bp = (char *)text;
+		char *fptr = (char *)iid + sizeof(*iid);
+		strncpy(bp, fptr, iid->iid_ident_length);
+		bp[iid->iid_ident_length] = '\0';
+		PrintAscii(sdp, identifier, bp, PNL);
+		break;
+	    }
+	    default: {
+		u_char *fptr = (u_char *)iid + sizeof(*iid);
+		PrintAscii(sdp, identifier, "", DNL);
+		/* Display identifier fields in hex. */
+		PrintFields(sdp, fptr, iid->iid_ident_length);
+		break;
+	    }
+	}
+	/*
+	 * Note: Page length may go negative for non-compiant devices!
+	 */
+	page_length -= iid->iid_ident_length + sizeof(*iid);
+	iid = (inquiry_ident_descriptor_t *)((u_char *)iid + (iid->iid_ident_length + sizeof(*iid)));
+    }
+    Printf(sdp, "\n");
+    return(status);
+}
+
+char *
+inquiry_device_identification_to_json(scsi_device_t *sdp, io_params_t *iop,
+				      scsi_generic_t *sgp, inquiry_header_t *ihdr, char *page_name)
+{
+    inquiry_page_t *inquiry_page = (inquiry_page_t *)ihdr;
+    inquiry_ident_descriptor_t *iid;
+    JSON_Value	*root_value;
+    JSON_Object *root_object;
+    JSON_Value  *value;
+    JSON_Object *object;
+    JSON_Value  *svalue = NULL;
+    JSON_Object *sobject = NULL;
+    JSON_Array	*ident_array;
+    JSON_Value	*ident_value = NULL;
+    JSON_Status json_status;
+    char *json_string = NULL;
+    int page_length = ihdr->inq_page_length;
+    char *bp = NULL;
+    char *identifier = NULL;
+    char text[STRING_BUFFER_SIZE];
+    uint8_t *ucp = NULL;
+    int length = 0;
+    int offset = 0;
+
+    root_value  = json_value_init_object();
+    if (root_value == NULL) return(NULL);
+    root_object = json_value_get_object(root_value);
+
+    value  = json_value_init_object();
+    if (value == NULL) {
+	json_value_free(root_value);
+	return(NULL);
+    }
+    json_status = json_object_dotset_value(root_object, page_name, value);
+    object = json_value_get_object(value);
+
+    ucp = (uint8_t *)ihdr;
+    length = page_length + sizeof(*ihdr);
+    json_status = json_object_set_number(object, "Length", (double)length);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Offset", (double)offset);
+    if (json_status != JSONSuccess) goto finish;
+    offset = FormatHexBytes(text, offset, ucp, length);
+    json_status = json_object_set_string(object, "Bytes", text);
+    if (json_status != JSONSuccess) goto finish;
+
+    json_status = PrintInquiryPageHeaderJson(sdp, object, ihdr);
+    if (json_status != JSONSuccess) goto finish;
+
+    iid = (inquiry_ident_descriptor_t *)inquiry_page->inquiry_page_data;
+
+    while ((ssize_t)page_length > 0) {
+	if (ident_value == NULL) {
+	    ident_value = json_value_init_array();
+	    ident_array = json_value_get_array(ident_value);
+	}
+	if (svalue == NULL) {
+	    svalue  = json_value_init_object();
+	    sobject = json_value_get_object(svalue);
+	}
+	ucp = (uint8_t *)iid;
+	length = sizeof(*iid) + iid->iid_ident_length;
+	json_status = json_object_set_number(sobject, "Length", (double)length);
+	if (json_status != JSONSuccess) goto finish;
+	json_status = json_object_set_number(sobject, "Offset", (double)offset);
+	if (json_status != JSONSuccess) goto finish;
+	offset = FormatHexBytes(text, offset, ucp, length);
+	json_status = json_object_set_string(sobject, "Bytes", text);
+	if (json_status != JSONSuccess) goto finish;
+
+
+	json_status = json_object_set_number(sobject, "Code Set", (double)iid->iid_code_set);
+	if (json_status != JSONSuccess) goto finish;
+	if (iid->iid_code_set == IID_CODE_SET_BINARY) {
+	    bp = "identifier is binary";
+	} else if (iid->iid_code_set == IID_CODE_SET_ASCII) {
+	    bp = "identifier is ASCII";
+	} else if (iid->iid_code_set == IID_CODE_SET_ISO_IEC) {
+	    bp = "ISO/IEC identifier";
+	} else {
+	    bp = "identifier is reserved";
+	}
+	json_status = json_object_set_string(sobject, "Code Set Description", bp);
+	if (json_status != JSONSuccess) goto finish;
+
+	json_status = json_object_set_number(sobject, "Protocol Identifier", (double)iid->iid_proto_ident);
+	if (json_status != JSONSuccess) goto finish;
+	if (iid->iid_proto_valid) {
+	    identifier = find_protocol_identifier(iid->iid_proto_ident);
+	    json_status = json_object_set_string(sobject, "Protocol Identifier Description", identifier);
+	    if (json_status != JSONSuccess) goto finish;
+	}
+
+	json_status = json_object_set_number(sobject, "Identifier Type", (double)iid->iid_ident_type);
+	if (json_status != JSONSuccess) goto finish;
+	if (iid->iid_ident_type < ident_entries) {
+	    identifier = ident_types[iid->iid_ident_type];
+	} else {
+	    identifier = "Reserved Identifier";
+	}
+	json_status = json_object_set_string(sobject, "Identifier Type Description", identifier);
+	if (json_status != JSONSuccess) goto finish;
+
+	json_status = json_object_set_number(sobject, "Association", (double)iid->iid_association);
+	if (json_status != JSONSuccess) goto finish;
+	if (iid->iid_association == IID_ASSOC_LOGICAL_UNIT) {
+	    bp = "logical unit";
+	} else if (iid->iid_association == IID_ASSOC_TARGET_PORT) {
+	    bp = "target port";
+	} else if (iid->iid_association == IID_ASSOC_TARGET_DEVICE) {
+	    bp = "target device";
+	} else {
+	    bp = "reserved";
+	}
+	json_status = json_object_set_string(sobject, "Association Description", bp);
+	if (json_status != JSONSuccess) goto finish;
+
+	json_status = json_object_set_number(sobject, "Reserved (byte 1, bit 6)", (double)iid->iid_reserved_byte1_b6);
+	if (json_status != JSONSuccess) goto finish;
+
+	json_status = json_object_set_boolean(sobject, "Protocol Identifier Valid", iid->iid_proto_valid);
+	if (json_status != JSONSuccess) goto finish;
+	json_status = json_object_set_number(sobject, "Identifier Length", (double)iid->iid_ident_length);
+	if (json_status != JSONSuccess) goto finish;
+
+	/* TODO: Create idenfifier data structures. */
+	switch (iid->iid_code_set) {
+
+	    case IID_CODE_SET_BINARY: {
+		uint8_t *fptr = (uint8_t *)iid + sizeof(*iid);
+
+		switch (iid->iid_ident_type) {
+
+		    case IID_ID_TYPE_NAA:
+			/*
+			 * NAA is the high order 4 bits of the 1st byte.
+			 */
+			switch ( (*fptr >> 4) & 0xF) {
+			  case NAA_IEEE_EXTENDED:	/* 8 bytes */
+			    identifier = "IEEE Extended Identifier";
+			    break;
+			case NAA_LOCALLY_ASSIGNED:	/* 8 bytes */
+			    identifier = "Locally Assigned";
+			    break;
+			  case NAA_IEEE_REGISTERED:	/* 8 bytes */
+			    identifier = "IEEE Registered Identifier";
+			    break;
+			  case NAA_IEEE_REG_EXTENDED:	/* 16 bytes */
+			    identifier = "IEEE Registered Extended Identifier";
+			    break;
+			  default:
+			    break;
+			}
+			/* Fall through... */
+		    case IID_ID_TYPE_EUI64: {	/* 8, 12, or 16 bytes */
+			/* Note: The company and vendor parts are not displayed. */
+			int i = 0;
+			/* Note: Variable length identifier (designator). */
+			ucp = text;
+			ucp += sprintf(ucp, "0x");
+			while (i < (int)iid->iid_ident_length) {
+			    ucp += sprintf(ucp, "%02x", fptr[i++]);
+			}
+			json_status = json_object_set_string(sobject, identifier, text);
+			if (json_status != JSONSuccess) goto finish;
+			break;
+		    }
+		    case IID_ID_TYPE_RELTGTPORT: {
+			if (iid->iid_association == IID_ASSOC_TARGET_PORT) {
+			    int target_port = (fptr[2] << 8) | fptr[3];
+			    json_status = json_object_set_number(sobject, identifier, (double)target_port);
+			    if (json_status != JSONSuccess) goto finish;
+			    break;
+			}
+			/* Fall through... */
+		    }
+		    default: {
+			int i = 0;
+			/* Note: Variable length identifier (designator). */
+			ucp = text;
+			ucp += sprintf(ucp, "0x");
+			while (i < (int)iid->iid_ident_length) {
+			    ucp += sprintf(ucp, "%02x", fptr[i++]);
+			}
+			json_status = json_object_set_string(sobject, identifier, text);
+			if (json_status != JSONSuccess) goto finish;
+			break;
+		    }
+		}
+		break;
+	    }
+	    case IID_CODE_SET_ASCII:
+	    case IID_CODE_SET_ISO_IEC: {
+		char *bp = (char *)text;
+		char *fptr = (char *)iid + sizeof(*iid);
+		strncpy(bp, fptr, iid->iid_ident_length);
+		bp[iid->iid_ident_length] = '\0';
+		json_status = json_object_set_string(sobject, identifier, bp);
+		if (json_status != JSONSuccess) goto finish;
+		break;
+	    }
+	    default: {
+		int i = 0;
+		uint8_t *fptr = (uint8_t *)iid + sizeof(*iid);
+		/* Note: Variable length identifier (designator). */
+		ucp = text;
+		ucp += sprintf(ucp, "0x");
+		while (i < (int)iid->iid_ident_length) {
+		    ucp += sprintf(ucp, "%02x", fptr[i++]);
+		}
+		json_status = json_object_set_string(sobject, identifier, text);
+		if (json_status != JSONSuccess) goto finish;
+		break;
+	    }
+	}
+	/*
+	 * Note: Page length may go negative for non-compiant devices!
+	 */
+	page_length -= iid->iid_ident_length + sizeof(*iid);
+	iid = (inquiry_ident_descriptor_t *)((u_char *)iid + (iid->iid_ident_length + sizeof(*iid)));
+	json_array_append_value(ident_array, svalue);
+	svalue = NULL;
+    }
+    if (ident_value) {
+	json_object_set_value(object, "Identifier Descriptor List", ident_value);
+	ident_value = NULL;
+    }
 
 finish:
     (void)json_object_set_number(object, "JSON Status", (double)json_status);
@@ -910,11 +1348,12 @@ typedef struct inquiry_page_entry {
 inquiry_page_entry_t inquiry_page_table[] = {
     { INQ_ALL_PAGES, 		ALL_DEVICE_TYPES,	VID_ALL,	"Supported",		"supported"		},
     { INQ_SERIAL_PAGE,		ALL_DEVICE_TYPES,	VID_ALL,	"Serial Number",	"serial"		},
+    { INQ_DEVICE_PAGE,		ALL_DEVICE_TYPES,	VID_ALL,	"Device Identification","deviceid"		},
     { INQ_IMPOPR_PAGE,		ALL_DEVICE_TYPES,	VID_ALL,	"Implemented Operating Definitions", "implemented" },
     { INQ_ASCOPR_PAGE,		ALL_DEVICE_TYPES,	VID_ALL,	"ASCII Operating Definitions", "ascii_operating" },
     { INQ_SOFT_INT_ID_PAGE,	ALL_DEVICE_TYPES,	VID_ALL,	"Software Interface Identification", "software_interface" },
     { INQ_MGMT_NET_ADDR_PAGE,	ALL_DEVICE_TYPES,	VID_ALL,	"Management Network Addresses", "mgmt_network"	},
-    { INQ_EXTENDED_INQ_PAGE,	ALL_DEVICE_TYPES,	VID_ALL,	"Extended INQUIRY Data", "extended_inquiry"	},
+    { INQ_EXTENDED_INQ_PAGE,	ALL_DEVICE_TYPES,	VID_ALL,	"Extended Inquiry Data", "extended_inquiry"	},
     { INQ_MP_POLICY_PAGE,	ALL_DEVICE_TYPES,	VID_ALL,	"Mode Page Policy",	"mode_page_policy"	},
     { INQ_SCSI_PORTS_PAGE,	ALL_DEVICE_TYPES,	VID_ALL,	"SCSI Ports",		"scsi_ports"		},
     { INQ_ATA_INFO_PAGE,	ALL_DEVICE_TYPES,	VID_ALL,	"ATA Information",	"ata_information"	},
@@ -925,7 +1364,7 @@ inquiry_page_entry_t inquiry_page_table[] = {
     { INQ_THIRD_PARTY_COPY,	ALL_DEVICE_TYPES,	VID_ALL,	"Third Party Copy",	"third_party_copy"	},
     { INQ_BLOCK_LIMITS_PAGE,	ALL_DEVICE_TYPES,	VID_ALL,	"Block Limits",		"block_limits"		},
     { INQ_BLOCK_CHAR_VPD_PAGE,	ALL_DEVICE_TYPES,	VID_ALL,	"Block Device Characteristics VPD", "block_char_vpd" },
-    { INQ_LOGICAL_BLOCK_PROVISIONING_PAGE, ALL_DEVICE_TYPES, VID_ALL,	"Logical Block Provisioning", "logical_block_prov" }
+    { INQ_LOGICAL_BLOCK_PROVISIONING_PAGE, ALL_DEVICE_TYPES, VID_ALL,	"Logical Block Provisioning", "logical_block_prov" },
 };
 
 int num_inquiry_page_entries = ( sizeof(inquiry_page_table) / sizeof(inquiry_page_entry_t) );

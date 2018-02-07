@@ -277,6 +277,8 @@ PrintLogs(scsi_device_t *sdp, FILE *fp, char *buffer)
      *  o if job log is open, write to this.
      *  o if no logs are open, write to specified fp.
      *    Note: Generally, this fp will be stdout/stderr.
+     *  
+     * Please Note: spt does NOT have job log support yet! 
      */
     if ( sdp->log_opened && job_log_flag) {
         status = Fputs(buffer, fp);
@@ -285,6 +287,25 @@ PrintLogs(scsi_device_t *sdp, FILE *fp, char *buffer)
         }
     } else if (job_log_flag) {
         status = Fputs(buffer, sdp->job->ji_job_logfp);
+    } else if (sdp->shared_library && (sdp->log_opened == False) ) {
+        int slen = (int)strlen(buffer);
+        if (sdp->efp == fp) {
+            if (sdp->stderr_remaining < slen) {
+                slen = sdp->stderr_remaining;
+            }
+            if (slen) {
+                sdp->stderr_bufptr += sprintf(sdp->stderr_bufptr, "%.*s", slen, buffer);
+                sdp->stderr_remaining -= slen;
+            }
+        } else {
+            if (sdp->stdout_remaining < slen) {
+                slen = sdp->stdout_remaining;
+            }
+            if (slen) {
+                sdp->stdout_bufptr += sprintf(sdp->stdout_bufptr, "%.*s", slen, buffer);
+                sdp->stdout_remaining -= slen;
+            }
+        }
     } else {
         status = Fputs(buffer, fp);
     }

@@ -64,11 +64,7 @@ Version(scsi_device_t *sdp)
 	tp += sprintf(tp, "{ \"Author\": \"%s\", ", ToolAuthor);
 	tp += sprintf(tp, "\"Date\": \"%s\", ", ToolDate);
 	tp += sprintf(tp, "\"Version\": \"%s\" }", ToolRevision);
-	if (sdp->shared_library) {
-	    ; // sdp->stdout_bufptr += sprintf(sdp->stdout_bufptr, "%s", text);
-	} else {
-	    P(sdp, "%s\n", text);
-	}
+	P(sdp, "%s\n", text);
     } else {
 	P (sdp, "    --> " ToolVersion " <--\n");
     }
@@ -156,6 +152,7 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\tlogsense {page=value} Show Log pages supported or page.\n");
     P (sdp, "\tzerolog {page=value}  Zero all Log pages or specific page.\n");
     P (sdp, "\treadcapacity16        Show disk capacity (16 byte CDB).\n");
+    P (sdp, "\trequestsense          Show request sense information.\n");
     P (sdp, "\n    Examples:\n");
     P (sdp, "\t# spt inquiry page=ascii_info\n");
     P (sdp, "\t# spt logsense page=protocol\n");
@@ -328,7 +325,7 @@ void Help(scsi_device_t *sdp)
 			 	(sgp->recovery_flag) ? enabled_str : disabled_str);
     P (sdp, "\tread_after_write Read after write (or raw). (Default: %s)\n",
 			 	(sdp->read_after_write) ? enabled_str : disabled_str);
-    P (sdp, "\tsata             SATA device handling.	   (Default: %s)\n",
+    P (sdp, "\tsata             SATA device handling.      (Default: %s)\n",
                                 (sdp->sata_device_flag) ? enabled_str : disabled_str);
     P (sdp, "\tscsi             Report SCSI information.   (Default: %s)\n",
                                 (sdp->scsi_info_flag) ? enabled_str : disabled_str);
@@ -610,17 +607,15 @@ void Help(scsi_device_t *sdp)
 
     P (sdp, "\n    Builtin Support Examples:\n\n");
     P (sdp, "    Inquiry Information: (human readable)\n");
-    P (sdp, "\t# spt cdb=12 enable=encode,decode disable=verbose\n");
+    P (sdp, "\t# spt inquiry logprefix=\n");
     P (sdp, "    Read Capacity(16): (shows thin provisioning)\n");
-    P (sdp, "\t# spt cdb='9e 10' enable=encode,decode disable=verbose\n");
-#if 0
+    P (sdp, "\t# spt readcapacity16 ofmt=json\n");
     P (sdp, "    Write and Read/Compare IOT Pattern: (32k, all blocks)\n");
     P (sdp, "\t# spt cdb=8a dir=write length=32k enable=compare,recovery,sense starting=0 ptype=iot\n");
-#endif /* 0 */
     P (sdp, "    Read and Compare IOT Pattern: (32k, all blocks)\n");
     P (sdp, "\t# spt cdb=88 dir=read length=32k enable=compare,recovery,sense starting=0 ptype=iot\n");
-    P (sdp, "    Write and Read/Compare IOT Pattern: (64k, 1g data)\n");
-    P (sdp, "\t# spt cdb=8a starting=0 bs=64k limit=1g ptype=iot enable=raw\n");
+    P (sdp, "    Write and Read/Compare IOT Pattern w/immediate Read-After-Write: (64k, 1g data)\n");
+    P (sdp, "\t# spt cdb=8a starting=0 bs=64k limit=1g ptype=iot enable=raw emit=default\n");
     P (sdp, "    Write Same: (all blocks)\n");
     P (sdp, "\t# spt cdb='93' starting=0 dir=write length=4k blocks=4m/b\n");
 #if 0

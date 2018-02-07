@@ -32,6 +32,26 @@
  *
  * Modification History:
  * 
+ * January 19th, 2019 by Robin T. Miller
+ *      Add support for HGST "drive reset" command.
+ *      Add request sense for monitoring immediate commands such as Format.
+ * 
+ * January 8th, 2018 by Robin T. Miller
+ *      Update Python spt() API, to clone the master device pointer, so we
+ * can safely be called by multiple Python threads.
+ * 
+ * December 27th, 2017 by Robin T. Miller
+ *      Update shared library interface with buffer lengths, and enforcing
+ * buffer lengths to avoid overwrites and to prepare for multiple threads
+ * and async jobs. Note: Job control still needs to be integrated from dt.
+ * 
+ * December 15th, 2017 by Robin T. Miller
+ *	Update MyExit() to return status when shared library enabled.
+ *      Add support for spt in a shared library form for Python ctypes.
+ * 
+ * December 13th, 2017 by Robin T. Miller
+ *      Add support for "ses {clear|set} {devoff|fault|ident|unlock}".
+ * 
  * December 5th, 2017 by Robin T. Miller
  *      For cdb=, pin=, and pout=, allow comma "," separator vs. spaces.
  * 
@@ -155,6 +175,7 @@ volatile hbool_t CmdInterruptedFlag;	/* User interrupted command.	*/
 hbool_t DebugFlag = False;		/* The program debug flag.	*/
 hbool_t ExpandVars = True;		/* Expand environment variables.*/
 hbool_t	ExitFlag = False;		/* In pipe mode, exit flag.	*/
+hbool_t FirstTime = True;		/* First time control flag.	*/
 hbool_t InteractiveFlag = False;	/* Stay in interactive mode.	*/
 hbool_t	mDebugFlag = False;		/* Memory related debug flag.	*/
 hbool_t StdinIsAtty = TRUE;		/* Standard input isatty flag.	*/
@@ -170,6 +191,24 @@ uint32_t jobid = 1;			/* The job identifier.		*/
 clock_t hertz;
 
 scsi_device_t *master_sdp;		/* The parents' information.	*/
+
+pthread_attr_t detached_thread_attrs;
+pthread_attr_t *tdattrp = &detached_thread_attrs;
+pthread_attr_t joinable_thread_attrs;
+pthread_attr_t *tjattrp = &joinable_thread_attrs;
+pthread_mutex_t print_lock;		/* Printing lock (sync output). */
+pthread_t ParentThread;			/* The parents' thread.		*/
+pthread_t iotuneThread;			/* The IO tuning thread.	*/
+pthread_t MonitorThread;		/* The monitoring thread.	*/
+#if defined(WIN32)
+os_tid_t ParentThreadId;		/* The parents' thread ID.	*/
+os_tid_t iotuneThreadId;		/* The IO tuning thread ID.	*/
+os_tid_t MonitorThreadId;		/* The monitoring thread ID.	*/
+#else /* !defined(WIN32) */
+# define ParentThreadId		ParentThread
+# define iotuneThreadId		iotuneThread
+# define MonitorThreadId	MonitorThread       
+#endif /* defined(WIN32) */
 
 /*
  * Default keepalive message, if none is specified (user can override).
@@ -210,6 +249,47 @@ char *emit_status_default="\n"
 "                  Ending Time: %end_time\n";
 
 /*
+ * Default Emit Status Strings: 
+ *  
+ * Note: This may be better without spacing? We'll see! 
+ */
+char *emit_status_default_json="{\n"
+"    \"Thread\": %thread,\n"
+"    \"Device Name\": \"%dsf\",\n"
+"    \"Block Length\": %device_size,\n"
+"    \"Capacity\": %capacity,\n"
+"    \"SCSI Name\": \"%scsi_name\",\n"
+"    \"SCSI CDB\": \"%cdb\",\n"
+"    \"Data Direction\": \"%dir\",\n"
+"    \"Data Length\": %length,\n"
+"    \"Exit Status\": %status,\n"
+"    \"Exit Status Msg\": \"%status_msg\",\n"
+"    \"Host Status\": %host_status,\n"
+"    \"Host Status Msg\": \"%host_msg\",\n"
+"    \"Driver Status\": %driver_status,\n"
+"    \"Driver Status Msg\": \"%driver_msg\",\n"
+"    \"SCSI Status\": %scsi_status,\n"
+"    \"SCSI Status Msg\": \"%scsi_msg\",\n"
+"    \"Sense Code\": %sense_code,\n"
+"    \"Sense Code Msg\": \"%sense_msg\",\n"
+"    \"Sense Key\": %sense_key,\n"
+"    \"Sense Key Msg\": \"%skey_msg\",\n"
+"    \"asc\": \"%asc\",\n"
+"    \"asq\": \"%asq\",\n"
+"    \"ascq_Msg\": \"%ascq_msg\",\n"
+"    \"Bytes Transferred\": %xfer,\n"
+"    \"Residual\": %resid,\n"
+"    \"Iterations\": %iterations,\n"
+"    \"Total Bytes\": %total_bytes,\n"
+"    \"Total Blocks\": %total_blocks,\n"
+"    \"Total Operations\": %total_operations,\n"
+"    \"Sense Data\": \"%sense_data\",\n"
+"    \"Elapsed Time\": \"%elapsed_time\",\n"
+"    \"Starting Time\": \"%start_time\",\n"
+"    \"Ending Time\": \"%end_time\"\n"
+"}";
+
+/*
  * Choose this string for xcopy and/or iomode=copy,verify etc.
  */
 char *emit_status_multiple="\n"
@@ -245,6 +325,13 @@ char *emit_status_multiple="\n"
 /*
  * Forward References:
  */
+int spt(char *stdin_buffer, char *stderr_buffer, int stderr_length,
+	char *stdout_buffer, int stdout_length, char *emit_status_buffer, int emit_status_length);
+void cleanup_cloned_master(scsi_device_t *sdp);
+int main(int argc, char **argv);
+int spt_main(int argc, char **argv, scsi_device_t *msdp);
+int main_loop(scsi_device_t *sdp);
+int create_detached_thread(scsi_device_t *sdp, void *(*func)(void *));
 void *a_job(void *arg);
 int wait_for_threads(threads_info_t *tip);
 void *a_cdb(void *arg);
@@ -286,7 +373,7 @@ void mark_devices_closed(scsi_device_t *sdp);
 #endif /* defined(WIN32) */
 void EmitStatus(scsi_device_t *sdp, char *status_string, hbool_t prefix_flag);
 int HandleExit(scsi_device_t *sdp, int status);
-void MyExit(scsi_device_t *sdp, int status);
+int MyExit(scsi_device_t *sdp, int status);
 void SignalHandler(int sig);
 int do_post_processing(scsi_device_t *sdp, int status);
 void do_sleeps(scsi_device_t *sdp);
@@ -297,7 +384,11 @@ int do_logfile_open(scsi_device_t *sdp);
 void log_header(scsi_device_t *sdp);
 char *make_options_string(scsi_device_t *sdp, int argc, char **argv, hbool_t quoting);
 void save_cmdline(scsi_device_t *sdp);
+
+int setup_thread_attributes(scsi_device_t *sdp, pthread_attr_t *tattrp, hbool_t joinable_flag);
+int init_pthread_attributes(scsi_device_t *sdp);
 static scsi_device_t *init_device_information(void);
+void init_device_defaults(scsi_device_t *sdp);
 
 void
 init_devices(scsi_device_t *sdp)
@@ -411,6 +502,16 @@ close_devices(scsi_device_t *sdp, int starting_index)
     return (status);
 }
 
+/*
+ * cleanup_devices() - Cleanup per thread devices.
+ * 
+ * Inputs:
+ * 	sdp = The thread device pointer.
+ * 	master = Master device boolean flag.
+ *
+ * Return Value:
+ * 	Void.
+ */
 void
 cleanup_devices(scsi_device_t *sdp, hbool_t master)
 {
@@ -559,6 +660,56 @@ cleanup_devices(scsi_device_t *sdp, hbool_t master)
 	sdp->rod_token_data = NULL;
 	sdp->rod_token_valid = False;
     }
+    /*
+     * For shared library interface, copy data to master to return.
+     */
+    if ((master == False) && sdp->shared_library && sdp->master_sdp) {
+	scsi_device_t *msdp = sdp->master_sdp;
+	int status = acquire_print_lock();
+	/* Note: The master buffers may be gone using async jobs! */
+	if (msdp->stderr_buffer) {
+	    int slen = (int)strlen(sdp->stderr_buffer);
+	    if (msdp->stderr_remaining < slen) {
+		slen = msdp->stderr_remaining;
+	    }
+            if (slen) {
+                msdp->stderr_bufptr += sprintf(msdp->stderr_bufptr, "%.*s", slen, sdp->stderr_buffer);
+                msdp->stderr_remaining -= slen;
+            }
+	}
+	Free(sdp, sdp->stderr_buffer);
+	sdp->stderr_buffer = NULL;
+	if (msdp->stdout_buffer) {
+	    int slen = (int)strlen(sdp->stdout_buffer);
+	    if (msdp->stdout_remaining < slen) {
+		slen = msdp->stdout_remaining;
+	    }
+            if (slen) {
+                msdp->stdout_bufptr += sprintf(msdp->stdout_bufptr, "%.*s", slen, sdp->stdout_buffer);
+                msdp->stdout_remaining -= slen;
+            }
+	    printf("%s", sdp->stdout_buffer);
+	}
+	Free(sdp, sdp->stdout_buffer);
+	sdp->stdout_buffer = NULL;
+	if (msdp->emit_status_buffer && sdp->emit_status_buffer) {
+	    int slen = (int)strlen(sdp->emit_status_buffer);
+	    if (msdp->emit_status_remaining < slen) {
+		slen = msdp->emit_status_remaining;
+	    }
+            if (slen) {
+                msdp->emit_status_bufptr += sprintf(msdp->emit_status_bufptr, "%.*s", slen, sdp->emit_status_buffer);
+                msdp->emit_status_remaining -= slen;
+            }
+	}
+	if (sdp->emit_status_buffer) {
+	    Free(sdp, sdp->emit_status_buffer);
+	    sdp->emit_status_buffer = NULL;
+	}
+	if (status == SUCCESS) {
+	    (void)release_print_lock();
+	}
+    }
     /* Note: Close the log file *after* freeing everything else. */
     if (sdp->log_file) {
 	if (sdp->log_opened) {
@@ -629,7 +780,9 @@ clone_devices(scsi_device_t *sdp, scsi_device_t *tsdp)
 	}
 	tsgp->sense_data = malloc_palign(sdp, tsgp->sense_length, 0);
 
-	tsgp->dsf = strdup(sgp->dsf);
+	if (sgp->dsf) {
+	    tsgp->dsf = strdup(sgp->dsf);
+	}
 	if (sgp->adsf) {
 	    tsgp->adsf = strdup(sgp->adsf);
 	}
@@ -688,7 +841,17 @@ clone_devices(scsi_device_t *sdp, scsi_device_t *tsdp)
     if (sdp->log_prefix) {
 	tsdp->log_prefix = strdup(sdp->log_prefix);
     }
-
+    if (sdp->shared_library) {
+	if (sdp->stderr_length) {
+	    tsdp->stderr_buffer = tsdp->stderr_bufptr = Malloc(sdp, sdp->stderr_length);
+	}
+	if (sdp->stdout_length) {
+	    tsdp->stdout_buffer = tsdp->stdout_bufptr = Malloc(sdp, sdp->stdout_length);
+	}
+	if (sdp->emit_status_length) {
+	    tsdp->emit_status_buffer = tsdp->emit_status_bufptr = Malloc(sdp, sdp->emit_status_length);
+	}
+    }
     /*
      * Duplicate any other device specific information.
      */
@@ -736,41 +899,57 @@ EmitStatus(scsi_device_t *sdp, char *status_string, hbool_t prefix_flag)
 	if (efmt_buffer == NULL) return;
 	(void)FmtEmitStatus(sdp, NULL, NULL, status_string, efmt_buffer);
 	strcat(efmt_buffer, "\n");
-	if (prefix_flag == True) {
-	    PrintLines(sdp, efmt_buffer);
+	if (sdp->shared_library) {
+	    int slen = (int)strlen(efmt_buffer);
+            if (sdp->emit_status_remaining < slen) {
+                slen = sdp->emit_status_remaining;
+            }
+            if (slen) {
+                sdp->emit_status_bufptr += sprintf(sdp->emit_status_bufptr, "%.*s", slen, efmt_buffer);
+                sdp->emit_status_remaining -= slen;
+            }
 	} else {
-	    Print(sdp, "%s", efmt_buffer);
+	    if (prefix_flag == True) {
+		PrintLines(sdp, efmt_buffer);
+	    } else {
+		Print(sdp, "%s", efmt_buffer);
+	    }
+	    (void)fflush(stdout);
 	}
-	(void)fflush(stdout);
 	free(efmt_buffer);
     }
     return;
 }
 
-void
+int
 MyExit(scsi_device_t *sdp, int status)
 {
     if (sdp && ( (sdp->debug_flag || sdp->DebugFlag) && (status != SUCCESS) ) ) {
 	Printf(sdp, "Exiting with status code %d...\n", status);
     }
-    exit(status);
+    if ( sdp && (sdp->shared_library == False) ) {
+	exit(status);
+    }
+    return(status);
 }
 
 int
 HandleExit(scsi_device_t *sdp, int status)
 {
-    /*
-     * Commands like "help" or "version" will cause scripts to exit,
-     * but we don't wish to continue on fatal errors, so...
-     */
-    if (InteractiveFlag || PipeModeFlag || sdp->script_level) {
-	if (sdp->script_level && (status == FAILURE)) {
-	    MyExit(sdp, status);	/* Rethink this, it's too messy! */
+    if (sdp->shared_library == False) {
+	/*
+	 * Commands like "help" or "version" will cause scripts to exit,
+	 * but we don't wish to continue on fatal errors, so...
+	 */
+	if (InteractiveFlag || PipeModeFlag || sdp->script_level) {
+	    if (sdp->script_level && (status == FAILURE)) {
+		return ( MyExit(sdp, status) );
+	    }
+	} else {
+	    return ( MyExit(sdp, status) );
 	}
-    } else {
-	MyExit(sdp, status);
     }
-    return (status);
+    return(status);
 }
 
 void
@@ -850,20 +1029,166 @@ do_sleeps(scsi_device_t *sdp)
  *  Consider any_iscsi code, to test without host DSF's.
  *  - this also provides TMF capability, tag control, etc
  */
+#if defined(SHARED_LIBRARY)
+
+/*
+ * spt - The External spt Callable Interface. 
+ *  
+ * Inputs: 
+ *      stdin_buffer = The input buffer (spt command line).
+ *      stderr_buffer = The error buffer.
+ *      stderr_length = The error buffer length.
+ *      stdout_buffer = The output buffer.
+ *      stdout_length = The output buffer length.
+ *      emit_status_buffer  The emit status buffer. (optional)
+ *      emit_status_length = The emit status buffer length.
+ *  
+ * Return Value: 
+ * 	Returns 0 / 1 / -1 = Success / Warning / Failure 
+ */
+int
+spt(char *stdin_buffer,
+    char *stderr_buffer, int stderr_length,
+    char *stdout_buffer, int stdout_length,
+    char *emit_status_buffer, int emit_status_length)
+{
+    scsi_device_t *sdp = NULL;
+    int status = SUCCESS;
+
+    if ( (stdin_buffer == NULL) ||
+	 (stderr_buffer == NULL) || (stderr_length == 0) ||
+	 (stdout_buffer == NULL) || (stdout_length == 0) ) {
+	return(FAILURE);
+    }
+    if (emit_status_buffer && (emit_status_length == 0)) {
+	return(FAILURE);
+    }
+    *stderr_buffer = '\0';
+    *stdout_buffer = '\0';
+    if (emit_status_buffer) {
+	*emit_status_buffer = '\0';
+    }
+    OurName = "spt";
+    sptpath = "spt";
+    ExitFlag = True;
+    //DebugFlag = True;
+    if (master_sdp == NULL) {
+	scsi_device_t *msdp;
+	efp = stderr;
+	ofp = stdout;
+	master_sdp = msdp = init_device_information();
+	init_device_defaults(msdp);
+	msdp->shared_library = True;
+    }
+    /* Clone master for multiple thread callers. */
+    sdp = Malloc(master_sdp, sizeof(*sdp));
+    if (sdp == NULL) return(FAILURE);
+    *sdp = *master_sdp;
+    status = clone_devices(master_sdp, sdp);
+    sdp->master_sdp = sdp;
+    /* Now setup parameters for execution. */
+    sdp->shared_library = True;
+    sdp->output_format = JSON_FMT;
+    sdp->stderr_buffer = sdp->stderr_bufptr = stderr_buffer;
+    sdp->stdout_buffer = sdp->stdout_bufptr = stdout_buffer;
+    sdp->emit_status_buffer = sdp->emit_status_bufptr = emit_status_buffer;
+    sdp->stderr_length = stderr_length;
+    /* Note: -1 for NULL byte! */
+    sdp->stderr_remaining = stderr_length - 1;
+    sdp->stdout_length = stdout_length;
+    sdp->stdout_remaining = stdout_length - 1;
+    sdp->emit_status_length = emit_status_length;
+    if (emit_status_length) {
+	sdp->emit_status_remaining = emit_status_length - 1;
+    }
+    /* Setup our default emit status string in JSON. */
+    if (sdp->emit_status == NULL) {
+	sdp->emit_status = strdup(emit_status_default_json);
+    }
+    /* Disable logging prefix, esp. important for JSON output! */
+    if (sdp->log_prefix) {
+	Free(sdp, sdp->log_prefix);
+    }
+    sdp->log_prefix = strdup("");
+    if (sdp->cmdbufptr == NULL) {
+       	sdp->cmdbufsiz = ARGS_BUFFER_SIZE;
+	sdp->cmdbufptr = Malloc(sdp, sdp->cmdbufsiz);
+	if (sdp->cmdbufptr == NULL) {
+	    cleanup_cloned_master(sdp);
+	    return(FAILURE);
+	}
+	sdp->argv = (char **)Malloc(sdp,  (sizeof(char **) * ARGV_BUFFER_SIZE) );
+	if (sdp->argv == NULL) {
+	    cleanup_cloned_master(sdp);
+	    return(FAILURE);
+	}
+    }
+    strcpy(sdp->cmdbufptr, stdin_buffer);
+    sdp->argc = MakeArgList(sdp, sdp->argv, sdp->cmdbufptr);
+
+    if (FirstTime == True) {
+	status = spt_main(sdp->argc, sdp->argv, sdp);
+    } else {
+	status = main_loop(sdp);
+    }
+    cleanup_cloned_master(sdp);
+    return(status);
+}
+
+void
+cleanup_cloned_master(scsi_device_t *sdp)
+{
+    sdp->stderr_buffer = sdp->stderr_bufptr = NULL;
+    sdp->stdout_buffer = sdp->stdout_bufptr = NULL;
+    sdp->emit_status_buffer = sdp->emit_status_bufptr = NULL;
+    sdp->stderr_length = sdp->stdout_remaining = 0;
+    sdp->stdout_length = sdp->stdout_remaining = 0;
+    sdp->emit_status_length = sdp->emit_status_remaining = 0;
+    sdp->master_sdp = NULL;
+    cleanup_devices(sdp, False);
+    if (sdp->cmdbufptr) {
+	Free(sdp, sdp->cmdbufptr);
+	sdp->cmdbufptr = NULL;
+    }
+    if (sdp->argv) {
+	Free(sdp, sdp->argv);
+	sdp->argv = NULL;
+    }
+    free(sdp);
+}
+
+#endif /* defined(SHARED_LIBRARY) */
+
 int
 main(int argc, char **argv)
 {
+#if 1
+    return( spt_main(argc, argv, (scsi_device_t *)0) );
+#else /* for debug... */
+    char stderr_buffer[STRING_BUFFER_SIZE];
+    char stdout_buffer[STRING_BUFFER_SIZE];
+    int status;
+
+    status = spt("inquiry",
+		 stderr_buffer, STRING_BUFFER_SIZE,
+		 stdout_buffer, STRING_BUFFER_SIZE,
+		 NULL, 0);
+    return(status);
+#endif /* 1 */
+}
+
+int
+spt_main(int argc, char **argv, scsi_device_t *msdp)
+{
     char        	*p;
-    pthread_attr_t	attr;
-    pthread_attr_t	*attrp = &attr;
-    threads_info_t	*tip;
-    scsi_device_t 	*sdp, *tsdp;
-    scsi_device_t 	*sds;
+    //pthread_attr_t	attr;
+    //pthread_attr_t	*attrp = &attr;
+    scsi_device_t 	*sdp = NULL;
     scsi_generic_t 	*sgp, *tsgp;
     scsi_addr_t		*sap;
-    io_params_t		*iop, *tiop;
-    hbool_t		FirstTime = True;
-    int         	thread, pstatus, status = SUCCESS;
+    io_params_t		*iop;
+    //hbool_t		FirstTime = True;
+    int         	status = SUCCESS;
 #if !defined(_WIN32)
     size_t		currentStackSize = 0;
     size_t		desiredStackSize = THREAD_STACK_SIZE;
@@ -879,17 +1204,25 @@ main(int argc, char **argv)
     hertz = CLK_TCK;			/* Note: May be a libc function. */
 #endif /* defined(__unix) */
     
-    sptpath = argv[0];
-    p = strrchr(argv[0], '/');
-    OurName = p ? &(p[1]) : argv[0];
-
-    argc--; argv++; /* Skip our program name. */
-
-    if (argc == 0) {
-	InteractiveFlag = True;
+    if (msdp) {
+	sdp = msdp;
+    } else if (master_sdp == NULL) {
+	master_sdp = init_device_information();
     }
+    if (sdp == NULL) {
+	sdp = master_sdp;
+    }
+    if (sdp->shared_library == FALSE) {
+	sptpath = argv[0];
+	p = strrchr(argv[0], '/');
+	OurName = p ? &(p[1]) : argv[0];
 
-    sdp = master_sdp = init_device_information();
+	argc--; argv++; /* Skip our program name. */
+
+	if (argc == 0) {
+	    InteractiveFlag = True;
+	}
+    }
 
     iop = &sdp->io_params[IO_INDEX_BASE];
     sgp = &iop->sg;
@@ -898,11 +1231,13 @@ main(int argc, char **argv)
     /*
      * strdup() used to copy so free() is possible later (if necessary).
      */
-    if (p = getenv(DEVICE_ENVNAME)) {
-	sgp->dsf = strdup(p);
-    }
-    if (p = getenv(EMIT_STATUS_ENV)) {
-	sdp->emit_status = strdup(p);
+    if (sdp->shared_library == False) {
+	if (p = getenv(DEVICE_ENVNAME)) {
+	    sgp->dsf = strdup(p);
+	}
+	if (p = getenv(EMIT_STATUS_ENV)) {
+	    sdp->emit_status = strdup(p);
+	}
     }
     if (p = getenv(PROGRAM_DEBUG)) {
 	DebugFlag = True;
@@ -918,60 +1253,9 @@ main(int argc, char **argv)
      * Allow user to specify path to send the SCSI command to.
      * Note: Only supported on AIX with MPIO (at present time).
      */
-    sap->scsi_path	  = -1;    /* Indicates no path specified. (for AIX) */
-
     sdp->argc		  = argc;
     sdp->argv		  = argv;
-    sdp->bypass		  = BypassFlagDefault;
-    sdp->data_fd	  = INVALID_HANDLE_VALUE;
-    iop->device_type	  = DTYPE_DIRECT;	/* Note: Should come from Inquiry! */
-    iop->device_size	  = BLOCK_SIZE;		/* Note: Should come from Get Capacity! */
-    sdp->dump_limit	  = DumpLimitDefault;	/* Data dumped during miscompares. */
-    sgp->data_dump_limit  = sdp->dump_limit;	/* Data dumped during CDB errors.  */
-    sdp->exp_radix	  = ANY_RADIX;
-    sdp->exp_data_entries = EXP_DATA_ENTRIES;
-    sdp->exp_data_size	  = (sizeof(exp_data_t) * sdp->exp_data_entries);
-    sdp->log_header_flag  = LogHeaderFlagDefault;
-    sdp->report_format    = REPORT_FULL;
-    sdp->read_after_write = ReadAfterWriteDefault;
-    sdp->prewrite_flag	  = PreWriteFlagDefault; /* Controls CAW data prewrites. */
-    sdp->sata_device_flag = SataDeviceFlagDefault;
-    sdp->scsi_info_flag   = ScsiInformationDefault;
-    sdp->sense_flag 	  = SenseFlagDefault;
-    sdp->verbose	  = VerboseFlagDefault;
-    sdp->verify_data	  = VerifyFlagDefault;
-    sdp->warnings_flag	  = WarningsFlagDefault;
-    /* IOT Corruption Analysis Defaults: */
-    sdp->dumpall_flag	  = False;
-    sdp->max_bad_blocks	  = MAXBADBLOCKS;
-    sdp->boff_format	  = HEX_FMT;
-    sdp->data_format	  = NONE_FMT;
-    sdp->unpack_data_fmt  = DEC_FMT;
 
-    /*
-     * SCSI Read Verify Information: (used for xcopy and copy/mirror/verify ops)
-     */ 
-    sdp->scsi_read_type	   = ScsiReadTypeDefault;
-    sdp->scsi_read_length  = ScsiReadLengthDefault;
-    sdp->scsi_write_type   = ScsiWriteTypeDefault;
-    sdp->scsi_write_length = ScsiWriteLengthDefault;
-
-    /*
-     * Page Control Defaults:
-     */
-    sdp->page_control = LOG_PCF_CURRENT_CUMULATIVE;
-    sdp->page_format = True;		/* Set the page format bit. */
-    sdp->page_code_valid = True;	/* Set the page code valid bit. */
-
-    /*
-     * Storage Enclosure Services Defaults:
-     */
-    sdp->ses_element_flag = False;
-    sdp->ses_element_index = ELEMENT_INDEX_UNINITIALIZED;
-    sdp->ses_element_status = ELEMENT_STATUS_UNINITIALIZED;
-    sdp->ses_element_type = ELEMENT_TYPE_UNINITIALIZED;
-
-    init_devices(sdp);
     tsgp = NULL;
 
     (void)signal(SIGINT, SignalHandler);
@@ -980,104 +1264,39 @@ main(int argc, char **argv)
     StdinIsAtty = isatty(fileno(stdin));
     StdoutIsAtty = isatty(fileno(stdout));
 
-    status = pthread_attr_init(attrp);
+    status = init_pthread_attributes(sdp);
     if (status != SUCCESS) {
-	errno = status;
-	Perror(sdp, "pthread_attr_init() failed");
-	MyExit(sdp, FATAL_ERROR);
+	return ( MyExit(sdp, status) );
     }
-
-    status = pthread_attr_setscope(attrp, PTHREAD_SCOPE_SYSTEM);
-    if (status != SUCCESS) {
-	errno = status;
-	Perror(sdp, "pthread_attr_setscope() failed setting PTHREAD_SCOPE_SYSTEM");
-	MyExit(sdp, FATAL_ERROR);
-    }
-
-#if !defined(WIN32)
-    status = pthread_attr_getstacksize(attrp, &currentStackSize);
-    if (status == SUCCESS) {
-	if (DebugFlag) {
-	    Printf(sdp, "Current thread stack size is %u\n", currentStackSize);
-	}
-    } else {
-	if (DebugFlag) {
-	    errno = status;
-	    Perror(sdp, "pthread_attr_getstacksize() failed!");
-	}
-    }
-
-    /*
-     * The default stack size on Linux is 10M, which limits the threads created! 
-     */
-    if (currentStackSize && desiredStackSize && (currentStackSize > desiredStackSize) ) {
-	/* Too small and we seg fault, too large limits the number of threads. */
-	status = pthread_attr_setstacksize(attrp, desiredStackSize);
-	if (status == SUCCESS) {
-	    if (DebugFlag) {
-		Printf(sdp, "Thread stack size set to %u bytes\n", desiredStackSize);
-	    }
-	} else {
-	    errno = status;
-	    Perror(sdp, "pthread_attr_setstacksize() failed setting stack size %u",
-		   desiredStackSize);
-	}
-    }
-#endif /* defined(_WIN32) */
 
     (void)initialize_print_lock(sdp);
+
+    return ( main_loop(sdp) );
+}
+
+int
+main_loop(scsi_device_t *sdp)
+{
+    io_params_t		*iop = &sdp->io_params[IO_INDEX_BASE];
+    scsi_generic_t 	*sgp = &iop->sg;
+    scsi_addr_t		*sap = &sgp->scsi_addr;
+    //pthread_attr_t	attr;
+    //pthread_attr_t	*attrp = &attr;
+    threads_info_t	*tip;
+    scsi_device_t 	*tsdp;
+    scsi_device_t 	*sds;
+    scsi_generic_t 	*tsgp;
+    io_params_t		*tiop;
+    int         	thread, pstatus, status = SUCCESS;
 
     /*
      * Loop once or many times in pipe mode.
      */
     do {
-	sdp->abort_freq		= 0;
-	sdp->abort_timeout	= AbortDefaultTimeout;
-	sdp->async		= False;
-	sdp->emit_all		= False;
-	sdp->decode_flag	= False;
-	sdp->encode_flag	= False;
-	sdp->onerr		= ONERR_STOP;
-	sdp->sleep_value	= 0;
-	sdp->msleep_value	= 0;
-	sdp->usleep_value	= 0;
-	sdp->error_count	= 0;
-	sdp->repeat_count	= RepeatCountDefault;
-	sdp->retry_count	= 0;
-	sdp->retry_limit	= RetryLimitDefault;
-	sdp->zero_rod_flag	= False;
-	sdp->runtime		= 0;
-	sdp->din_file		= NULL;
-	sdp->dout_file		= NULL;
-	sdp->rod_token_file	= NULL;
-	sdp->iomode		= IOMODE_TEST;
-	sdp->cmd_type		= CMD_TYPE_NONE;
-	sdp->cgs_type		= CGS_TYPE_NONE;
-	sdp->op_type		= UNDEFINED_OP;
-	memset(&sdp->tci, 0, sizeof(sdp->tci));
-	sdp->tci.exp_scsi_status = SCSI_GOOD;
-	sdp->exp_data_count	= 0;
-	sdp->page_specified	= False;
-	sdp->pin_data		= False;
-	sdp->pin_length		= 0;
-	sdp->slices		= 0;
-	sdp->threads		= ThreadsDefault;
-	sdp->user_data		= False;
-	sdp->user_pattern	= False;
-	sdp->compare_data	= CompareFlagDefault;
-	sdp->image_copy		= ImageModeFlagDefault;
-	sdp->json_pretty	= JsonPrettyFlagDefault;
-	sdp->iot_seed		= IOT_SEED;
-	sdp->iot_pattern	= False;
-	sdp->range_count	= RangeCountDefault;
-	sdp->segment_count	= SegmentCountDefault;
-	sdp->unique_pattern	= UniquePatternDefault;
-	sdp->io_devices		= 1;
-	sdp->io_same_lun	= False;
-	sdp->io_multiple_sources = False;
-        CmdInterruptedFlag 	= False;
+	init_device_defaults(sdp);
+        CmdInterruptedFlag = False;
 
-	if (FirstTime) {
+	if (FirstTime || sdp->shared_library) {
 	    /* Parse command line options first! */
 	    FirstTime = False;
 	} else {
@@ -1088,8 +1307,7 @@ main(int argc, char **argv)
 		if (pstatus == END_OF_FILE) {
 		    ExitFlag = True;
 		} else if (pstatus == FAILURE) {
-		    status = pstatus;
-		    (void)HandleExit(sdp, pstatus);
+		    status = HandleExit(sdp, pstatus);
 		}
 		continue;
 	    }
@@ -1117,14 +1335,19 @@ main(int argc, char **argv)
 	 * Interactive or pipe mode, prompt for more options if device
 	 * or operation type not specified.  Allows "spt enable=pipes"
 	 */
-	if ( ((sgp->dsf == NULL) && (sdp->op_type == UNDEFINED_OP)) &&
-	     (InteractiveFlag || PipeModeFlag || sdp->script_level) ) {
-	    continue; /* reprompt! */
+	if ( (sgp->dsf == NULL) && (sdp->op_type == UNDEFINED_OP) ) {
+	    if (InteractiveFlag || PipeModeFlag || sdp->script_level) {
+		continue; /* reprompt! */
+	    }
+	    if (sdp->shared_library) {
+		/* Note: This will happen from "help" or "version" commands. */
+		break;
+	    }
 	}
 
 	if (sgp->dsf == NULL) {
 	    Wprintf(sdp, "Please specify a device special file via dsf= option!\n");
-	    (void)HandleExit(sdp, WARNING);
+	    HandleExit(sdp, WARNING);
 	    continue;
 	}
 
@@ -1132,7 +1355,7 @@ main(int argc, char **argv)
 	     ( (sdp->ses_element_flag == False) ||
 	       (sdp->ses_element_type == ELEMENT_TYPE_UNINITIALIZED) ) ) {
 	    Wprintf(sdp, "Please specify an element index and element type!\n");
-	    (void)HandleExit(sdp, WARNING);
+	    HandleExit(sdp, WARNING);
 	    continue;
 	}
 
@@ -1155,7 +1378,10 @@ main(int argc, char **argv)
 #endif /* defined(_AIX) */
 	    /* Open all devices. */
 	    if (open_devices(sdp) == FAILURE) {
-		(void)HandleExit(sdp, FAILURE);
+		status = HandleExit(sdp, FAILURE);
+		if (sdp->shared_library) {
+		    break;
+		}
 		continue;
 	    }
 #if defined(_AIX)
@@ -1216,13 +1442,6 @@ main(int argc, char **argv)
 
 	save_cmdline(sdp);
 
-	pstatus = pthread_attr_setdetachstate(attrp, PTHREAD_CREATE_JOINABLE);
-	if (pstatus != SUCCESS) {
-	    errno = status;
-	    Perror(sdp, "pthread_attr_setdetachstate() failed setting PTHREAD_CREATE_JOINABLE");
-	    MyExit(sdp, FATAL_ERROR);
-	}
-	
 	/*
 	 * When doing extended copy, ensure sanity check the src/dst LUNs.
 	 */ 
@@ -1285,7 +1504,7 @@ main(int argc, char **argv)
 		initialize_slice(sdp, tsdp);
 	    }
 
-	    pstatus = pthread_create( &tsdp->thread_id, attrp, sdp->thread_func, tsdp );
+	    pstatus = pthread_create( &tsdp->thread_id, tjattrp, sdp->thread_func, tsdp );
 	    /*
 	     * Expected Failure:
 	     * EAGAIN Insufficient resources to create another thread, or a
@@ -1296,7 +1515,7 @@ main(int argc, char **argv)
 	    if (pstatus != SUCCESS) {
 		errno = pstatus;
 		Perror (sdp, "pthread_create() failed");
-		MyExit(sdp, FATAL_ERROR);
+		return ( MyExit(sdp, FATAL_ERROR) );
 	    }
 	    if (tsdp->thread_id == 0) {
 		/* Why wasn't EAGAIN returned as described above? */
@@ -1316,17 +1535,11 @@ main(int argc, char **argv)
 	 * All commands are executed by thread(s).
 	 */
 	if (sdp->async) {
-	    pstatus = pthread_attr_setdetachstate(attrp, PTHREAD_CREATE_DETACHED);
-	    if (pstatus != SUCCESS) {
-		errno = pstatus;
-		Perror(sdp, "pthread_attr_setdetachstate() failed setting PTHREAD_CREATE_DETACHED");
-		MyExit(sdp, FATAL_ERROR);
-	    }
-	    pstatus = pthread_create( &sdp->thread_id, attrp, a_job, tip );
+	    pstatus = pthread_create( &sdp->thread_id, tdattrp, a_job, tip );
 	    if (pstatus != SUCCESS) {
 		errno = pstatus;
 		Perror (sdp, "pthread_create() failed");
-		MyExit(sdp, FATAL_ERROR);
+		return ( MyExit(sdp, FATAL_ERROR) );
 	    }
 	} else {
 	    int estatus;
@@ -1355,8 +1568,24 @@ main(int argc, char **argv)
     }
     /* May already be closed, if not, let OS close things down! */
     (void)close_devices(sdp, IO_INDEX_BASE);
-    MyExit(sdp, status);
-    /*NOTREACHED*/
+    return( MyExit(sdp, status) );
+}
+
+int
+create_detached_thread(scsi_device_t *sdp, void *(*func)(void *))
+{
+    pthread_t thread;
+    int status;
+
+    status = pthread_create( &thread, tjattrp, func, sdp );
+    if (status == SUCCESS) {
+	status = pthread_detach(thread);
+	if (status != SUCCESS) {
+	    tPerror(sdp, status, "pthread_detach() failed");
+	}
+    } else {
+	tPerror(sdp, status, "pthread_create() failed");
+    }
     return(status);
 }
 
@@ -1681,7 +1910,7 @@ finish:
 	sdp->data_fd = INVALID_HANDLE_VALUE;
     }
     (void)close_devices(sdp, IO_INDEX_BASE);
-    if (!PipeModeFlag && !sdp->emit_all) {
+    if ( (PipeModeFlag == False) && (sdp->emit_all == False) ) {
 	EmitStatus(sdp, sdp->emit_status, True);
     }
     pthread_exit(sdp);
@@ -1752,7 +1981,7 @@ finish:
     sdp->end_ticks = times(&end_times);
     sdp->end_time = time((time_t *) 0);
     (void)close_devices(sdp, IO_INDEX_BASE);
-    if (!PipeModeFlag && !sdp->emit_all) {
+    if ( (PipeModeFlag == False) && (sdp->emit_all == False) ) {
 	EmitStatus(sdp, sdp->emit_status, True);
     }
     pthread_exit(sdp);
@@ -2312,7 +2541,11 @@ parse_args(scsi_device_t *sdp, int argc, char **argv)
 	if (match (&string, "emit=")) {
 	    if (sdp->emit_status) free(sdp->emit_status);
 	    if (match (&string, "default")) {
-		sdp->emit_status = strdup(emit_status_default);
+		if (sdp->output_format == JSON_FMT) {
+		    sdp->emit_status = strdup(emit_status_default_json);
+		} else {
+		    sdp->emit_status = strdup(emit_status_default);
+		}
 	    } else if (match (&string, "multi")) {
 		sdp->emit_status = strdup(emit_status_multiple);
 	    } else {
@@ -2436,7 +2669,7 @@ eloop:
             if (match(&string, "pipes")) {
                 PipeModeFlag = True;
 		InteractiveFlag = False;
-		if (!sdp->emit_status) {
+		if (sdp->emit_status == NULL) {
 		    sdp->emit_status = strdup(pipe_emit);
 		}
                 goto eloop;
@@ -2782,14 +3015,19 @@ dloop:
             continue;
         }
 	if (match (&string, "readcapacity16")) {
-	    size_t data_length = LOG_SENSE_LENGTH_MAX;
-	    uint8_t page = 0;
 	    if ( setup_read_capacity16(sdp, sgp) ) {
 		return( HandleExit(sdp, FAILURE) );
 	    }
 	    sdp->verbose = False;
             continue;
         }
+	if (match (&string, "requestsense")) {
+	    if ( setup_request_sense(sdp, sgp) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+	    continue;
+	}
 	/* Generic receive diagnostic setup. */
 	if (match (&string, "rcvdiag")) {
 	    size_t data_length = RECEIVE_DIAGNOSTIC_MAX;
@@ -2859,10 +3097,11 @@ dloop:
 	    size_t data_length = RECEIVE_DIAGNOSTIC_MAX;
 	    int status;
 	    if (++i < argc) {
+		uint8_t page = DIAG_STRING_IN_OUT_PAGE;
                 string = argv[i];
 		status = parse_ses_args(string, sdp);
 	    } else {
-		Eprintf(sdp, "Format is: ses {clear|set}={devoff|fail/fault|ident/locate|unlock\n");
+		Eprintf(sdp, "Format is: ses {clear|set}={devoff|fail/fault|ident/locate|unlock}\n");
 		status = FAILURE;
 	    }
 	    if (status == FAILURE) {
@@ -3626,7 +3865,7 @@ expand_exp_data(scsi_device_t *sdp)
  *	sdp = The SCSI device information.
  *
  * Outputs:
- *	(global) string = Updated input argument pointer.
+ *	string = Updated input argument pointer.
  *
  * Return Value:
  *	Returns SUCCESS / FAILURE
@@ -3843,8 +4082,7 @@ sptGetCommandLine(scsi_device_t *sdp)
     if (sdp->cmdbufptr == NULL) {
        	sdp->cmdbufsiz = ARGS_BUFFER_SIZE;
 	if ( !(sdp->cmdbufptr = Malloc(sdp, sdp->cmdbufsiz)) ) {
-	    MyExit(sdp, FATAL_ERROR);
-	    
+	    return ( MyExit(sdp, FATAL_ERROR) );
 	}
 	/*
 	 * Allocate an array of pointers for parsing arguments.
@@ -3852,7 +4090,7 @@ sptGetCommandLine(scsi_device_t *sdp)
 	 */ 
 	sdp->argv = (char **)Malloc(sdp,  (sizeof(char **) * ARGV_BUFFER_SIZE) );
 	if (sdp->argv == NULL) {
-	    MyExit(sdp, FATAL_ERROR);
+	    return ( MyExit(sdp, FATAL_ERROR) );
 	}
     }
 reread:
@@ -4547,6 +4785,131 @@ save_cmdline(scsi_device_t *sdp)
 }
 
 /*
+ * WTF! Linux stack size is 10MB by default! (will get cleaned up one day)
+ */
+#if !defined(PTHREAD_STACK_MIN)
+#  define PTHREAD_STACK_MIN 16384
+#endif
+/* Note: If the stack size is too small we seg fault, too large wastes address space! */
+//#define THREAD_STACK_SIZE	((PTHREAD_STACK_MIN + STRING_BUFFER_SIZE) * 4)
+//				/* Reduce TLS to avoid wasting swap/memory! */
+#define THREAD_STACK_SIZE	MBYTE_SIZE	/* Same default as Windows! */
+
+int
+setup_thread_attributes(scsi_device_t *sdp, pthread_attr_t *tattrp, hbool_t joinable_flag)
+{
+    size_t currentStackSize = 0;
+    size_t desiredStackSize = THREAD_STACK_SIZE;
+    char *p, *string;
+    int status;
+
+    if (p = getenv(THREAD_STACK_ENV)) {
+	string = p;
+	desiredStackSize = number(sdp, string, ANY_RADIX);
+    }
+
+    /* Remember: pthread API's return 0 for success; otherwise, an error number to indicate the error! */
+    status = pthread_attr_init(tattrp);
+    if (status != SUCCESS) {
+	tPerror(sdp, status, "pthread_attr_init() failed");
+	return (status);
+    }
+#if !defined(WIN32)
+    status = pthread_attr_setscope(tattrp, PTHREAD_SCOPE_SYSTEM);
+    if ( (status != SUCCESS) && (status != ENOTSUP) ) {
+	tPerror(sdp, status, "pthread_attr_setscope() failed setting PTHREAD_SCOPE_SYSTEM");
+	/* This is considered non-fatal! */
+    }
+
+    /*
+     * Verify the thread stack size (TLS) is NOT too large! (Linux issue). 
+     */
+    status = pthread_attr_getstacksize(tattrp, &currentStackSize);
+    if (status == SUCCESS) {
+	if (sdp->debug_flag || sdp->tDebugFlag) {
+	    Printf(sdp, "Current thread stack size is %u (%.3f Kbytes)\n",
+		   currentStackSize, ((float)currentStackSize / (float)KBYTE_SIZE));
+	}
+    } else {
+	if (sdp->debug_flag || sdp->tDebugFlag) {
+	    tPerror(sdp, status, "pthread_attr_getstacksize() failed!");
+	}
+    }
+
+    /*
+     * The default stack size on Linux is 10M, which limits the threads created!
+     * ( Note: On a 32-bit executable, 10M is stealing too much address space! )
+     */
+    if (currentStackSize && desiredStackSize && (currentStackSize > desiredStackSize) ) {
+	/* Too small and we seg fault, too large limits our threads. */
+	status = pthread_attr_setstacksize(tattrp, desiredStackSize);
+	if (status == SUCCESS) {
+	    if (sdp->debug_flag || sdp->tDebugFlag) {
+		Printf(sdp, "Thread stack size set to %u bytes (%.3f Kbytes)\n",
+		       desiredStackSize, ((float)desiredStackSize / (float)KBYTE_SIZE));
+	    }
+	} else {
+	    tPerror(sdp, status, "pthread_attr_setstacksize() failed setting stack size %u",
+		   desiredStackSize);
+	}
+    }
+    if (joinable_flag) {
+	status = pthread_attr_setdetachstate(tattrp, PTHREAD_CREATE_JOINABLE);
+	if (status != SUCCESS) {
+	    tPerror(sdp, status, "pthread_attr_setdetachstate() failed setting PTHREAD_CREATE_JOINABLE");
+	}
+    } else {
+	status = pthread_attr_setdetachstate(tattrp, PTHREAD_CREATE_DETACHED);
+	if (status != SUCCESS) {
+	    tPerror(sdp, status, "pthread_attr_setdetachstate() failed setting PTHREAD_CREATE_DETACHED");
+	}
+    }
+#endif /* !defined(WIN32) */
+    return(status);
+}
+
+int
+init_pthread_attributes(scsi_device_t *sdp)
+{
+    size_t currentStackSize = 0;
+    size_t desiredStackSize = THREAD_STACK_SIZE;
+    char *p, *string;
+    int status;
+
+    if (p = getenv(THREAD_STACK_ENV)) {
+	string = p;
+	desiredStackSize = number(sdp, string, ANY_RADIX);
+    }
+    ParentThreadId = pthread_self();
+
+    /* TODO: Switch to this top code after we integrate dts' job control! */
+#if 0
+    /*
+     * Create just joinable thread attributes, and use pthread_detach()
+     * whenever a detached thread is desired. This change is for Windows
+     * which will close the thread handle in pthread_detach() to mimic
+     * POSIX detached threads (necessary so we don't lose handles!).
+     */
+    status = setup_thread_attributes(sdp, tjattrp, True);
+    if (status != SUCCESS) {
+	tPerror(sdp, status, "pthread_attr_init() failed");
+	return (status);
+    }
+#else /* 1 */
+    /* Create attributes for detached and joinable threads (for Unix). */
+    status = setup_thread_attributes(sdp, tdattrp, False);
+    if (status == SUCCESS) {
+	status = setup_thread_attributes(sdp, tjattrp, True);
+    }
+    if (status != SUCCESS) {
+	tPerror(sdp, status, "pthread_attr_init() failed");
+	return (status);
+    }
+#endif /* 1 */
+    return (status);
+}
+
+/*
  * init_device_information() - Initialize The Device Information Structure.
  *
  * Return Value:
@@ -4555,8 +4918,11 @@ save_cmdline(scsi_device_t *sdp)
 static scsi_device_t *
 init_device_information(void)
 {
-    scsi_device_t *sdp;
-    
+    scsi_device_t	*sdp;
+    io_params_t		*iop;
+    scsi_generic_t 	*sgp;
+    scsi_addr_t		*sap;
+
     sdp = (scsi_device_t *)malloc( sizeof(*sdp) );
     if (sdp == NULL) {
 	printf("ERROR: We failed to allocate the initial device information of %u bytes!\n",
@@ -4564,16 +4930,156 @@ init_device_information(void)
 	return(NULL);
     }
     memset(sdp, '\0', sizeof(*sdp));
+    iop = &sdp->io_params[IO_INDEX_BASE];
+    sgp = &iop->sg;
+    sap = &sgp->scsi_addr;
+
+    /* TODO: Make these parameters! */
     sdp->efp = efp; // = stderr;
     sdp->ofp = ofp; // = stdout;
     sdp->dir_sep = DIRSEP;
     sdp->file_sep = strdup(DEFAULT_FILE_SEP);
     sdp->file_postfix = strdup(DEFAULT_FILE_POSTFIX);
-    //sdp->log_bufsize	= LOG_BUFSIZE;
-    //sdp->log_buffer = malloc(sdp->log_bufsize);
-    //sdp->log_bufptr = sdp->log_buffer;
 
-    //init_device_defaults(sdp);
+    /*
+     * Allow user to specify path to send the SCSI command to.
+     * Note: Only supported on AIX with MPIO (at present time).
+     */
+    sap->scsi_path	  = -1;    /* Indicates no path specified. (for AIX) */
+
+    /* 
+     * These flags get set only once, and are considered "sticky"!
+     * That is, changing them from the CLI are retained for future.
+     */
+    sdp->bypass		  = BypassFlagDefault;
+    sdp->data_fd	  = INVALID_HANDLE_VALUE;
+    iop->device_type	  = DTYPE_DIRECT;	/* Note: Should come from Inquiry! */
+    iop->device_size	  = BLOCK_SIZE;		/* Note: Should come from Get Capacity! */
+    sdp->dump_limit	  = DumpLimitDefault;	/* Data dumped during miscompares. */
+    sgp->data_dump_limit  = sdp->dump_limit;	/* Data dumped during CDB errors.  */
+    sdp->exp_radix	  = ANY_RADIX;
+    sdp->exp_data_entries = EXP_DATA_ENTRIES;
+    sdp->exp_data_size	  = (sizeof(exp_data_t) * sdp->exp_data_entries);
+    sdp->log_header_flag  = LogHeaderFlagDefault;
+    sdp->report_format    = REPORT_FULL;
+    sdp->read_after_write = ReadAfterWriteDefault;
+    sdp->prewrite_flag	  = PreWriteFlagDefault; /* Controls CAW data prewrites. */
+    sdp->sata_device_flag = SataDeviceFlagDefault;
+    sdp->scsi_info_flag   = ScsiInformationDefault;
+    sdp->sense_flag 	  = SenseFlagDefault;
+    sdp->verbose	  = VerboseFlagDefault;
+    sdp->verify_data	  = VerifyFlagDefault;
+    sdp->warnings_flag	  = WarningsFlagDefault;
+    /* IOT Corruption Analysis Defaults: */
+    sdp->dumpall_flag	  = False;
+    sdp->max_bad_blocks	  = MAXBADBLOCKS;
+    sdp->boff_format	  = HEX_FMT;
+    sdp->data_format	  = NONE_FMT;
+    sdp->unpack_data_fmt  = DEC_FMT;
+
+    /*
+     * SCSI Read Verify Information: (used for xcopy and copy/mirror/verify ops)
+     */ 
+    sdp->scsi_read_type	   = ScsiReadTypeDefault;
+    sdp->scsi_read_length  = ScsiReadLengthDefault;
+    sdp->scsi_write_type   = ScsiWriteTypeDefault;
+    sdp->scsi_write_length = ScsiWriteLengthDefault;
+
+    /*
+     * Page Control Defaults:
+     */
+    sdp->page_control = LOG_PCF_CURRENT_CUMULATIVE;
+    sdp->page_format = True;		/* Set the page format bit. */
+    sdp->page_code_valid = True;	/* Set the page code valid bit. */
+
+    init_devices(sdp);
 
     return (sdp);
+}
+
+/*
+ * Note: These defaults get set for each command line. 
+ *  
+ * BEWARE: When running scripts, it's imperative that ALL options get 
+ * reset to their original defaults! Therefore, when adding new options 
+ * if you expect a particular default, such as zero (0), then that option 
+ * MUST be initialized here! I (the author) have been bittern by this more 
+ * than * once, such as the slice number and/or step offset, and the result 
+ * is very difficult and timeconsuming debugging, esp. due to assumptions 
+ * being made! 
+ *  
+ * FYI: So, why do this at all?
+ * Well, the idea as shown above, is to allow "slicky" options, so all jobs
+ * and their associated threads inherit those new settings. While the idea
+ * is sound, heed the warning above, or bear the resulting support requests!
+ */ 
+void
+init_device_defaults(scsi_device_t *sdp)
+{
+    io_params_t		*iop;
+    scsi_generic_t 	*sgp;
+    scsi_addr_t		*sap;
+
+    iop = &sdp->io_params[IO_INDEX_BASE];
+    sgp = &iop->sg;
+    sap = &sgp->scsi_addr;
+
+    /*
+     * Allow user to specify path to send the SCSI command to.
+     * Note: Only supported on AIX with MPIO (at present time).
+     */
+    sap->scsi_path = -1;    /* Indicates no path specified. (for AIX) */
+
+    sdp->abort_freq = 0;
+    sdp->abort_timeout = AbortDefaultTimeout;
+    sdp->async = False;
+    sdp->emit_all = False;
+    sdp->decode_flag = False;
+    sdp->encode_flag = False;
+    sdp->onerr = ONERR_STOP;
+    sdp->sleep_value = 0;
+    sdp->msleep_value = 0;
+    sdp->usleep_value = 0;
+    sdp->error_count = 0;
+    sdp->repeat_count = RepeatCountDefault;
+    sdp->retry_count = 0;
+    sdp->retry_limit = RetryLimitDefault;
+    sdp->zero_rod_flag = False;
+    sdp->runtime = 0;
+    sdp->din_file = NULL;
+    sdp->dout_file = NULL;
+    sdp->rod_token_file = NULL;
+    sdp->iomode = IOMODE_TEST;
+    sdp->cmd_type = CMD_TYPE_NONE;
+    sdp->cgs_type = CGS_TYPE_NONE;
+    sdp->op_type = UNDEFINED_OP;
+    memset(&sdp->tci, 0, sizeof(sdp->tci));
+    sdp->tci.exp_scsi_status = SCSI_GOOD;
+    sdp->exp_data_count = 0;
+    sdp->page_specified = False;
+    sdp->pin_data = False;
+    sdp->pin_length = 0;
+    sdp->slices = 0;
+    sdp->threads = ThreadsDefault;
+    sdp->user_data = False;
+    sdp->user_pattern = False;
+    sdp->compare_data = CompareFlagDefault;
+    sdp->image_copy = ImageModeFlagDefault;
+    sdp->json_pretty = JsonPrettyFlagDefault;
+    sdp->iot_seed = IOT_SEED;
+    sdp->iot_pattern = False;
+    sdp->range_count = RangeCountDefault;
+    sdp->segment_count = SegmentCountDefault;
+    sdp->unique_pattern = UniquePatternDefault;
+    sdp->io_devices = 1;
+    sdp->io_same_lun = False;
+    sdp->io_multiple_sources = False;
+    /*
+     * Storage Enclosure Services Defaults:
+     */
+    sdp->ses_element_flag = False;
+    sdp->ses_element_index = ELEMENT_INDEX_UNINITIALIZED;
+    sdp->ses_element_status = ELEMENT_STATUS_UNINITIALIZED;
+    sdp->ses_element_type = ELEMENT_TYPE_UNINITIALIZED;
+    return;
 }

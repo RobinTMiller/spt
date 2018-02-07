@@ -141,7 +141,7 @@ os_open_device(scsi_generic_t *sgp)
 	if (sgp->debug == True) {
 	    Printf(opaque, "Opening device %s read-only...\n", wdsf);
 	}
-	sgp->fd = CreateFile(sgp->dsf, GENERIC_READ,FILE_SHARE_READ, NULL,
+	sgp->fd = CreateFile(sgp->dsf, GENERIC_READ, FILE_SHARE_READ, NULL,
 			     OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     }
     if (sgp->fd == INVALID_HANDLE_VALUE) {

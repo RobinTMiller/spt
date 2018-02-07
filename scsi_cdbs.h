@@ -528,6 +528,44 @@ struct sense_format_progress {
 	uint8_t	progress_ind1;		/* Progress indicator (MSB byte)[16]*/
 	uint8_t	progress_ind0;		/* Progress indicator (LSB byte)[17]*/
 };
+
+/*
+ * Write Buffer Command Descriptor Block:
+ */
+typedef struct WriteBuffer_CDB {
+	uint8_t opcode;		 	/* Operation Code. 	    	 [0] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+	bitfield_t
+		mode    : 3,    	/* Mode field.			 [1] */
+			: 2,    	/* Reserved.    		     */
+		lun     : 3;    	/* Logical Unit Number. 	     */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+	bitfield_t
+		lun     : 3,    	/* Logical Unit Number. 	     */
+			: 2,    	/* Reserved.    		     */
+		mode    : 3;    	/* Mode field.  		 [1] */
+#else
+#       error "bitfield ordering is NOT defined!"
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+	uint8_t  id;    		/* Buffer ID.	  		 [2] */
+	uint8_t  offset[3];       	/* Buffer offset.	       [3-5] */
+	uint8_t  parameter_length[3];  	/* Parameter length.	       [6-8] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+	uint8_t	link    : 1, 	  	/* Link.    	   		[9] */
+		flag    : 1,    	/* Flag.			    */
+		naca    : 1,    	/* Normal ACA.  		    */
+			: 3,    	/* Reserved.    		    */
+		vendor  : 2;    	/* Vendor Unique.       	    */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+	uint8_t vendor  : 2,   	 	/* Vendor Unique.  	    	    */
+			: 3,    	/* Reserved.    		    */
+		naca    : 1,    	/* Normal ACA.  		    */
+		flag    : 1,    	/* Flag.			    */
+		link    : 1;    	/* Link.			[9] */
+#else
+#       error "bitfield ordering is NOT defined!"
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+} WriteBuffer_CDB_t;
 
 /************************************************************************
  *									*
