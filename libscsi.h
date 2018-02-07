@@ -1,7 +1,7 @@
 #ifndef LIBSCSI_H
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2016			    *
+ *			  COPYRIGHT (c) 2006 - 2018			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *

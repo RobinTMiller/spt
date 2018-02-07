@@ -1,7 +1,7 @@
 #!/bin/ksh
 #/****************************************************************************
 # *                                                                          *
-# *                       COPYRIGHT (c) 2006 - 2007                          *
+# *                       COPYRIGHT (c) 2006 - 2018                          *
 # *                        This Software Provided                            *
 # *                                  By                                      *
 # *                       Robin's Nest Software Inc.                         *

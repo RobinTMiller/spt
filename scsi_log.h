@@ -2,7 +2,7 @@
 #define SCSI_LOG_H 1
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2017			    *
+ *			  COPYRIGHT (c) 2006 - 2018			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
