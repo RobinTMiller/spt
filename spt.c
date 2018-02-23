@@ -688,7 +688,6 @@ cleanup_devices(scsi_device_t *sdp, hbool_t master)
                 msdp->stdout_bufptr += sprintf(msdp->stdout_bufptr, "%.*s", slen, sdp->stdout_buffer);
                 msdp->stdout_remaining -= slen;
             }
-	    printf("%s", sdp->stdout_buffer);
 	}
 	Free(sdp, sdp->stdout_buffer);
 	sdp->stdout_buffer = NULL;
