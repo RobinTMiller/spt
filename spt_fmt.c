@@ -32,6 +32,10 @@
  *
  * Modification History:
  *
+ * March 16th, 2018 by Robin T. Miller
+ *      When unpacking data, allow index to be of any radix, thereby
+ * allowing the default decimal along with 0x prefix for values.
+ * 
  * November 8th, 2017 by Robin T. Miller
  *      Add "%adsf" to format the alternate device name.
  * 
@@ -146,7 +150,7 @@ int verify_unpack_range(scsi_device_t *sdp, int offset, int size, int limit);
  *	buffer = Buffer for formatted message.
  *
  * Outputs:
- *	Returns the formatted prefix buffer length.
+ *	Returns the formatted buffer length.
  */
 int
 FmtEmitStatus(scsi_device_t *sdp, io_params_t *uiop, scsi_generic_t *usgp, char *format, char *buffer)
@@ -1191,6 +1195,7 @@ FmtUnpackString(scsi_device_t *sdp, char *format, unsigned char *data, size_t co
     ssize_t	length = strlen(format);
     char	*eptr = NULL;
     uint32_t	offset = 0;
+    int		base = ANY_RADIX;
 
     *to = '\0';
     while (length--) {
@@ -1201,12 +1206,12 @@ FmtUnpackString(scsi_device_t *sdp, char *format, unsigned char *data, size_t co
 		int i, len;
 		/* The index is optional, so '::length' is valid. */
 		if (*key != ':') {
-		    offset = strtoul(key, &eptr, 10);
+		    offset = strtoul(key, &eptr, base);
 		    if (eptr) key = eptr;
 		}
 		/* The length is required. */
 		if ( match(&key, ":") ) {
-		    len = strtol(key, &eptr, 10);
+		    len = strtol(key, &eptr, base);
 		    key = eptr;
 		} else {
 		    Eprintf(sdp, "Missing ':', format is: %%C[HAR]:index:length\n");
@@ -1251,7 +1256,7 @@ FmtUnpackString(scsi_device_t *sdp, char *format, unsigned char *data, size_t co
 		int len, start = 0, max_bits = 8;
 		/* The index is optional, so '::start:end' is valid. */
 		if (*key != ':') {
-		    offset = strtoul(key, &eptr, 10);
+		    offset = strtoul(key, &eptr, base);
 		    if (eptr) key = eptr;
 		}
 		if ( verify_unpack_range(sdp, offset, sizeof(uint8_t), (int)count) ) {
@@ -1259,12 +1264,12 @@ FmtUnpackString(scsi_device_t *sdp, char *format, unsigned char *data, size_t co
 		}
 		/* The starting bit is optional, defailts to 0. */
 		if ( match(&key, ":") && *key != ':' ) {
-		    start = strtol(key, &eptr, 10);
+		    start = strtol(key, &eptr, base);
 		    key = eptr;
 		}
 		/* The length is required. */
 		if ( match(&key, ":") ) {
-		    len = strtol(key, &eptr, 10);
+		    len = strtol(key, &eptr, base);
 		    if (len > max_bits) {
 			Eprintf(sdp, "Bit field length is too large, max is %u bits\n", max_bits);
 			return(NULL);
@@ -1286,7 +1291,7 @@ FmtUnpackString(scsi_device_t *sdp, char *format, unsigned char *data, size_t co
 		if ( verify_unpack_range(sdp, offset, 0, (int)count) ) {
 		    return(NULL);
 		}
-		offset = strtoul(key, &eptr, 10);
+		offset = strtoul(key, &eptr, base);
 		if (eptr) key = eptr;
 		from = key;
 		length -= (key - from);
@@ -1296,7 +1301,7 @@ FmtUnpackString(scsi_device_t *sdp, char *format, unsigned char *data, size_t co
 		uint8_t value8 = 0;
 		(void)match(&key, "YTE");
 		if (match(&key, ":")) {
-		    offset = strtol(key, &eptr, 10);
+		    offset = strtol(key, &eptr, base);
 		    if (eptr) key = eptr;
 		}
 		if ( verify_unpack_range(sdp, offset, sizeof(uint8_t), (int)count) ) {
@@ -1313,7 +1318,7 @@ FmtUnpackString(scsi_device_t *sdp, char *format, unsigned char *data, size_t co
 		uint16_t value16 = 0;
 		(void)match(&key, "HORT");
 		if ( match(&key, ":") ) {
-		    offset = strtol(key, &eptr, 10);
+		    offset = strtol(key, &eptr, base);
 		    if (eptr) key = eptr;
 		}
 		if ( verify_unpack_range(sdp, offset, sizeof(uint16_t), (int)count) ) {
@@ -1330,7 +1335,7 @@ FmtUnpackString(scsi_device_t *sdp, char *format, unsigned char *data, size_t co
 		uint32_t value32 = 0;
 		(void)match(&key, "ORD");
 		if ( match(&key, ":") ) {
-		    offset = strtol(key, &eptr, 10);
+		    offset = strtol(key, &eptr, base);
 		    if (eptr) key = eptr;
 		}
 		if ( verify_unpack_range(sdp, offset, sizeof(uint32_t), (int)count) ) {
@@ -1347,7 +1352,7 @@ FmtUnpackString(scsi_device_t *sdp, char *format, unsigned char *data, size_t co
 		uint64_t value64 = 0;
 		(void)match(&key, "ONG");
 		if ( match(&key, ":") ) {
-		    offset = strtol(key, &eptr, 10);
+		    offset = strtol(key, &eptr, base);
 		    if (eptr) key = eptr;
 		}
 		if ( verify_unpack_range(sdp, offset, sizeof(uint64_t), (int)count) ) {

@@ -74,6 +74,7 @@
 #else /* !defined(WIN32) */
 #  include <pthread.h>
 #  include <unistd.h>
+#  include <strings.h>      /* for strcasecmp() */
 #  include <termios.h>
 #  include <sys/param.h>
 #  include <sys/time.h>
@@ -133,6 +134,7 @@
 #define JsonPrettyFlagDefault	True
 #define PreWriteFlagDefault	True
 #define ReadAfterWriteDefault	False
+#define ShowCachingFlagDefault  False
 #define UniquePatternDefault	True
 
 #define LogHeaderFlagDefault	False
@@ -289,7 +291,8 @@ typedef enum spt_op {
     SCSI_CDB_OP,
     SCAN_BUS_OP,
     RESUME_IO_OP,
-    SUSPEND_IO_OP
+    SUSPEND_IO_OP,
+    SHOW_DEVICES_OP
 } spt_op_t;
 
 /*
@@ -409,15 +412,6 @@ typedef struct {
     /* This is from Inquiry VPD 0xB2, Logical Block Provisioning Page. */
     uint8_t	provisioning_type;	/* The provisioning type.	*/
     hbool_t	warning_displayed;	/* Multiple warnings flag.	*/
-
-#if defined(HGST)
-    /* Parameters for collecting E6 logs. */
-    uint8_t     *e6_modes;              /* The E6 modes list.           */
-    uint8_t     e6_modes_entries;       /* The number of E6 modes.      */
-    uint8_t     e6_modes_index;         /* The E6 modes index.          */
-    uint32_t    e6_mode_data_size;      /* The mode data size.          */
-    uint32_t    e6_mode_offset;         /* The E6 mode offset.          */
-#endif /* defined(HGST) */
 
     scsi_information_t *sip;		/* Various SCSI information.	*/
 
@@ -646,6 +640,16 @@ typedef struct scsi_device {
     int		ses_element_index;	/* The element index.		*/
 
     /*
+     * Show Device Parameters:
+     */
+    hbool_t     show_caching_flag;      /* Show device caching flag.    */
+    hbool_t	show_header_flag;    	/* Show devices header flag.    */
+    scsi_filters_t scsi_filters;        /* The SCSI show filters.       */
+    char	*show_fields;   	/* The show brief fields.       */
+    char        *show_format;           /* The SCSI show format.        */
+    char        *show_paths;            /* The show devices path(s).    */
+
+    /*
      * Shared Library Parameters:
      */
     hbool_t     shared_library;         /* Shared library interface.    */
@@ -656,7 +660,6 @@ typedef struct scsi_device {
     char        *stdout_bufptr;         /* Updated stdout buffer ptr.   */
     char        *emit_status_buffer;    /* The emit status buffer.      */
     char        *emit_status_bufptr;    /* The emit status buffer ptr.  */
-    /* Note: These are not currently used, but may be implemented later. */
     int         stderr_length;          /* The stderr buffer length.    */
     int         stderr_remaining;       /* The stderr bytes remaining.  */
     int         stdout_length;          /* The stdout buffer length.    */
@@ -710,18 +713,27 @@ extern clock_t hertz;
 extern char *OurName;
 extern hbool_t DebugFlag, InteractiveFlag, mDebugFlag, PipeModeFlag;
 extern volatile hbool_t CmdInterruptedFlag;
+/* Functions used for parsing. */
+extern int HandleExit(scsi_device_t *sdp, int status);
 extern hbool_t match(char **sptr, char *s);
+extern uint32_t number(scsi_device_t *sdp, char *str, int base);
+extern uint64_t large_number(scsi_device_t *sdp, char *str, int base);
+extern time_t mstime_value(scsi_device_t *sdp, char *str);
+extern time_t time_value(scsi_device_t *sdp, char *str);
 
 /* spt_inquiry.c */
 extern int inquiry_encode(void *arg);
 extern int inquiry_decode(void *arg);
 extern int setup_inquiry(scsi_device_t *sdp, scsi_generic_t *sgp, size_t data_length, uint8_t page);
 extern uint8_t find_inquiry_page_code(scsi_device_t *sdp, char *page_name, int *status);
+extern char *GetDeviceType(uint8_t device_type, hbool_t full_name);
+extern uint8_t GetDeviceTypeCode(scsi_device_t *sdp, char *device_type, int *status);
+extern char *GetVendorSerialNumber(scsi_device_t *sdp, inquiry_t *inquiry);
 
 /* scsi_opcodes.c */
 int setup_read_capacity16(scsi_device_t *sdp, scsi_generic_t *sgp);
 int setup_request_sense(scsi_device_t *sdp, scsi_generic_t *sgp);
-extern void ShowScsiOpcodes(scsi_device_t *sdp);
+extern void ShowScsiOpcodes(scsi_device_t *sdp, char *opstr);
 
 /* spt_fmt.c */
 extern int FmtEmitStatus(scsi_device_t *sdp, io_params_t *uiop, scsi_generic_t *usgp, char *format, char *buffer);
@@ -743,7 +755,7 @@ extern void report_nomem(scsi_device_t *sdp, size_t bytes);
 #define Free(sdp,ptr)		free(ptr)
 #define FreeMem(sdp,ptr,size)	\
   if (ptr) { memset(ptr, 0xdd, size); free(ptr); }
-#define FreeStr(dip,ptr)	\
+#define FreeStr(sdp,ptr)	\
   if (ptr) { memset(ptr, 0xdd, strlen(ptr)); free(ptr); }
 
 INLINE void* Malloc(scsi_device_t *sdp, size_t bytes)
@@ -818,6 +830,13 @@ extern int get_inquiry_information(scsi_device_t *sdp, io_params_t *iop, scsi_ge
 extern void report_scsi_information(scsi_device_t *sdp);
 extern void report_standard_scsi_information(scsi_device_t *sdp, io_params_t *iop);
 
+/* spt_ses.c */
+extern int parse_ses_args(char *string, scsi_device_t *sdp);
+
+/* spt_show.c */
+extern int parse_show_devices_args(scsi_device_t *sdp, char **argv, int argc, int *arg_index);
+extern int show_devices(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp);
+
 /* spt_usage.c */
 extern char *version_str;
 extern void Usage(scsi_device_t *sdp);
@@ -861,9 +880,12 @@ extern int FormatElapstedTime(char *buffer, clock_t ticks);
 extern int Fputs(char *str, FILE *stream);
 extern hbool_t isHexString(char *s);
 
+/* scsidata.c */
+extern int parse_show_scsi_args(scsi_device_t *sdp, char **argv, int argc, int *arg_index);
+
 /*
- * OS Specific Functions: (dtunix.c and dtwin.c)
- * Note: These must be here since they reference the dinfo structure! :-(
+ * OS Specific Functions: (spt_unix.c and spt_win.c)
+ * Note: These must be here since they reference the SCSI device structure! :-(
  */
 extern char *os_getcwd(void);
 extern uint64_t os_get_file_size(char *path, HANDLE handle);

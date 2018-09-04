@@ -70,6 +70,17 @@
 #define DIAG_SUBENCLOSURE_NICKNAME_CONTROL_PAGE 0x0F
 
 /*
+ * Celestica Vendor Specific Enclosure Diagnostic Pages:
+ */
+#define DIAG_CLI_OVER_SES_CONTROL_PAGE  0x10
+#define DIAG_TIMESTAMP_GET_SET_PAGE     0x11
+#define DIAG_VPD_CONTROL_PAGE           0x12
+#define DIAG_LOG_CONTROL_PAGE           0x13
+#define DIAG_PHY_CONTROL_PAGE           0x14
+#define DIAG_ERROR_INJECTION_CONTROL_PAGE 0x15
+#define DIAG_STATE_PRESERVATION_STATUS_PAGE 0x16
+
+/*
  * Block Device (disk) Page:
  */
 #define DIAG_TRANS_ADDR_PAGE    0x40    /* Translate address page.      */

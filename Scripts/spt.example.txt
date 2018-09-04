@@ -1,0 +1,819 @@
+[root@cos-lab-test13 testhelper]# cat disktests.spt 
+# Emit string, customize as you see fit! (roll your own :-)
+# Note: This can be done via SPT_EMIT_STATUS environment variable.
+# spt operates quietly, unless errors are detected, without the emit option.
+emit="\n \
+                       Thread: %thread\n \
+                  Device Name: %dsf\n \
+                  Device Info: Block Length=%device_size, Capacity=%capacity\n \
+                  Block Range: %starting - %ending\n \
+                    SCSI Name: %scsi_name\n \
+                     SCSI CDB: %cdb\n \
+               Data Direction: %dir\n \
+                  Data Length: %length\n \
+                  Exit Status: %status = %status_msg\n \
+                  Host Status: %host_status = %host_msg\n \
+                Driver Status: %driver_status = %driver_msg\n \
+                  SCSI Status: %scsi_status = %scsi_msg\n \
+                   Sense Code: %sense_code = %sense_msg\n \
+                    Sense Key: %sense_key = %skey_msg\n \
+                      asc/asq: (%asc, %asq) = %ascq_msg\n \
+            Bytes Transferred: %xfer (data bytes transferred)\n \
+                     Residual: %resid (bytes not transferred)\n \
+                   Iterations: %iterations\n \
+                  Total Bytes: %total_bytes\n \
+                 Total Blocks: %total_blocks\n \
+             Total Operations: %total_operations\n \
+                   Sense Data: %sense_data\n \
+                 Elapsed Time: %elapsed_time\n \
+                Starting Time: %start_time\n \
+                  Ending Time: %end_time\n"
+
+# Set a device to operate one:
+# The SPT_DEVICE environment variable can also be defined.
+dsf=/dev/sdb
+ 
+# Note: These are sticky! (persistent)
+enable=sense,Debug keepalivet=30
+logprefix="%seq %ymd %hms %et %prog (j:%job t:%thread): "
+
+# Read and display Inquiry in user friendly format:
+cdb=12 enable=encode,decode
+# Verify standard Inquiry data:
+# Note: Byte 6 may or may not have port set!
+cdb='12 00 00 00 ff 00' dir=read length=255 \
+    expect=BYTE:2:6,0x12,0x9f,0x01,0x10 expect=C:8:'HGST    ','HUSMR1625ASS200' expect=CHAR:32:'A300' disable=verbose
+# Test Unit Ready:
+cdb=0
+# Read Capacity (16):
+cdb="9e 10" enable=encode,decode
+# Write(16)
+cdb=8a starting=0 bs=64k limit=1g pattern=iot enable=raw
+# Write and Verify(16)
+cdb=8e bs=256k starting=0 limit=1m pattern=iot
+# Read(16)
+cdb=88 starting=0 bs=64k limit=1g pattern=iot
+# Verify(10)
+cdb=2f starting=0 limit=1g timeout=120000
+# Verify(16) Note: This is failing!
+#cdb=8f starting=0 limit=1g timeout=120000
+# Write Same(16)
+cdb=93 dir=write starting=0 length=4k limit=1t timeout=120000 slices=10
+[root@cos-lab-test13 testhelper]# 
+[root@cos-lab-test13 testhelper]# spt script=disktests
+spt> logprefix="%seq %ymd %hms %et %prog (j:%job t:%thread): "
+spt> 
+spt> # Read and display Inquiry in user friendly format:
+spt> cdb=12 enable=encode,decode
+       0 20160527 122009 00m00.00s spt (j:1 t:1): 
+       1 20160527 122009 00m00.00s spt (j:1 t:1): Inquiry Information:
+       2 20160527 122009 00m00.00s spt (j:1 t:1): 
+       3 20160527 122009 00m00.00s spt (j:1 t:1):                 Peripheral Device Type: 0 (Direct Access)
+       4 20160527 122009 00m00.00s spt (j:1 t:1):                   Peripheral Qualifier: 0 (Peripheral Device Connected)
+       5 20160527 122009 00m00.00s spt (j:1 t:1):                   Device Type Modifier: 0
+       6 20160527 122009 00m00.00s spt (j:1 t:1):                        Removable Media: No
+       7 20160527 122009 00m00.00s spt (j:1 t:1):                           ANSI Version: 6 (Complies to ANSI Working Draft, SPC-4)
+       8 20160527 122009 00m00.00s spt (j:1 t:1):                           ECMA Version: 0
+       9 20160527 122009 00m00.00s spt (j:1 t:1):                            ISO Version: 0
+      10 20160527 122009 00m00.00s spt (j:1 t:1):                   Response Data Format: 2 (SCSI-2)
+      11 20160527 122009 00m00.00s spt (j:1 t:1):                   Hierarchical Support: Yes
+      12 20160527 122009 00m00.00s spt (j:1 t:1):                     Normal ACA Support: No
+      13 20160527 122009 00m00.00s spt (j:1 t:1):                      Additional Length: 159
+      14 20160527 122009 00m00.00s spt (j:1 t:1):        Supports Protection Information: Yes
+      15 20160527 122009 00m00.00s spt (j:1 t:1):               Third Party Copy Support: No
+      16 20160527 122009 00m00.00s spt (j:1 t:1):              Target Port Group Support: 0 (ALUA not supported)
+      17 20160527 122009 00m00.00s spt (j:1 t:1):            Access Controls Coordinator: No
+      18 20160527 122009 00m00.00s spt (j:1 t:1):          Storage Controller Components: No
+      19 20160527 122009 00m00.00s spt (j:1 t:1):                 Medium Changer Support: No
+      20 20160527 122009 00m00.00s spt (j:1 t:1):              Multi-port Device Support: Yes
+      21 20160527 122009 00m00.00s spt (j:1 t:1):            Embedded Enclosure Services: No
+      22 20160527 122009 00m00.00s spt (j:1 t:1):                  Basic Command Queuing: No
+      23 20160527 122009 00m00.00s spt (j:1 t:1):                Command Queuing Support: Yes
+      24 20160527 122009 00m00.00s spt (j:1 t:1):                 Linked Command Support: No
+      25 20160527 122009 00m00.00s spt (j:1 t:1):             Synchronous Data Transfers: No
+      26 20160527 122009 00m00.00s spt (j:1 t:1):           Support for 16 Bit Transfers: No
+      27 20160527 122009 00m00.00s spt (j:1 t:1):                  Vendor Identification: HGST    
+      28 20160527 122009 00m00.00s spt (j:1 t:1):                 Product Identification: HUSMR1625ASS200 
+      29 20160527 122009 00m00.00s spt (j:1 t:1):                Firmware Revision Level: A300
+      30 20160527 122009 00m00.00s spt (j:1 t:1):                   Vendor Specific Data: 30 50 59 32 37 32 33 41 00 00 00 00 00 00 00 00 00 00 00 00 "0PY2723A            "
+      31 20160527 122009 00m00.00s spt (j:1 t:1):                                         00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 "                    "
+      32 20160527 122009 00m00.00s spt (j:1 t:1):                                         00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 "                    "
+      33 20160527 122009 00m00.00s spt (j:1 t:1):                                         43 6f 70 79 72 69 67 68 74 20 28 43 29 20 48 47 53 54 2c 20 "Copyright (C) HGST, "
+      34 20160527 122009 00m00.00s spt (j:1 t:1):                                         61 20 57 65 73 74 65 72 6e 20 44 69 67 69 74 61 6c 20 43 6f "a Western Digital Co"
+      35 20160527 122009 00m00.00s spt (j:1 t:1):                                         6d 70 61 6e 79 2e 20 20 20 20 00 00 00 00 00 00 00 00 00 00 "mpany.              "
+      36 20160527 122009 00m00.00s spt (j:1 t:1):                                         00 00 00 00 00 00 00 00                                     "        "
+      37 20160527 122009 00m00.00s spt (j:1 t:1): 
+      38 20160527 122009 00m00.00s spt (j:1 t:1): Data Read for SCSI opcode 0x12 (Inquiry), 164 bytes: (thread 1)
+      39 20160527 122009 00m00.00s spt (j:1 t:1): 
+      40 20160527 122009 00m00.00s spt (j:1 t:1): Offset  Data
+      41 20160527 122009 00m00.00s spt (j:1 t:1): 000000  00 00 06 12 9f 01 10 02 48 47 53 54 20 20 20 20 "        HGST    "
+      42 20160527 122009 00m00.00s spt (j:1 t:1): 000016  48 55 53 4d 52 31 36 32 35 41 53 53 32 30 30 20 "HUSMR1625ASS200 "
+      43 20160527 122009 00m00.00s spt (j:1 t:1): 000032  41 33 30 30 30 50 59 32 37 32 33 41 00 00 00 00 "A3000PY2723A    "
+      44 20160527 122009 00m00.00s spt (j:1 t:1): 000048  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 "                "
+      45 20160527 122009 00m00.00s spt (j:1 t:1): 000064  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 "                "
+      46 20160527 122009 00m00.00s spt (j:1 t:1): 000080  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 "                "
+      47 20160527 122009 00m00.00s spt (j:1 t:1): 000096  43 6f 70 79 72 69 67 68 74 20 28 43 29 20 48 47 "Copyright (C) HG"
+      48 20160527 122009 00m00.00s spt (j:1 t:1): 000112  53 54 2c 20 61 20 57 65 73 74 65 72 6e 20 44 69 "ST, a Western Di"
+      49 20160527 122009 00m00.00s spt (j:1 t:1): 000128  67 69 74 61 6c 20 43 6f 6d 70 61 6e 79 2e 20 20 "gital Company.  "
+      50 20160527 122009 00m00.00s spt (j:1 t:1): 000144  20 20 00 00 00 00 00 00 00 00 00 00 00 00 00 00 "                "
+      51 20160527 122009 00m00.00s spt (j:1 t:1): 000160  00 00 00 00                                     "    "
+      52 20160527 122009 00m00.00s spt (j:1 t:1): 
+      53 20160527 122009 00m00.00s spt (j:1 t:1):                         Thread: 1
+      54 20160527 122009 00m00.00s spt (j:1 t:1):                    Device Name: /dev/sdb
+      55 20160527 122009 00m00.00s spt (j:1 t:1):                    Device Info: Block Length=512, Capacity=0
+      56 20160527 122009 00m00.00s spt (j:1 t:1):                    Block Range: 0 - 0
+      57 20160527 122009 00m00.00s spt (j:1 t:1):                      SCSI Name: Inquiry
+      58 20160527 122009 00m00.00s spt (j:1 t:1):                       SCSI CDB: 12 00 00 00 ff 00
+      59 20160527 122009 00m00.00s spt (j:1 t:1):                 Data Direction: read
+      60 20160527 122009 00m00.00s spt (j:1 t:1):                    Data Length: 255
+      61 20160527 122009 00m00.00s spt (j:1 t:1):                    Exit Status: 0 = SUCCESS
+      62 20160527 122009 00m00.00s spt (j:1 t:1):                    Host Status: 0 = DID_OK
+      63 20160527 122009 00m00.00s spt (j:1 t:1):                  Driver Status: 0 = DRIVER_OK
+      64 20160527 122009 00m00.00s spt (j:1 t:1):                    SCSI Status: 0 = SCSI_GOOD
+      65 20160527 122009 00m00.00s spt (j:1 t:1):                     Sense Code: 0 = NO CODE
+      66 20160527 122009 00m00.00s spt (j:1 t:1):                      Sense Key: 0 = NO SENSE
+      67 20160527 122009 00m00.00s spt (j:1 t:1):                        asc/asq: (00, 00) = No additional sense information
+      68 20160527 122009 00m00.00s spt (j:1 t:1):              Bytes Transferred: 164 (data bytes transferred)
+      69 20160527 122009 00m00.00s spt (j:1 t:1):                       Residual: 91 (bytes not transferred)
+      70 20160527 122009 00m00.00s spt (j:1 t:1):                     Iterations: 1
+      71 20160527 122009 00m00.00s spt (j:1 t:1):                    Total Bytes: 164
+      72 20160527 122009 00m00.00s spt (j:1 t:1):                   Total Blocks: 1
+      73 20160527 122009 00m00.00s spt (j:1 t:1):               Total Operations: 1
+      74 20160527 122009 00m00.00s spt (j:1 t:1):                     Sense Data: 00 00 00 00 00 00 00 00
+      75 20160527 122009 00m00.00s spt (j:1 t:1):                   Elapsed Time: 00m00.00s
+      76 20160527 122009 00m00.00s spt (j:1 t:1):                  Starting Time: Fri May 27 12:20:09 2016
+      77 20160527 122009 00m00.00s spt (j:1 t:1):                    Ending Time: Fri May 27 12:20:09 2016
+      78 20160527 122009 00m00.00s spt (j:1 t:1): 
+spt> # Verify standard Inquiry data:
+spt> # Note: Byte 6 may or may not have port set!
+spt> cdb='12 00 00 00 ff 00' dir=read length=255     expect=BYTE:2:6,0x12,0x9f,0x01,0x10 expect=C:8:'HGST    ','HUSMR1625ASS200' expect=CHAR:32:'A300' disable=verbose
+       0 20160527 122009 00m00.00s spt (j:2 t:1): 
+       1 20160527 122009 00m00.00s spt (j:2 t:1):                         Thread: 1
+       2 20160527 122009 00m00.00s spt (j:2 t:1):                    Device Name: /dev/sdb
+       3 20160527 122009 00m00.00s spt (j:2 t:1):                    Device Info: Block Length=512, Capacity=0
+       4 20160527 122009 00m00.00s spt (j:2 t:1):                    Block Range: 0 - 0
+       5 20160527 122009 00m00.00s spt (j:2 t:1):                      SCSI Name: Inquiry
+       6 20160527 122009 00m00.00s spt (j:2 t:1):                       SCSI CDB: 12 00 00 00 ff 00
+       7 20160527 122009 00m00.00s spt (j:2 t:1):                 Data Direction: read
+       8 20160527 122009 00m00.00s spt (j:2 t:1):                    Data Length: 255
+       9 20160527 122009 00m00.00s spt (j:2 t:1):                    Exit Status: 0 = SUCCESS
+      10 20160527 122009 00m00.00s spt (j:2 t:1):                    Host Status: 0 = DID_OK
+      11 20160527 122009 00m00.00s spt (j:2 t:1):                  Driver Status: 0 = DRIVER_OK
+      12 20160527 122009 00m00.00s spt (j:2 t:1):                    SCSI Status: 0 = SCSI_GOOD
+      13 20160527 122009 00m00.00s spt (j:2 t:1):                     Sense Code: 0 = NO CODE
+      14 20160527 122009 00m00.00s spt (j:2 t:1):                      Sense Key: 0 = NO SENSE
+      15 20160527 122009 00m00.00s spt (j:2 t:1):                        asc/asq: (00, 00) = No additional sense information
+      16 20160527 122009 00m00.00s spt (j:2 t:1):              Bytes Transferred: 164 (data bytes transferred)
+      17 20160527 122009 00m00.00s spt (j:2 t:1):                       Residual: 91 (bytes not transferred)
+      18 20160527 122009 00m00.00s spt (j:2 t:1):                     Iterations: 1
+      19 20160527 122009 00m00.00s spt (j:2 t:1):                    Total Bytes: 164
+      20 20160527 122009 00m00.00s spt (j:2 t:1):                   Total Blocks: 1
+      21 20160527 122009 00m00.00s spt (j:2 t:1):               Total Operations: 1
+      22 20160527 122009 00m00.00s spt (j:2 t:1):                     Sense Data: 00 00 00 00 00 00 00 00
+      23 20160527 122009 00m00.00s spt (j:2 t:1):                   Elapsed Time: 00m00.00s
+      24 20160527 122009 00m00.00s spt (j:2 t:1):                  Starting Time: Fri May 27 12:20:09 2016
+      25 20160527 122009 00m00.00s spt (j:2 t:1):                    Ending Time: Fri May 27 12:20:09 2016
+      26 20160527 122009 00m00.00s spt (j:2 t:1): 
+spt> # Test Unit Ready:
+spt> cdb=0
+       0 20160527 122009 00m00.00s spt (j:3 t:1): 
+       1 20160527 122009 00m00.00s spt (j:3 t:1):                         Thread: 1
+       2 20160527 122009 00m00.00s spt (j:3 t:1):                    Device Name: /dev/sdb
+       3 20160527 122009 00m00.00s spt (j:3 t:1):                    Device Info: Block Length=512, Capacity=0
+       4 20160527 122009 00m00.00s spt (j:3 t:1):                    Block Range: 0 - 0
+       5 20160527 122009 00m00.00s spt (j:3 t:1):                      SCSI Name: Test Unit Ready
+       6 20160527 122009 00m00.00s spt (j:3 t:1):                       SCSI CDB: 00 00 00 00 00 00
+       7 20160527 122009 00m00.00s spt (j:3 t:1):                 Data Direction: none
+       8 20160527 122009 00m00.00s spt (j:3 t:1):                    Data Length: 0
+       9 20160527 122009 00m00.00s spt (j:3 t:1):                    Exit Status: 0 = SUCCESS
+      10 20160527 122009 00m00.00s spt (j:3 t:1):                    Host Status: 0 = DID_OK
+      11 20160527 122009 00m00.00s spt (j:3 t:1):                  Driver Status: 0 = DRIVER_OK
+      12 20160527 122009 00m00.00s spt (j:3 t:1):                    SCSI Status: 0 = SCSI_GOOD
+      13 20160527 122009 00m00.00s spt (j:3 t:1):                     Sense Code: 0 = NO CODE
+      14 20160527 122009 00m00.00s spt (j:3 t:1):                      Sense Key: 0 = NO SENSE
+      15 20160527 122009 00m00.00s spt (j:3 t:1):                        asc/asq: (00, 00) = No additional sense information
+      16 20160527 122009 00m00.00s spt (j:3 t:1):              Bytes Transferred: 0 (data bytes transferred)
+      17 20160527 122009 00m00.00s spt (j:3 t:1):                       Residual: 0 (bytes not transferred)
+      18 20160527 122009 00m00.00s spt (j:3 t:1):                     Iterations: 1
+      19 20160527 122009 00m00.00s spt (j:3 t:1):                    Total Bytes: 0
+      20 20160527 122009 00m00.00s spt (j:3 t:1):                   Total Blocks: 0
+      21 20160527 122009 00m00.00s spt (j:3 t:1):               Total Operations: 1
+      22 20160527 122009 00m00.00s spt (j:3 t:1):                     Sense Data: 00 00 00 00 00 00 00 00
+      23 20160527 122009 00m00.00s spt (j:3 t:1):                   Elapsed Time: 00m00.00s
+      24 20160527 122009 00m00.00s spt (j:3 t:1):                  Starting Time: Fri May 27 12:20:09 2016
+      25 20160527 122009 00m00.00s spt (j:3 t:1):                    Ending Time: Fri May 27 12:20:09 2016
+      26 20160527 122009 00m00.00s spt (j:3 t:1): 
+spt> # Read Capacity (16):
+spt> cdb="9e 10" enable=encode,decode
+       0 20160527 122009 00m00.00s spt (j:4 t:1): 
+       1 20160527 122009 00m00.00s spt (j:4 t:1): Read Capacity(16) Data: (data length 32 bytes)
+       2 20160527 122009 00m00.00s spt (j:4 t:1): 
+       3 20160527 122009 00m00.00s spt (j:4 t:1):                       Maximum Capacity: 488397167 (238475.179 megabytes)
+       4 20160527 122009 00m00.00s spt (j:4 t:1):                           Block Length: 512
+       5 20160527 122009 00m00.00s spt (j:4 t:1):                     Protection Enabled: No
+       6 20160527 122009 00m00.00s spt (j:4 t:1):                        Protection Type: 0
+       7 20160527 122009 00m00.00s spt (j:4 t:1):   Logical Blocks per Physical Exponent: 3 (8 blocks per physical)
+       8 20160527 122009 00m00.00s spt (j:4 t:1):        Protection Information Exponent: 0
+       9 20160527 122009 00m00.00s spt (j:4 t:1):  Logical Block Provisioning Management: Yes (Thin Provisioned)
+      10 20160527 122009 00m00.00s spt (j:4 t:1): Logical Block Provisioning Read Zeroes: Yes (unmapped blocks read as zero)
+      11 20160527 122009 00m00.00s spt (j:4 t:1):   Lowest Aligned Logical Block Address: 0
+      12 20160527 122009 00m00.00s spt (j:4 t:1): 
+      13 20160527 122009 00m00.00s spt (j:4 t:1):                         Thread: 1
+      14 20160527 122009 00m00.00s spt (j:4 t:1):                    Device Name: /dev/sdb
+      15 20160527 122009 00m00.00s spt (j:4 t:1):                    Device Info: Block Length=512, Capacity=0
+      16 20160527 122009 00m00.00s spt (j:4 t:1):                    Block Range: 0 - 0
+      17 20160527 122009 00m00.00s spt (j:4 t:1):                      SCSI Name: Read Capacity(16)
+      18 20160527 122009 00m00.00s spt (j:4 t:1):                       SCSI CDB: 9e 10 00 00 00 00 00 00 00 00 00 00 00 20 00 00
+      19 20160527 122009 00m00.00s spt (j:4 t:1):                 Data Direction: read
+      20 20160527 122009 00m00.00s spt (j:4 t:1):                    Data Length: 32
+      21 20160527 122009 00m00.00s spt (j:4 t:1):                    Exit Status: 0 = SUCCESS
+      22 20160527 122009 00m00.00s spt (j:4 t:1):                    Host Status: 0 = DID_OK
+      23 20160527 122009 00m00.00s spt (j:4 t:1):                  Driver Status: 0 = DRIVER_OK
+      24 20160527 122009 00m00.00s spt (j:4 t:1):                    SCSI Status: 0 = SCSI_GOOD
+      25 20160527 122009 00m00.00s spt (j:4 t:1):                     Sense Code: 0 = NO CODE
+      26 20160527 122009 00m00.00s spt (j:4 t:1):                      Sense Key: 0 = NO SENSE
+      27 20160527 122009 00m00.00s spt (j:4 t:1):                        asc/asq: (00, 00) = No additional sense information
+      28 20160527 122009 00m00.00s spt (j:4 t:1):              Bytes Transferred: 32 (data bytes transferred)
+      29 20160527 122009 00m00.00s spt (j:4 t:1):                       Residual: 0 (bytes not transferred)
+      30 20160527 122009 00m00.00s spt (j:4 t:1):                     Iterations: 1
+      31 20160527 122009 00m00.00s spt (j:4 t:1):                    Total Bytes: 32
+      32 20160527 122009 00m00.00s spt (j:4 t:1):                   Total Blocks: 1
+      33 20160527 122009 00m00.00s spt (j:4 t:1):               Total Operations: 1
+      34 20160527 122009 00m00.00s spt (j:4 t:1):                     Sense Data: 00 00 00 00 00 00 00 00
+      35 20160527 122009 00m00.00s spt (j:4 t:1):                   Elapsed Time: 00m00.00s
+      36 20160527 122009 00m00.00s spt (j:4 t:1):                  Starting Time: Fri May 27 12:20:09 2016
+      37 20160527 122009 00m00.00s spt (j:4 t:1):                    Ending Time: Fri May 27 12:20:09 2016
+      38 20160527 122009 00m00.00s spt (j:4 t:1): 
+spt> # Write(16)
+spt> cdb=8a starting=0 bs=64k limit=1g pattern=iot enable=raw
+       0 20160527 122009 00m00.00s spt (j:5 t:1): Device: /dev/sdb, Device Size: 512 bytes, Capacity: 488397167 blocks (thread 1)
+       1 20160527 122009 00m00.00s spt (j:5 t:1): Device: /dev/sdb, Starting lba=0, ending lba=2097151, block limit=2097152 (thread 1)
+       2 20160527 122024 00m15.11s spt (j:5 t:1): 
+       3 20160527 122024 00m15.11s spt (j:5 t:1):                         Thread: 1
+       4 20160527 122024 00m15.11s spt (j:5 t:1):                    Device Name: /dev/sdb
+       5 20160527 122024 00m15.11s spt (j:5 t:1):                    Device Info: Block Length=512, Capacity=488397167
+       6 20160527 122024 00m15.11s spt (j:5 t:1):                    Block Range: 0 - 2097152
+       7 20160527 122024 00m15.11s spt (j:5 t:1):                      SCSI Name: Write(16)
+       8 20160527 122024 00m15.11s spt (j:5 t:1):                       SCSI CDB: 8a 00 00 00 00 00 00 1f ff 80 00 00 00 80 00 00
+       9 20160527 122024 00m15.11s spt (j:5 t:1):                 Data Direction: write
+      10 20160527 122024 00m15.11s spt (j:5 t:1):                    Data Length: 65536
+      11 20160527 122024 00m15.11s spt (j:5 t:1):                    Exit Status: 0 = SUCCESS
+      12 20160527 122024 00m15.11s spt (j:5 t:1):                    Host Status: 0 = DID_OK
+      13 20160527 122024 00m15.11s spt (j:5 t:1):                  Driver Status: 0 = DRIVER_OK
+      14 20160527 122024 00m15.11s spt (j:5 t:1):                    SCSI Status: 0 = SCSI_GOOD
+      15 20160527 122024 00m15.11s spt (j:5 t:1):                     Sense Code: 0 = NO CODE
+      16 20160527 122024 00m15.11s spt (j:5 t:1):                      Sense Key: 0 = NO SENSE
+      17 20160527 122024 00m15.11s spt (j:5 t:1):                        asc/asq: (00, 00) = No additional sense information
+      18 20160527 122024 00m15.11s spt (j:5 t:1):              Bytes Transferred: 65536 (data bytes transferred)
+      19 20160527 122024 00m15.11s spt (j:5 t:1):                       Residual: 0 (bytes not transferred)
+      20 20160527 122024 00m15.11s spt (j:5 t:1):                     Iterations: 1
+      21 20160527 122024 00m15.11s spt (j:5 t:1):                    Total Bytes: 2147483648
+      22 20160527 122024 00m15.11s spt (j:5 t:1):                   Total Blocks: 4194304
+      23 20160527 122024 00m15.11s spt (j:5 t:1):               Total Operations: 32769
+      24 20160527 122024 00m15.11s spt (j:5 t:1):                     Sense Data: 00 00 00 00 00 00 00 00
+      25 20160527 122024 00m15.11s spt (j:5 t:1):                   Elapsed Time: 00m15.11s
+      26 20160527 122024 00m15.11s spt (j:5 t:1):                  Starting Time: Fri May 27 12:20:09 2016
+      27 20160527 122024 00m15.11s spt (j:5 t:1):                    Ending Time: Fri May 27 12:20:24 2016
+      28 20160527 122024 00m15.11s spt (j:5 t:1): 
+spt> # Write and Verify(16)
+spt> cdb=8e bs=256k starting=0 limit=1m pattern=iot
+       0 20160527 122024 00m00.00s spt (j:6 t:1): Device: /dev/sdb, Device Size: 512 bytes, Capacity: 488397167 blocks (thread 1)
+       1 20160527 122024 00m00.00s spt (j:6 t:1): Device: /dev/sdb, Starting lba=0, ending lba=2047, block limit=2048 (thread 1)
+       2 20160527 122024 00m00.01s spt (j:6 t:1): 
+       3 20160527 122024 00m00.01s spt (j:6 t:1):                         Thread: 1
+       4 20160527 122024 00m00.01s spt (j:6 t:1):                    Device Name: /dev/sdb
+       5 20160527 122024 00m00.01s spt (j:6 t:1):                    Device Info: Block Length=512, Capacity=488397167
+       6 20160527 122024 00m00.01s spt (j:6 t:1):                    Block Range: 0 - 2048
+       7 20160527 122024 00m00.01s spt (j:6 t:1):                      SCSI Name: Write and Verify(16)
+       8 20160527 122024 00m00.01s spt (j:6 t:1):                       SCSI CDB: 8e 00 00 00 00 00 00 00 06 00 00 00 02 00 00 00
+       9 20160527 122024 00m00.01s spt (j:6 t:1):                 Data Direction: write
+      10 20160527 122024 00m00.01s spt (j:6 t:1):                    Data Length: 262144
+      11 20160527 122024 00m00.01s spt (j:6 t:1):                    Exit Status: 0 = SUCCESS
+      12 20160527 122024 00m00.01s spt (j:6 t:1):                    Host Status: 0 = DID_OK
+      13 20160527 122024 00m00.01s spt (j:6 t:1):                  Driver Status: 0 = DRIVER_OK
+      14 20160527 122024 00m00.01s spt (j:6 t:1):                    SCSI Status: 0 = SCSI_GOOD
+      15 20160527 122024 00m00.01s spt (j:6 t:1):                     Sense Code: 0 = NO CODE
+      16 20160527 122024 00m00.01s spt (j:6 t:1):                      Sense Key: 0 = NO SENSE
+      17 20160527 122024 00m00.01s spt (j:6 t:1):                        asc/asq: (00, 00) = No additional sense information
+      18 20160527 122024 00m00.01s spt (j:6 t:1):              Bytes Transferred: 262144 (data bytes transferred)
+      19 20160527 122024 00m00.01s spt (j:6 t:1):                       Residual: 0 (bytes not transferred)
+      20 20160527 122024 00m00.01s spt (j:6 t:1):                     Iterations: 1
+      21 20160527 122024 00m00.01s spt (j:6 t:1):                    Total Bytes: 2097152
+      22 20160527 122024 00m00.01s spt (j:6 t:1):                   Total Blocks: 4096
+      23 20160527 122024 00m00.01s spt (j:6 t:1):               Total Operations: 9
+      24 20160527 122024 00m00.01s spt (j:6 t:1):                     Sense Data: 00 00 00 00 00 00 00 00
+      25 20160527 122024 00m00.01s spt (j:6 t:1):                   Elapsed Time: 00m00.01s
+      26 20160527 122024 00m00.01s spt (j:6 t:1):                  Starting Time: Fri May 27 12:20:24 2016
+      27 20160527 122024 00m00.01s spt (j:6 t:1):                    Ending Time: Fri May 27 12:20:24 2016
+      28 20160527 122024 00m00.01s spt (j:6 t:1): 
+spt> # Read(16)
+spt> cdb=88 starting=0 bs=64k limit=1g pattern=iot
+       0 20160527 122024 00m00.00s spt (j:7 t:1): Device: /dev/sdb, Device Size: 512 bytes, Capacity: 488397167 blocks (thread 1)
+       1 20160527 122024 00m00.00s spt (j:7 t:1): Device: /dev/sdb, Starting lba=0, ending lba=2097151, block limit=2097152 (thread 1)
+       2 20160527 122028 00m03.34s spt (j:7 t:1): 
+       3 20160527 122028 00m03.34s spt (j:7 t:1):                         Thread: 1
+       4 20160527 122028 00m03.34s spt (j:7 t:1):                    Device Name: /dev/sdb
+       5 20160527 122028 00m03.34s spt (j:7 t:1):                    Device Info: Block Length=512, Capacity=488397167
+       6 20160527 122028 00m03.34s spt (j:7 t:1):                    Block Range: 0 - 2097152
+       7 20160527 122028 00m03.34s spt (j:7 t:1):                      SCSI Name: Read(16)
+       8 20160527 122028 00m03.34s spt (j:7 t:1):                       SCSI CDB: 88 00 00 00 00 00 00 1f ff 80 00 00 00 80 00 00
+       9 20160527 122028 00m03.34s spt (j:7 t:1):                 Data Direction: read
+      10 20160527 122028 00m03.34s spt (j:7 t:1):                    Data Length: 65536
+      11 20160527 122028 00m03.34s spt (j:7 t:1):                    Exit Status: 0 = SUCCESS
+      12 20160527 122028 00m03.34s spt (j:7 t:1):                    Host Status: 0 = DID_OK
+      13 20160527 122028 00m03.34s spt (j:7 t:1):                  Driver Status: 0 = DRIVER_OK
+      14 20160527 122028 00m03.34s spt (j:7 t:1):                    SCSI Status: 0 = SCSI_GOOD
+      15 20160527 122028 00m03.34s spt (j:7 t:1):                     Sense Code: 0 = NO CODE
+      16 20160527 122028 00m03.34s spt (j:7 t:1):                      Sense Key: 0 = NO SENSE
+      17 20160527 122028 00m03.34s spt (j:7 t:1):                        asc/asq: (00, 00) = No additional sense information
+      18 20160527 122028 00m03.34s spt (j:7 t:1):              Bytes Transferred: 65536 (data bytes transferred)
+      19 20160527 122028 00m03.34s spt (j:7 t:1):                       Residual: 0 (bytes not transferred)
+      20 20160527 122028 00m03.34s spt (j:7 t:1):                     Iterations: 1
+      21 20160527 122028 00m03.34s spt (j:7 t:1):                    Total Bytes: 1073741824
+      22 20160527 122028 00m03.34s spt (j:7 t:1):                   Total Blocks: 2097152
+      23 20160527 122028 00m03.34s spt (j:7 t:1):               Total Operations: 16385
+      24 20160527 122028 00m03.34s spt (j:7 t:1):                     Sense Data: 00 00 00 00 00 00 00 00
+      25 20160527 122028 00m03.34s spt (j:7 t:1):                   Elapsed Time: 00m03.34s
+      26 20160527 122028 00m03.34s spt (j:7 t:1):                  Starting Time: Fri May 27 12:20:24 2016
+      27 20160527 122028 00m03.34s spt (j:7 t:1):                    Ending Time: Fri May 27 12:20:28 2016
+      28 20160527 122028 00m03.34s spt (j:7 t:1): 
+spt> # Verify(10)
+spt> cdb=2f starting=0 limit=1g timeout=120000
+       0 20160527 122028 00m00.00s spt (j:8 t:1): Device: /dev/sdb, Device Size: 512 bytes, Capacity: 488397167 blocks (thread 1)
+       1 20160527 122028 00m00.00s spt (j:8 t:1): Device: /dev/sdb, Starting lba=0, ending lba=2097151, block limit=2097152 (thread 1)
+       2 20160527 122029 00m01.08s spt (j:8 t:1): 
+       3 20160527 122029 00m01.08s spt (j:8 t:1):                         Thread: 1
+       4 20160527 122029 00m01.08s spt (j:8 t:1):                    Device Name: /dev/sdb
+       5 20160527 122029 00m01.08s spt (j:8 t:1):                    Device Info: Block Length=512, Capacity=488397167
+       6 20160527 122029 00m01.08s spt (j:8 t:1):                    Block Range: 0 - 2097152
+       7 20160527 122029 00m01.08s spt (j:8 t:1):                      SCSI Name: Verify(10)
+       8 20160527 122029 00m01.08s spt (j:8 t:1):                       SCSI CDB: 2f 00 00 1f ff e0 00 00 20 00
+       9 20160527 122029 00m01.08s spt (j:8 t:1):                 Data Direction: none
+      10 20160527 122029 00m01.08s spt (j:8 t:1):                    Data Length: 0
+      11 20160527 122029 00m01.08s spt (j:8 t:1):                    Exit Status: 0 = SUCCESS
+      12 20160527 122029 00m01.08s spt (j:8 t:1):                    Host Status: 0 = DID_OK
+      13 20160527 122029 00m01.08s spt (j:8 t:1):                  Driver Status: 0 = DRIVER_OK
+      14 20160527 122029 00m01.08s spt (j:8 t:1):                    SCSI Status: 0 = SCSI_GOOD
+      15 20160527 122029 00m01.08s spt (j:8 t:1):                     Sense Code: 0 = NO CODE
+      16 20160527 122029 00m01.08s spt (j:8 t:1):                      Sense Key: 0 = NO SENSE
+      17 20160527 122029 00m01.08s spt (j:8 t:1):                        asc/asq: (00, 00) = No additional sense information
+      18 20160527 122029 00m01.08s spt (j:8 t:1):              Bytes Transferred: 0 (data bytes transferred)
+      19 20160527 122029 00m01.08s spt (j:8 t:1):                       Residual: 0 (bytes not transferred)
+      20 20160527 122029 00m01.08s spt (j:8 t:1):                     Iterations: 1
+      21 20160527 122029 00m01.08s spt (j:8 t:1):                    Total Bytes: 0
+      22 20160527 122029 00m01.08s spt (j:8 t:1):                   Total Blocks: 2097152
+      23 20160527 122029 00m01.08s spt (j:8 t:1):               Total Operations: 34
+      24 20160527 122029 00m01.08s spt (j:8 t:1):                     Sense Data: 00 00 00 00 00 00 00 00
+      25 20160527 122029 00m01.08s spt (j:8 t:1):                   Elapsed Time: 00m01.08s
+      26 20160527 122029 00m01.08s spt (j:8 t:1):                  Starting Time: Fri May 27 12:20:28 2016
+      27 20160527 122029 00m01.08s spt (j:8 t:1):                    Ending Time: Fri May 27 12:20:29 2016
+      28 20160527 122029 00m01.08s spt (j:8 t:1): 
+spt> # Verify(16) Note: This is failing!
+spt> #cdb=8f starting=0 limit=1g timeout=120000
+spt> # Write Same(16)
+spt> cdb=93 dir=write starting=0 length=4k limit=1t timeout=120000 slices=10
+       0 20160527 122029 00m00.00s spt (j:8 t:0): Device: /dev/sdb, Device Size: 512 bytes, Capacity: 488397167 blocks (thread 0)
+       1 20160527 122029 00m00.00s spt (j:8 t:0): Device: /dev/sdb, Starting lba=0, ending lba=488397166, block limit=488397167 (thread 0)
+       2 20160527 122029 00m00.00s spt (j:9 t:1): Device: /dev/sdb, Starting lba=0, ending lba=48839715, block limit=48839716 (thread 1)
+       2 20160527 122029 00m00.00s spt (j:9 t:2): Device: /dev/sdb, Starting lba=48839716, ending lba=97679431, block limit=48839716 (thread 2)
+       2 20160527 122029 00m00.00s spt (j:9 t:3): Device: /dev/sdb, Starting lba=97679432, ending lba=146519147, block limit=48839716 (thread 3)
+       2 20160527 122029 00m00.00s spt (j:9 t:4): Device: /dev/sdb, Starting lba=146519148, ending lba=195358863, block limit=48839716 (thread 4)
+       2 20160527 122029 00m00.00s spt (j:9 t:5): Device: /dev/sdb, Starting lba=195358864, ending lba=244198579, block limit=48839716 (thread 5)
+       2 20160527 122029 00m00.00s spt (j:9 t:6): Device: /dev/sdb, Starting lba=244198580, ending lba=293038295, block limit=48839716 (thread 6)
+       2 20160527 122029 00m00.00s spt (j:9 t:7): Device: /dev/sdb, Starting lba=293038296, ending lba=341878011, block limit=48839716 (thread 7)
+       2 20160527 122029 00m00.00s spt (j:9 t:8): Device: /dev/sdb, Starting lba=341878012, ending lba=390717727, block limit=48839716 (thread 8)
+       2 20160527 122029 00m00.00s spt (j:9 t:9): Device: /dev/sdb, Starting lba=390717728, ending lba=439557443, block limit=48839716 (thread 9)
+       2 20160527 122029 00m00.00s spt (j:9 t:10): Device: /dev/sdb, Starting lba=439557444, ending lba=488397166, block limit=48839723 (thread 10)
+       3 20160527 122059 00m29.87s spt (j:9 t:5): /dev/sdb: Write Same(16), 96 ops, 48640 bytes, 3.200 iops, elapsed 00m29.87s
+       3 20160527 122059 00m29.94s spt (j:9 t:10): /dev/sdb: Write Same(16), 96 ops, 48640 bytes, 3.200 iops, elapsed 00m29.94s
+       3 20160527 122059 00m30.01s spt (j:9 t:7): /dev/sdb: Write Same(16), 96 ops, 48640 bytes, 3.200 iops, elapsed 00m30.01s
+       3 20160527 122059 00m30.06s spt (j:9 t:3): /dev/sdb: Write Same(16), 96 ops, 48640 bytes, 3.200 iops, elapsed 00m30.06s
+       3 20160527 122059 00m30.12s spt (j:9 t:6): /dev/sdb: Write Same(16), 96 ops, 48640 bytes, 3.200 iops, elapsed 00m30.12s
+       3 20160527 122059 00m30.19s spt (j:9 t:1): /dev/sdb: Write Same(16), 96 ops, 48640 bytes, 3.200 iops, elapsed 00m30.19s
+       3 20160527 122059 00m30.26s spt (j:9 t:2): /dev/sdb: Write Same(16), 96 ops, 48640 bytes, 3.200 iops, elapsed 00m30.26s
+       3 20160527 122059 00m30.32s spt (j:9 t:9): /dev/sdb: Write Same(16), 96 ops, 48640 bytes, 3.200 iops, elapsed 00m30.32s
+       3 20160527 122059 00m30.37s spt (j:9 t:4): /dev/sdb: Write Same(16), 96 ops, 48640 bytes, 3.200 iops, elapsed 00m30.37s
+       3 20160527 122100 00m30.93s spt (j:9 t:8): /dev/sdb: Write Same(16), 98 ops, 49664 bytes, 3.161 iops, elapsed 00m30.93s
+       4 20160527 122129 00m59.90s spt (j:9 t:7): /dev/sdb: Write Same(16), 188 ops, 95744 bytes, 3.133 iops, elapsed 00m59.90s
+       4 20160527 122129 00m59.96s spt (j:9 t:6): /dev/sdb: Write Same(16), 190 ops, 96768 bytes, 3.167 iops, elapsed 00m59.96s
+       4 20160527 122129 01m00.01s spt (j:9 t:2): /dev/sdb: Write Same(16), 190 ops, 96768 bytes, 3.167 iops, elapsed 01m00.01s
+       4 20160527 122129 01m00.07s spt (j:9 t:5): /dev/sdb: Write Same(16), 190 ops, 96768 bytes, 3.167 iops, elapsed 01m00.07s
+       4 20160527 122129 01m00.14s spt (j:9 t:3): /dev/sdb: Write Same(16), 190 ops, 96768 bytes, 3.167 iops, elapsed 01m00.14s
+       4 20160527 122129 01m00.21s spt (j:9 t:1): /dev/sdb: Write Same(16), 190 ops, 96768 bytes, 3.167 iops, elapsed 01m00.21s
+       4 20160527 122129 01m00.26s spt (j:9 t:9): /dev/sdb: Write Same(16), 190 ops, 96768 bytes, 3.167 iops, elapsed 01m00.26s
+       4 20160527 122129 01m00.39s spt (j:9 t:4): /dev/sdb: Write Same(16), 190 ops, 96768 bytes, 3.167 iops, elapsed 01m00.39s
+       4 20160527 122129 01m00.45s spt (j:9 t:10): /dev/sdb: Write Same(16), 190 ops, 96768 bytes, 3.167 iops, elapsed 01m00.45s
+       4 20160527 122130 01m00.94s spt (j:9 t:8): /dev/sdb: Write Same(16), 192 ops, 97792 bytes, 3.148 iops, elapsed 01m00.94s
+       5 20160527 122159 01m29.88s spt (j:9 t:4): /dev/sdb: Write Same(16), 280 ops, 142848 bytes, 3.111 iops, elapsed 01m29.88s
+       5 20160527 122159 01m29.96s spt (j:9 t:6): /dev/sdb: Write Same(16), 280 ops, 142848 bytes, 3.111 iops, elapsed 01m29.96s
+       5 20160527 122159 01m30.02s spt (j:9 t:1): /dev/sdb: Write Same(16), 280 ops, 142848 bytes, 3.111 iops, elapsed 01m30.02s
+       5 20160527 122159 01m30.07s spt (j:9 t:2): /dev/sdb: Write Same(16), 280 ops, 142848 bytes, 3.111 iops, elapsed 01m30.07s
+       5 20160527 122159 01m30.13s spt (j:9 t:10): /dev/sdb: Write Same(16), 280 ops, 142848 bytes, 3.111 iops, elapsed 01m30.13s
+       5 20160527 122159 01m30.25s spt (j:9 t:9): /dev/sdb: Write Same(16), 280 ops, 142848 bytes, 3.111 iops, elapsed 01m30.25s
+       5 20160527 122159 01m30.43s spt (j:9 t:3): /dev/sdb: Write Same(16), 282 ops, 143872 bytes, 3.133 iops, elapsed 01m30.43s
+       5 20160527 122159 01m30.61s spt (j:9 t:5): /dev/sdb: Write Same(16), 282 ops, 143872 bytes, 3.133 iops, elapsed 01m30.61s
+       5 20160527 122159 01m30.73s spt (j:9 t:7): /dev/sdb: Write Same(16), 280 ops, 142848 bytes, 3.111 iops, elapsed 01m30.73s
+       5 20160527 122200 01m31.33s spt (j:9 t:8): /dev/sdb: Write Same(16), 284 ops, 144896 bytes, 3.121 iops, elapsed 01m31.33s
+       6 20160527 122229 01m59.86s spt (j:9 t:1): /dev/sdb: Write Same(16), 372 ops, 189952 bytes, 3.100 iops, elapsed 01m59.86s
+       6 20160527 122229 01m59.93s spt (j:9 t:4): /dev/sdb: Write Same(16), 372 ops, 189952 bytes, 3.100 iops, elapsed 01m59.93s
+       6 20160527 122229 02m00.02s spt (j:9 t:5): /dev/sdb: Write Same(16), 372 ops, 189952 bytes, 3.100 iops, elapsed 02m00.02s
+       6 20160527 122229 02m00.09s spt (j:9 t:2): /dev/sdb: Write Same(16), 372 ops, 189952 bytes, 3.100 iops, elapsed 02m00.09s
+       6 20160527 122229 02m00.16s spt (j:9 t:6): /dev/sdb: Write Same(16), 372 ops, 189952 bytes, 3.100 iops, elapsed 02m00.16s
+       6 20160527 122229 02m00.30s spt (j:9 t:10): /dev/sdb: Write Same(16), 372 ops, 189952 bytes, 3.100 iops, elapsed 02m00.30s
+       6 20160527 122229 02m00.38s spt (j:9 t:7): /dev/sdb: Write Same(16), 370 ops, 188928 bytes, 3.083 iops, elapsed 02m00.38s
+       6 20160527 122229 02m00.46s spt (j:9 t:9): /dev/sdb: Write Same(16), 372 ops, 189952 bytes, 3.100 iops, elapsed 02m00.46s
+       6 20160527 122229 02m00.69s spt (j:9 t:3): /dev/sdb: Write Same(16), 374 ops, 190976 bytes, 3.117 iops, elapsed 02m00.69s
+       6 20160527 122230 02m01.00s spt (j:9 t:8): /dev/sdb: Write Same(16), 374 ops, 190976 bytes, 3.091 iops, elapsed 02m01.00s
+       7 20160527 122259 02m29.91s spt (j:9 t:6): /dev/sdb: Write Same(16), 458 ops, 233984 bytes, 3.053 iops, elapsed 02m29.91s
+       7 20160527 122259 02m30.00s spt (j:9 t:1): /dev/sdb: Write Same(16), 458 ops, 233984 bytes, 3.053 iops, elapsed 02m30.00s
+       7 20160527 122259 02m30.08s spt (j:9 t:4): /dev/sdb: Write Same(16), 458 ops, 233984 bytes, 3.053 iops, elapsed 02m30.08s
+       7 20160527 122259 02m30.16s spt (j:9 t:3): /dev/sdb: Write Same(16), 458 ops, 233984 bytes, 3.053 iops, elapsed 02m30.16s
+       7 20160527 122259 02m30.25s spt (j:9 t:10): /dev/sdb: Write Same(16), 458 ops, 233984 bytes, 3.053 iops, elapsed 02m30.25s
+       7 20160527 122259 02m30.33s spt (j:9 t:7): /dev/sdb: Write Same(16), 456 ops, 232960 bytes, 3.040 iops, elapsed 02m30.33s
+       7 20160527 122259 02m30.42s spt (j:9 t:2): /dev/sdb: Write Same(16), 458 ops, 233984 bytes, 3.053 iops, elapsed 02m30.42s
+       7 20160527 122259 02m30.59s spt (j:9 t:5): /dev/sdb: Write Same(16), 458 ops, 233984 bytes, 3.053 iops, elapsed 02m30.59s
+       7 20160527 122259 02m30.68s spt (j:9 t:9): /dev/sdb: Write Same(16), 458 ops, 233984 bytes, 3.053 iops, elapsed 02m30.68s
+       7 20160527 122300 02m31.09s spt (j:9 t:8): /dev/sdb: Write Same(16), 460 ops, 235008 bytes, 3.046 iops, elapsed 02m31.09s
+       8 20160527 122329 02m59.87s spt (j:9 t:4): /dev/sdb: Write Same(16), 532 ops, 271872 bytes, 2.956 iops, elapsed 02m59.87s
+       8 20160527 122329 02m59.93s spt (j:9 t:3): /dev/sdb: Write Same(16), 532 ops, 271872 bytes, 2.956 iops, elapsed 02m59.93s
+       8 20160527 122329 03m00.00s spt (j:9 t:7): /dev/sdb: Write Same(16), 530 ops, 270848 bytes, 2.944 iops, elapsed 03m00.00s
+       8 20160527 122329 03m00.06s spt (j:9 t:1): /dev/sdb: Write Same(16), 532 ops, 271872 bytes, 2.956 iops, elapsed 03m00.06s
+       8 20160527 122329 03m00.20s spt (j:9 t:10): /dev/sdb: Write Same(16), 532 ops, 271872 bytes, 2.956 iops, elapsed 03m00.20s
+       8 20160527 122329 03m00.25s spt (j:9 t:2): /dev/sdb: Write Same(16), 532 ops, 271872 bytes, 2.956 iops, elapsed 03m00.25s
+       8 20160527 122329 03m00.31s spt (j:9 t:5): /dev/sdb: Write Same(16), 532 ops, 271872 bytes, 2.956 iops, elapsed 03m00.31s
+       8 20160527 122329 03m00.38s spt (j:9 t:9): /dev/sdb: Write Same(16), 532 ops, 271872 bytes, 2.956 iops, elapsed 03m00.38s
+       8 20160527 122329 03m00.45s spt (j:9 t:6): /dev/sdb: Write Same(16), 534 ops, 272896 bytes, 2.967 iops, elapsed 03m00.45s
+       8 20160527 122330 03m01.41s spt (j:9 t:8): /dev/sdb: Write Same(16), 536 ops, 273920 bytes, 2.961 iops, elapsed 03m01.41s
+       9 20160527 122359 03m29.90s spt (j:9 t:4): /dev/sdb: Write Same(16), 608 ops, 310784 bytes, 2.895 iops, elapsed 03m29.90s
+       9 20160527 122359 03m30.01s spt (j:9 t:1): /dev/sdb: Write Same(16), 608 ops, 310784 bytes, 2.895 iops, elapsed 03m30.01s
+       9 20160527 122359 03m30.22s spt (j:9 t:7): /dev/sdb: Write Same(16), 606 ops, 309760 bytes, 2.886 iops, elapsed 03m30.22s
+       9 20160527 122359 03m30.32s spt (j:9 t:2): /dev/sdb: Write Same(16), 608 ops, 310784 bytes, 2.895 iops, elapsed 03m30.32s
+       9 20160527 122359 03m30.44s spt (j:9 t:10): /dev/sdb: Write Same(16), 608 ops, 310784 bytes, 2.895 iops, elapsed 03m30.44s
+       9 20160527 122359 03m30.55s spt (j:9 t:5): /dev/sdb: Write Same(16), 608 ops, 310784 bytes, 2.895 iops, elapsed 03m30.55s
+       9 20160527 122359 03m30.66s spt (j:9 t:9): /dev/sdb: Write Same(16), 608 ops, 310784 bytes, 2.895 iops, elapsed 03m30.66s
+       9 20160527 122359 03m30.77s spt (j:9 t:6): /dev/sdb: Write Same(16), 610 ops, 311808 bytes, 2.905 iops, elapsed 03m30.77s
+       9 20160527 122400 03m30.88s spt (j:9 t:8): /dev/sdb: Write Same(16), 610 ops, 311808 bytes, 2.891 iops, elapsed 03m30.88s
+       9 20160527 122400 03m30.98s spt (j:9 t:3): /dev/sdb: Write Same(16), 610 ops, 311808 bytes, 2.891 iops, elapsed 03m30.98s
+      10 20160527 122429 03m59.84s spt (j:9 t:1): /dev/sdb: Write Same(16), 684 ops, 349696 bytes, 2.850 iops, elapsed 03m59.84s
+      10 20160527 122429 03m59.97s spt (j:9 t:2): /dev/sdb: Write Same(16), 684 ops, 349696 bytes, 2.850 iops, elapsed 03m59.97s
+      10 20160527 122429 04m00.04s spt (j:9 t:10): /dev/sdb: Write Same(16), 684 ops, 349696 bytes, 2.850 iops, elapsed 04m00.04s
+      10 20160527 122429 04m00.10s spt (j:9 t:5): /dev/sdb: Write Same(16), 684 ops, 349696 bytes, 2.850 iops, elapsed 04m00.10s
+      10 20160527 122429 04m00.16s spt (j:9 t:9): /dev/sdb: Write Same(16), 684 ops, 349696 bytes, 2.850 iops, elapsed 04m00.16s
+      10 20160527 122429 04m00.22s spt (j:9 t:6): /dev/sdb: Write Same(16), 686 ops, 350720 bytes, 2.858 iops, elapsed 04m00.22s
+      10 20160527 122429 04m00.41s spt (j:9 t:7): /dev/sdb: Write Same(16), 684 ops, 349696 bytes, 2.850 iops, elapsed 04m00.41s
+      10 20160527 122429 04m00.47s spt (j:9 t:4): /dev/sdb: Write Same(16), 686 ops, 350720 bytes, 2.858 iops, elapsed 04m00.47s
+      10 20160527 122430 04m00.92s spt (j:9 t:3): /dev/sdb: Write Same(16), 688 ops, 351744 bytes, 2.855 iops, elapsed 04m00.92s
+      10 20160527 122430 04m01.04s spt (j:9 t:8): /dev/sdb: Write Same(16), 688 ops, 351744 bytes, 2.855 iops, elapsed 04m01.04s
+      11 20160527 122459 04m29.85s spt (j:9 t:2): /dev/sdb: Write Same(16), 766 ops, 391680 bytes, 2.837 iops, elapsed 04m29.85s
+      11 20160527 122459 04m29.92s spt (j:9 t:5): /dev/sdb: Write Same(16), 766 ops, 391680 bytes, 2.837 iops, elapsed 04m29.92s
+      11 20160527 122459 04m30.00s spt (j:9 t:10): /dev/sdb: Write Same(16), 766 ops, 391680 bytes, 2.837 iops, elapsed 04m30.00s
+      11 20160527 122459 04m30.08s spt (j:9 t:9): /dev/sdb: Write Same(16), 766 ops, 391680 bytes, 2.837 iops, elapsed 04m30.08s
+      11 20160527 122459 04m30.15s spt (j:9 t:6): /dev/sdb: Write Same(16), 768 ops, 392704 bytes, 2.844 iops, elapsed 04m30.15s
+      11 20160527 122459 04m30.36s spt (j:9 t:7): /dev/sdb: Write Same(16), 766 ops, 391680 bytes, 2.837 iops, elapsed 04m30.36s
+      11 20160527 122459 04m30.43s spt (j:9 t:1): /dev/sdb: Write Same(16), 768 ops, 392704 bytes, 2.844 iops, elapsed 04m30.43s
+      11 20160527 122459 04m30.50s spt (j:9 t:4): /dev/sdb: Write Same(16), 768 ops, 392704 bytes, 2.844 iops, elapsed 04m30.50s
+      11 20160527 122500 04m31.01s spt (j:9 t:3): /dev/sdb: Write Same(16), 770 ops, 393728 bytes, 2.841 iops, elapsed 04m31.01s
+      11 20160527 122500 04m31.23s spt (j:9 t:8): /dev/sdb: Write Same(16), 770 ops, 393728 bytes, 2.841 iops, elapsed 04m31.23s
+      12 20160527 122529 04m59.88s spt (j:9 t:1): /dev/sdb: Write Same(16), 856 ops, 437760 bytes, 2.853 iops, elapsed 04m59.88s
+      12 20160527 122529 05m00.08s spt (j:9 t:7): /dev/sdb: Write Same(16), 854 ops, 436736 bytes, 2.847 iops, elapsed 05m00.08s
+      12 20160527 122529 05m00.15s spt (j:9 t:2): /dev/sdb: Write Same(16), 856 ops, 437760 bytes, 2.853 iops, elapsed 05m00.15s
+      12 20160527 122529 05m00.22s spt (j:9 t:10): /dev/sdb: Write Same(16), 856 ops, 437760 bytes, 2.853 iops, elapsed 05m00.22s
+      12 20160527 122529 05m00.28s spt (j:9 t:5): /dev/sdb: Write Same(16), 856 ops, 437760 bytes, 2.853 iops, elapsed 05m00.28s
+      12 20160527 122529 05m00.36s spt (j:9 t:9): /dev/sdb: Write Same(16), 856 ops, 437760 bytes, 2.853 iops, elapsed 05m00.36s
+      12 20160527 122529 05m00.43s spt (j:9 t:6): /dev/sdb: Write Same(16), 858 ops, 438784 bytes, 2.860 iops, elapsed 05m00.43s
+      12 20160527 122529 05m00.57s spt (j:9 t:4): /dev/sdb: Write Same(16), 858 ops, 438784 bytes, 2.860 iops, elapsed 05m00.57s
+      12 20160527 122530 05m01.21s spt (j:9 t:8): /dev/sdb: Write Same(16), 860 ops, 439808 bytes, 2.857 iops, elapsed 05m01.21s
+      12 20160527 122530 05m01.47s spt (j:9 t:3): /dev/sdb: Write Same(16), 860 ops, 439808 bytes, 2.857 iops, elapsed 05m01.47s
+      13 20160527 122559 05m29.90s spt (j:9 t:2): /dev/sdb: Write Same(16), 948 ops, 484864 bytes, 2.873 iops, elapsed 05m29.90s
+      13 20160527 122559 05m29.97s spt (j:9 t:10): /dev/sdb: Write Same(16), 948 ops, 484864 bytes, 2.873 iops, elapsed 05m29.97s
+      13 20160527 122559 05m30.05s spt (j:9 t:9): /dev/sdb: Write Same(16), 948 ops, 484864 bytes, 2.873 iops, elapsed 05m30.05s
+      13 20160527 122559 05m30.13s spt (j:9 t:7): /dev/sdb: Write Same(16), 948 ops, 484864 bytes, 2.873 iops, elapsed 05m30.13s
+      13 20160527 122559 05m30.20s spt (j:9 t:6): /dev/sdb: Write Same(16), 950 ops, 485888 bytes, 2.879 iops, elapsed 05m30.20s
+      13 20160527 122559 05m30.27s spt (j:9 t:1): /dev/sdb: Write Same(16), 950 ops, 485888 bytes, 2.879 iops, elapsed 05m30.27s
+      13 20160527 122559 05m30.42s spt (j:9 t:4): /dev/sdb: Write Same(16), 950 ops, 485888 bytes, 2.879 iops, elapsed 05m30.42s
+      13 20160527 122559 05m30.56s spt (j:9 t:5): /dev/sdb: Write Same(16), 950 ops, 485888 bytes, 2.879 iops, elapsed 05m30.56s
+      13 20160527 122600 05m31.12s spt (j:9 t:8): /dev/sdb: Write Same(16), 952 ops, 486912 bytes, 2.876 iops, elapsed 05m31.12s
+      13 20160527 122600 05m31.18s spt (j:9 t:3): /dev/sdb: Write Same(16), 952 ops, 486912 bytes, 2.876 iops, elapsed 05m31.18s
+      14 20160527 122629 05m59.86s spt (j:9 t:1): /dev/sdb: Write Same(16), 1044 ops, 534016 bytes, 2.900 iops, elapsed 05m59.86s
+      14 20160527 122629 05m59.97s spt (j:9 t:4): /dev/sdb: Write Same(16), 1044 ops, 534016 bytes, 2.900 iops, elapsed 05m59.97s
+      14 20160527 122629 06m00.10s spt (j:9 t:2): /dev/sdb: Write Same(16), 1044 ops, 534016 bytes, 2.900 iops, elapsed 06m00.10s
+      14 20160527 122629 06m00.16s spt (j:9 t:5): /dev/sdb: Write Same(16), 1044 ops, 534016 bytes, 2.900 iops, elapsed 06m00.16s
+      14 20160527 122629 06m00.23s spt (j:9 t:10): /dev/sdb: Write Same(16), 1044 ops, 534016 bytes, 2.900 iops, elapsed 06m00.23s
+      14 20160527 122629 06m00.29s spt (j:9 t:9): /dev/sdb: Write Same(16), 1044 ops, 534016 bytes, 2.900 iops, elapsed 06m00.29s
+      14 20160527 122629 06m00.35s spt (j:9 t:6): /dev/sdb: Write Same(16), 1046 ops, 535040 bytes, 2.906 iops, elapsed 06m00.35s
+      14 20160527 122629 06m00.42s spt (j:9 t:7): /dev/sdb: Write Same(16), 1044 ops, 534016 bytes, 2.900 iops, elapsed 06m00.42s
+      14 20160527 122630 06m01.22s spt (j:9 t:3): /dev/sdb: Write Same(16), 1048 ops, 536064 bytes, 2.903 iops, elapsed 06m01.22s
+      14 20160527 122630 06m01.29s spt (j:9 t:8): /dev/sdb: Write Same(16), 1048 ops, 536064 bytes, 2.903 iops, elapsed 06m01.29s
+      15 20160527 122659 06m29.84s spt (j:9 t:1): /dev/sdb: Write Same(16), 1138 ops, 582144 bytes, 2.918 iops, elapsed 06m29.84s
+      15 20160527 122659 06m29.97s spt (j:9 t:4): /dev/sdb: Write Same(16), 1138 ops, 582144 bytes, 2.918 iops, elapsed 06m29.97s
+      15 20160527 122659 06m30.10s spt (j:9 t:2): /dev/sdb: Write Same(16), 1138 ops, 582144 bytes, 2.918 iops, elapsed 06m30.10s
+      15 20160527 122659 06m30.16s spt (j:9 t:5): /dev/sdb: Write Same(16), 1138 ops, 582144 bytes, 2.918 iops, elapsed 06m30.16s
+      15 20160527 122659 06m30.22s spt (j:9 t:10): /dev/sdb: Write Same(16), 1138 ops, 582144 bytes, 2.918 iops, elapsed 06m30.22s
+      15 20160527 122659 06m30.29s spt (j:9 t:9): /dev/sdb: Write Same(16), 1138 ops, 582144 bytes, 2.918 iops, elapsed 06m30.29s
+      15 20160527 122659 06m30.36s spt (j:9 t:7): /dev/sdb: Write Same(16), 1138 ops, 582144 bytes, 2.918 iops, elapsed 06m30.36s
+      15 20160527 122659 06m30.48s spt (j:9 t:6): /dev/sdb: Write Same(16), 1140 ops, 583168 bytes, 2.923 iops, elapsed 06m30.48s
+      15 20160527 122700 06m31.18s spt (j:9 t:3): /dev/sdb: Write Same(16), 1142 ops, 584192 bytes, 2.921 iops, elapsed 06m31.18s
+      15 20160527 122700 06m31.31s spt (j:9 t:8): /dev/sdb: Write Same(16), 1142 ops, 584192 bytes, 2.921 iops, elapsed 06m31.31s
+      16 20160527 122729 06m59.84s spt (j:9 t:5): /dev/sdb: Write Same(16), 1234 ops, 631296 bytes, 2.938 iops, elapsed 06m59.84s
+      16 20160527 122729 06m59.96s spt (j:9 t:4): /dev/sdb: Write Same(16), 1234 ops, 631296 bytes, 2.938 iops, elapsed 06m59.96s
+      16 20160527 122729 07m00.08s spt (j:9 t:2): /dev/sdb: Write Same(16), 1234 ops, 631296 bytes, 2.938 iops, elapsed 07m00.08s
+      16 20160527 122729 07m00.15s spt (j:9 t:10): /dev/sdb: Write Same(16), 1234 ops, 631296 bytes, 2.938 iops, elapsed 07m00.15s
+      16 20160527 122729 07m00.22s spt (j:9 t:9): /dev/sdb: Write Same(16), 1234 ops, 631296 bytes, 2.938 iops, elapsed 07m00.22s
+      16 20160527 122729 07m00.28s spt (j:9 t:6): /dev/sdb: Write Same(16), 1236 ops, 632320 bytes, 2.943 iops, elapsed 07m00.28s
+      16 20160527 122729 07m00.33s spt (j:9 t:1): /dev/sdb: Write Same(16), 1236 ops, 632320 bytes, 2.943 iops, elapsed 07m00.33s
+      16 20160527 122729 07m00.40s spt (j:9 t:7): /dev/sdb: Write Same(16), 1234 ops, 631296 bytes, 2.938 iops, elapsed 07m00.40s
+      16 20160527 122730 07m01.08s spt (j:9 t:8): /dev/sdb: Write Same(16), 1238 ops, 633344 bytes, 2.941 iops, elapsed 07m01.08s
+      16 20160527 122730 07m01.20s spt (j:9 t:3): /dev/sdb: Write Same(16), 1238 ops, 633344 bytes, 2.941 iops, elapsed 07m01.20s
+      17 20160527 122759 07m29.88s spt (j:9 t:2): /dev/sdb: Write Same(16), 1330 ops, 680448 bytes, 2.956 iops, elapsed 07m29.88s
+      17 20160527 122759 07m29.94s spt (j:9 t:10): /dev/sdb: Write Same(16), 1330 ops, 680448 bytes, 2.956 iops, elapsed 07m29.94s
+      17 20160527 122759 07m30.00s spt (j:9 t:9): /dev/sdb: Write Same(16), 1330 ops, 680448 bytes, 2.956 iops, elapsed 07m30.00s
+      17 20160527 122759 07m30.06s spt (j:9 t:1): /dev/sdb: Write Same(16), 1332 ops, 681472 bytes, 2.960 iops, elapsed 07m30.06s
+      17 20160527 122759 07m30.12s spt (j:9 t:6): /dev/sdb: Write Same(16), 1332 ops, 681472 bytes, 2.960 iops, elapsed 07m30.12s
+      17 20160527 122759 07m30.19s spt (j:9 t:7): /dev/sdb: Write Same(16), 1330 ops, 680448 bytes, 2.956 iops, elapsed 07m30.19s
+      17 20160527 122759 07m30.37s spt (j:9 t:4): /dev/sdb: Write Same(16), 1332 ops, 681472 bytes, 2.960 iops, elapsed 07m30.37s
+      17 20160527 122759 07m30.44s spt (j:9 t:5): /dev/sdb: Write Same(16), 1332 ops, 681472 bytes, 2.960 iops, elapsed 07m30.44s
+      17 20160527 122800 07m30.99s spt (j:9 t:8): /dev/sdb: Write Same(16), 1334 ops, 682496 bytes, 2.958 iops, elapsed 07m30.99s
+      17 20160527 122800 07m31.06s spt (j:9 t:3): /dev/sdb: Write Same(16), 1334 ops, 682496 bytes, 2.958 iops, elapsed 07m31.06s
+      18 20160527 122829 07m59.97s spt (j:9 t:6): /dev/sdb: Write Same(16), 1428 ops, 730624 bytes, 2.975 iops, elapsed 07m59.97s
+      18 20160527 122829 08m00.02s spt (j:9 t:7): /dev/sdb: Write Same(16), 1426 ops, 729600 bytes, 2.971 iops, elapsed 08m00.02s
+      18 20160527 122829 08m00.14s spt (j:9 t:4): /dev/sdb: Write Same(16), 1428 ops, 730624 bytes, 2.975 iops, elapsed 08m00.14s
+      18 20160527 122829 08m00.19s spt (j:9 t:5): /dev/sdb: Write Same(16), 1428 ops, 730624 bytes, 2.975 iops, elapsed 08m00.19s
+      18 20160527 122829 08m00.25s spt (j:9 t:2): /dev/sdb: Write Same(16), 1428 ops, 730624 bytes, 2.975 iops, elapsed 08m00.25s
+      18 20160527 122829 08m00.32s spt (j:9 t:10): /dev/sdb: Write Same(16), 1428 ops, 730624 bytes, 2.975 iops, elapsed 08m00.32s
+      18 20160527 122829 08m00.38s spt (j:9 t:9): /dev/sdb: Write Same(16), 1428 ops, 730624 bytes, 2.975 iops, elapsed 08m00.38s
+      18 20160527 122829 08m00.43s spt (j:9 t:1): /dev/sdb: Write Same(16), 1430 ops, 731648 bytes, 2.979 iops, elapsed 08m00.43s
+      18 20160527 122830 08m00.98s spt (j:9 t:3): /dev/sdb: Write Same(16), 1432 ops, 732672 bytes, 2.977 iops, elapsed 08m00.98s
+      18 20160527 122830 08m01.29s spt (j:9 t:8): /dev/sdb: Write Same(16), 1432 ops, 732672 bytes, 2.977 iops, elapsed 08m01.29s
+      19 20160527 122848 08m19.83s spt (j:9 t:1): 
+      20 20160527 122848 08m19.83s spt (j:9 t:1):                         Thread: 1
+      21 20160527 122848 08m19.83s spt (j:9 t:1):                    Device Name: /dev/sdb
+      22 20160527 122848 08m19.83s spt (j:9 t:1):                    Device Info: Block Length=512, Capacity=488397167
+      23 20160527 122848 08m19.83s spt (j:9 t:1):                    Block Range: 0 - 48839716
+      24 20160527 122848 08m19.83s spt (j:9 t:1):                      SCSI Name: Write Same(16)
+      25 20160527 122848 08m19.83s spt (j:9 t:1):                       SCSI CDB: 93 00 00 00 00 00 02 e9 00 00 00 00 3c 24 00 00
+      26 20160527 122848 08m19.83s spt (j:9 t:1):                 Data Direction: write
+      27 20160527 122848 08m19.83s spt (j:9 t:1):                    Data Length: 4096
+      28 20160527 122848 08m19.83s spt (j:9 t:1):                    Exit Status: 0 = SUCCESS
+      29 20160527 122848 08m19.83s spt (j:9 t:1):                    Host Status: 0 = DID_OK
+      30 20160527 122848 08m19.83s spt (j:9 t:1):                  Driver Status: 0 = DRIVER_OK
+      31 20160527 122848 08m19.83s spt (j:9 t:1):                    SCSI Status: 0 = SCSI_GOOD
+      32 20160527 122848 08m19.83s spt (j:9 t:1):                     Sense Code: 0 = NO CODE
+      33 20160527 122848 08m19.83s spt (j:9 t:1):                      Sense Key: 0 = NO SENSE
+      34 20160527 122848 08m19.83s spt (j:9 t:1):                        asc/asq: (00, 00) = No additional sense information
+      35 20160527 122848 08m19.83s spt (j:9 t:1):              Bytes Transferred: 512 (data bytes transferred)
+      36 20160527 122848 08m19.83s spt (j:9 t:1):                       Residual: 3584 (bytes not transferred)
+      37 20160527 122848 08m19.83s spt (j:9 t:1):                     Iterations: 1
+      38 20160527 122848 08m19.83s spt (j:9 t:1):                    Total Bytes: 763904
+      39 20160527 122848 08m19.83s spt (j:9 t:1):                   Total Blocks: 48840462
+      40 20160527 122848 08m19.83s spt (j:9 t:1):               Total Operations: 1493
+      41 20160527 122848 08m19.83s spt (j:9 t:1):                     Sense Data: 00 00 00 00 00 00 00 00
+      42 20160527 122848 08m19.83s spt (j:9 t:1):                   Elapsed Time: 08m19.83s
+      43 20160527 122848 08m19.83s spt (j:9 t:1):                  Starting Time: Fri May 27 12:20:29 2016
+      44 20160527 122848 08m19.83s spt (j:9 t:1):                    Ending Time: Fri May 27 12:28:48 2016
+      45 20160527 122848 08m19.83s spt (j:9 t:1): 
+      19 20160527 122848 08m19.83s spt (j:9 t:3): 
+      20 20160527 122848 08m19.83s spt (j:9 t:3):                         Thread: 3
+      21 20160527 122848 08m19.83s spt (j:9 t:3):                    Device Name: /dev/sdb
+      22 20160527 122848 08m19.83s spt (j:9 t:3):                    Device Info: Block Length=512, Capacity=488397167
+      23 20160527 122848 08m19.83s spt (j:9 t:3):                    Block Range: 97679432 - 146519148
+      24 20160527 122848 08m19.83s spt (j:9 t:3):                      SCSI Name: Write Same(16)
+      25 20160527 122848 08m19.83s spt (j:9 t:3):                       SCSI CDB: 93 00 00 00 00 00 08 bb 78 48 00 00 3c 24 00 00
+      26 20160527 122848 08m19.83s spt (j:9 t:3):                 Data Direction: write
+      27 20160527 122848 08m19.83s spt (j:9 t:3):                    Data Length: 4096
+      28 20160527 122848 08m19.83s spt (j:9 t:3):                    Exit Status: 0 = SUCCESS
+      29 20160527 122848 08m19.83s spt (j:9 t:3):                    Host Status: 0 = DID_OK
+      30 20160527 122848 08m19.83s spt (j:9 t:3):                  Driver Status: 0 = DRIVER_OK
+      31 20160527 122848 08m19.83s spt (j:9 t:3):                    SCSI Status: 0 = SCSI_GOOD
+      32 20160527 122848 08m19.83s spt (j:9 t:3):                     Sense Code: 0 = NO CODE
+      33 20160527 122848 08m19.83s spt (j:9 t:3):                      Sense Key: 0 = NO SENSE
+      34 20160527 122848 08m19.83s spt (j:9 t:3):                        asc/asq: (00, 00) = No additional sense information
+      35 20160527 122848 08m19.83s spt (j:9 t:3):              Bytes Transferred: 512 (data bytes transferred)
+      36 20160527 122848 08m19.83s spt (j:9 t:3):                       Residual: 3584 (bytes not transferred)
+      37 20160527 122848 08m19.83s spt (j:9 t:3):                     Iterations: 1
+      38 20160527 122848 08m19.83s spt (j:9 t:3):                    Total Bytes: 763904
+      39 20160527 122848 08m19.83s spt (j:9 t:3):                   Total Blocks: 48840462
+      40 20160527 122848 08m19.83s spt (j:9 t:3):               Total Operations: 1493
+      41 20160527 122848 08m19.83s spt (j:9 t:3):                     Sense Data: 00 00 00 00 00 00 00 00
+      42 20160527 122848 08m19.83s spt (j:9 t:3):                   Elapsed Time: 08m19.83s
+      43 20160527 122848 08m19.83s spt (j:9 t:3):                  Starting Time: Fri May 27 12:20:29 2016
+      44 20160527 122848 08m19.83s spt (j:9 t:3):                    Ending Time: Fri May 27 12:28:48 2016
+      45 20160527 122848 08m19.83s spt (j:9 t:3): 
+      19 20160527 122849 08m19.85s spt (j:9 t:6): 
+      20 20160527 122849 08m19.85s spt (j:9 t:6):                         Thread: 6
+      21 20160527 122849 08m19.85s spt (j:9 t:6):                    Device Name: /dev/sdb
+      22 20160527 122849 08m19.85s spt (j:9 t:6):                    Device Info: Block Length=512, Capacity=488397167
+      23 20160527 122849 08m19.85s spt (j:9 t:6):                    Block Range: 244198580 - 293038296
+      24 20160527 122849 08m19.85s spt (j:9 t:6):                      SCSI Name: Write Same(16)
+      25 20160527 122849 08m19.85s spt (j:9 t:6):                       SCSI CDB: 93 00 00 00 00 00 11 77 2c b4 00 00 3c 24 00 00
+      26 20160527 122849 08m19.85s spt (j:9 t:6):                 Data Direction: write
+      27 20160527 122849 08m19.85s spt (j:9 t:6):                    Data Length: 4096
+      28 20160527 122849 08m19.85s spt (j:9 t:6):                    Exit Status: 0 = SUCCESS
+      29 20160527 122849 08m19.85s spt (j:9 t:6):                    Host Status: 0 = DID_OK
+      30 20160527 122849 08m19.85s spt (j:9 t:6):                  Driver Status: 0 = DRIVER_OK
+      31 20160527 122849 08m19.85s spt (j:9 t:6):                    SCSI Status: 0 = SCSI_GOOD
+      32 20160527 122849 08m19.85s spt (j:9 t:6):                     Sense Code: 0 = NO CODE
+      33 20160527 122849 08m19.85s spt (j:9 t:6):                      Sense Key: 0 = NO SENSE
+      34 20160527 122849 08m19.85s spt (j:9 t:6):                        asc/asq: (00, 00) = No additional sense information
+      35 20160527 122849 08m19.85s spt (j:9 t:6):              Bytes Transferred: 512 (data bytes transferred)
+      36 20160527 122849 08m19.85s spt (j:9 t:6):                       Residual: 3584 (bytes not transferred)
+      37 20160527 122849 08m19.85s spt (j:9 t:6):                     Iterations: 1
+      38 20160527 122849 08m19.85s spt (j:9 t:6):                    Total Bytes: 763904
+      39 20160527 122849 08m19.85s spt (j:9 t:6):                   Total Blocks: 48840462
+      40 20160527 122849 08m19.85s spt (j:9 t:6):               Total Operations: 1493
+      41 20160527 122849 08m19.85s spt (j:9 t:6):                     Sense Data: 00 00 00 00 00 00 00 00
+      42 20160527 122849 08m19.85s spt (j:9 t:6):                   Elapsed Time: 08m19.85s
+      43 20160527 122849 08m19.85s spt (j:9 t:6):                  Starting Time: Fri May 27 12:20:29 2016
+      44 20160527 122849 08m19.85s spt (j:9 t:6):                    Ending Time: Fri May 27 12:28:49 2016
+      45 20160527 122849 08m19.85s spt (j:9 t:6): 
+      19 20160527 122849 08m19.86s spt (j:9 t:4): 
+      20 20160527 122849 08m19.86s spt (j:9 t:4):                         Thread: 4
+      21 20160527 122849 08m19.86s spt (j:9 t:4):                    Device Name: /dev/sdb
+      22 20160527 122849 08m19.86s spt (j:9 t:4):                    Device Info: Block Length=512, Capacity=488397167
+      23 20160527 122849 08m19.86s spt (j:9 t:4):                    Block Range: 146519148 - 195358864
+      24 20160527 122849 08m19.86s spt (j:9 t:4):                      SCSI Name: Write Same(16)
+      25 20160527 122849 08m19.86s spt (j:9 t:4):                       SCSI CDB: 93 00 00 00 00 00 0b a4 b4 6c 00 00 3c 24 00 00
+      26 20160527 122849 08m19.86s spt (j:9 t:4):                 Data Direction: write
+      27 20160527 122849 08m19.86s spt (j:9 t:4):                    Data Length: 4096
+      28 20160527 122849 08m19.86s spt (j:9 t:4):                    Exit Status: 0 = SUCCESS
+      29 20160527 122849 08m19.86s spt (j:9 t:4):                    Host Status: 0 = DID_OK
+      30 20160527 122849 08m19.86s spt (j:9 t:4):                  Driver Status: 0 = DRIVER_OK
+      31 20160527 122849 08m19.86s spt (j:9 t:4):                    SCSI Status: 0 = SCSI_GOOD
+      32 20160527 122849 08m19.86s spt (j:9 t:4):                     Sense Code: 0 = NO CODE
+      33 20160527 122849 08m19.86s spt (j:9 t:4):                      Sense Key: 0 = NO SENSE
+      34 20160527 122849 08m19.86s spt (j:9 t:4):                        asc/asq: (00, 00) = No additional sense information
+      35 20160527 122849 08m19.86s spt (j:9 t:4):              Bytes Transferred: 512 (data bytes transferred)
+      36 20160527 122849 08m19.86s spt (j:9 t:4):                       Residual: 3584 (bytes not transferred)
+      37 20160527 122849 08m19.86s spt (j:9 t:4):                     Iterations: 1
+      38 20160527 122849 08m19.86s spt (j:9 t:4):                    Total Bytes: 763904
+      39 20160527 122849 08m19.86s spt (j:9 t:4):                   Total Blocks: 48840462
+      40 20160527 122849 08m19.86s spt (j:9 t:4):               Total Operations: 1493
+      41 20160527 122849 08m19.86s spt (j:9 t:4):                     Sense Data: 00 00 00 00 00 00 00 00
+      42 20160527 122849 08m19.86s spt (j:9 t:4):                   Elapsed Time: 08m19.86s
+      43 20160527 122849 08m19.86s spt (j:9 t:4):                  Starting Time: Fri May 27 12:20:29 2016
+      44 20160527 122849 08m19.86s spt (j:9 t:4):                    Ending Time: Fri May 27 12:28:49 2016
+      45 20160527 122849 08m19.86s spt (j:9 t:4): 
+      19 20160527 122849 08m19.86s spt (j:9 t:5): 
+      20 20160527 122849 08m19.86s spt (j:9 t:5):                         Thread: 5
+      21 20160527 122849 08m19.86s spt (j:9 t:5):                    Device Name: /dev/sdb
+      22 20160527 122849 08m19.86s spt (j:9 t:5):                    Device Info: Block Length=512, Capacity=488397167
+      23 20160527 122849 08m19.86s spt (j:9 t:5):                    Block Range: 195358864 - 244198580
+      24 20160527 122849 08m19.86s spt (j:9 t:5):                      SCSI Name: Write Same(16)
+      25 20160527 122849 08m19.86s spt (j:9 t:5):                       SCSI CDB: 93 00 00 00 00 00 0e 8d f0 90 00 00 3c 24 00 00
+      26 20160527 122849 08m19.86s spt (j:9 t:5):                 Data Direction: write
+      27 20160527 122849 08m19.86s spt (j:9 t:5):                    Data Length: 4096
+      28 20160527 122849 08m19.86s spt (j:9 t:5):                    Exit Status: 0 = SUCCESS
+      29 20160527 122849 08m19.86s spt (j:9 t:5):                    Host Status: 0 = DID_OK
+      30 20160527 122849 08m19.86s spt (j:9 t:5):                  Driver Status: 0 = DRIVER_OK
+      31 20160527 122849 08m19.86s spt (j:9 t:5):                    SCSI Status: 0 = SCSI_GOOD
+      32 20160527 122849 08m19.86s spt (j:9 t:5):                     Sense Code: 0 = NO CODE
+      33 20160527 122849 08m19.86s spt (j:9 t:5):                      Sense Key: 0 = NO SENSE
+      34 20160527 122849 08m19.86s spt (j:9 t:5):                        asc/asq: (00, 00) = No additional sense information
+      35 20160527 122849 08m19.86s spt (j:9 t:5):              Bytes Transferred: 512 (data bytes transferred)
+      36 20160527 122849 08m19.86s spt (j:9 t:5):                       Residual: 3584 (bytes not transferred)
+      37 20160527 122849 08m19.86s spt (j:9 t:5):                     Iterations: 1
+      38 20160527 122849 08m19.86s spt (j:9 t:5):                    Total Bytes: 763904
+      39 20160527 122849 08m19.86s spt (j:9 t:5):                   Total Blocks: 48840462
+      40 20160527 122849 08m19.86s spt (j:9 t:5):               Total Operations: 1493
+      41 20160527 122849 08m19.86s spt (j:9 t:5):                     Sense Data: 00 00 00 00 00 00 00 00
+      42 20160527 122849 08m19.86s spt (j:9 t:5):                   Elapsed Time: 08m19.86s
+      43 20160527 122849 08m19.86s spt (j:9 t:5):                  Starting Time: Fri May 27 12:20:29 2016
+      44 20160527 122849 08m19.86s spt (j:9 t:5):                    Ending Time: Fri May 27 12:28:49 2016
+      45 20160527 122849 08m19.86s spt (j:9 t:5): 
+      19 20160527 122849 08m19.86s spt (j:9 t:8): 
+      20 20160527 122849 08m19.86s spt (j:9 t:8):                         Thread: 8
+      21 20160527 122849 08m19.86s spt (j:9 t:8):                    Device Name: /dev/sdb
+      22 20160527 122849 08m19.86s spt (j:9 t:8):                    Device Info: Block Length=512, Capacity=488397167
+      23 20160527 122849 08m19.86s spt (j:9 t:8):                    Block Range: 341878012 - 390717728
+      24 20160527 122849 08m19.86s spt (j:9 t:8):                      SCSI Name: Write Same(16)
+      25 20160527 122849 08m19.86s spt (j:9 t:8):                       SCSI CDB: 93 00 00 00 00 00 17 49 a4 fc 00 00 3c 24 00 00
+      26 20160527 122849 08m19.86s spt (j:9 t:8):                 Data Direction: write
+      27 20160527 122849 08m19.86s spt (j:9 t:8):                    Data Length: 4096
+      28 20160527 122849 08m19.86s spt (j:9 t:8):                    Exit Status: 0 = SUCCESS
+      29 20160527 122849 08m19.86s spt (j:9 t:8):                    Host Status: 0 = DID_OK
+      30 20160527 122849 08m19.86s spt (j:9 t:8):                  Driver Status: 0 = DRIVER_OK
+      31 20160527 122849 08m19.86s spt (j:9 t:8):                    SCSI Status: 0 = SCSI_GOOD
+      32 20160527 122849 08m19.86s spt (j:9 t:8):                     Sense Code: 0 = NO CODE
+      33 20160527 122849 08m19.86s spt (j:9 t:8):                      Sense Key: 0 = NO SENSE
+      34 20160527 122849 08m19.86s spt (j:9 t:8):                        asc/asq: (00, 00) = No additional sense information
+      35 20160527 122849 08m19.86s spt (j:9 t:8):              Bytes Transferred: 512 (data bytes transferred)
+      36 20160527 122849 08m19.86s spt (j:9 t:8):                       Residual: 3584 (bytes not transferred)
+      37 20160527 122849 08m19.86s spt (j:9 t:8):                     Iterations: 1
+      38 20160527 122849 08m19.86s spt (j:9 t:8):                    Total Bytes: 763904
+      39 20160527 122849 08m19.86s spt (j:9 t:8):                   Total Blocks: 48840462
+      40 20160527 122849 08m19.86s spt (j:9 t:8):               Total Operations: 1493
+      41 20160527 122849 08m19.86s spt (j:9 t:8):                     Sense Data: 00 00 00 00 00 00 00 00
+      42 20160527 122849 08m19.86s spt (j:9 t:8):                   Elapsed Time: 08m19.86s
+      43 20160527 122849 08m19.86s spt (j:9 t:8):                  Starting Time: Fri May 27 12:20:29 2016
+      44 20160527 122849 08m19.86s spt (j:9 t:8):                    Ending Time: Fri May 27 12:28:49 2016
+      45 20160527 122849 08m19.86s spt (j:9 t:8): 
+      19 20160527 122849 08m19.87s spt (j:9 t:2): 
+      20 20160527 122849 08m19.87s spt (j:9 t:2):                         Thread: 2
+      21 20160527 122849 08m19.87s spt (j:9 t:2):                    Device Name: /dev/sdb
+      22 20160527 122849 08m19.87s spt (j:9 t:2):                    Device Info: Block Length=512, Capacity=488397167
+      23 20160527 122849 08m19.87s spt (j:9 t:2):                    Block Range: 48839716 - 97679432
+      24 20160527 122849 08m19.87s spt (j:9 t:2):                      SCSI Name: Write Same(16)
+      25 20160527 122849 08m19.87s spt (j:9 t:2):                       SCSI CDB: 93 00 00 00 00 00 05 d2 3c 24 00 00 3c 24 00 00
+      26 20160527 122849 08m19.87s spt (j:9 t:2):                 Data Direction: write
+      27 20160527 122849 08m19.88s spt (j:9 t:2):                    Data Length: 4096
+      28 20160527 122849 08m19.88s spt (j:9 t:2):                    Exit Status: 0 = SUCCESS
+      29 20160527 122849 08m19.88s spt (j:9 t:2):                    Host Status: 0 = DID_OK
+      30 20160527 122849 08m19.88s spt (j:9 t:2):                  Driver Status: 0 = DRIVER_OK
+      31 20160527 122849 08m19.88s spt (j:9 t:2):                    SCSI Status: 0 = SCSI_GOOD
+      32 20160527 122849 08m19.88s spt (j:9 t:2):                     Sense Code: 0 = NO CODE
+      33 20160527 122849 08m19.88s spt (j:9 t:2):                      Sense Key: 0 = NO SENSE
+      34 20160527 122849 08m19.88s spt (j:9 t:2):                        asc/asq: (00, 00) = No additional sense information
+      35 20160527 122849 08m19.88s spt (j:9 t:2):              Bytes Transferred: 512 (data bytes transferred)
+      36 20160527 122849 08m19.88s spt (j:9 t:2):                       Residual: 3584 (bytes not transferred)
+      37 20160527 122849 08m19.88s spt (j:9 t:2):                     Iterations: 1
+      38 20160527 122849 08m19.88s spt (j:9 t:2):                    Total Bytes: 763904
+      39 20160527 122849 08m19.88s spt (j:9 t:2):                   Total Blocks: 48840462
+      40 20160527 122849 08m19.88s spt (j:9 t:2):               Total Operations: 1493
+      41 20160527 122849 08m19.88s spt (j:9 t:2):                     Sense Data: 00 00 00 00 00 00 00 00
+      42 20160527 122849 08m19.88s spt (j:9 t:2):                   Elapsed Time: 08m19.87s
+      43 20160527 122849 08m19.88s spt (j:9 t:2):                  Starting Time: Fri May 27 12:20:29 2016
+      44 20160527 122849 08m19.88s spt (j:9 t:2):                    Ending Time: Fri May 27 12:28:49 2016
+      45 20160527 122849 08m19.88s spt (j:9 t:2): 
+      19 20160527 122849 08m19.89s spt (j:9 t:10): 
+      20 20160527 122849 08m19.89s spt (j:9 t:10):                         Thread: 10
+      21 20160527 122849 08m19.89s spt (j:9 t:10):                    Device Name: /dev/sdb
+      22 20160527 122849 08m19.89s spt (j:9 t:10):                    Device Info: Block Length=512, Capacity=488397167
+      23 20160527 122849 08m19.89s spt (j:9 t:10):                    Block Range: 439557444 - 488397167
+      24 20160527 122849 08m19.89s spt (j:9 t:10):                      SCSI Name: Write Same(16)
+      25 20160527 122849 08m19.89s spt (j:9 t:10):                       SCSI CDB: 93 00 00 00 00 00 1d 1c 1d 44 00 00 3c 2b 00 00
+      26 20160527 122849 08m19.89s spt (j:9 t:10):                 Data Direction: write
+      27 20160527 122849 08m19.89s spt (j:9 t:10):                    Data Length: 4096
+      28 20160527 122849 08m19.89s spt (j:9 t:10):                    Exit Status: 0 = SUCCESS
+      29 20160527 122849 08m19.89s spt (j:9 t:10):                    Host Status: 0 = DID_OK
+      30 20160527 122849 08m19.89s spt (j:9 t:10):                  Driver Status: 0 = DRIVER_OK
+      31 20160527 122849 08m19.89s spt (j:9 t:10):                    SCSI Status: 0 = SCSI_GOOD
+      32 20160527 122849 08m19.89s spt (j:9 t:10):                     Sense Code: 0 = NO CODE
+      33 20160527 122849 08m19.89s spt (j:9 t:10):                      Sense Key: 0 = NO SENSE
+      34 20160527 122849 08m19.89s spt (j:9 t:10):                        asc/asq: (00, 00) = No additional sense information
+      35 20160527 122849 08m19.89s spt (j:9 t:10):              Bytes Transferred: 512 (data bytes transferred)
+      36 20160527 122849 08m19.89s spt (j:9 t:10):                       Residual: 3584 (bytes not transferred)
+      37 20160527 122849 08m19.89s spt (j:9 t:10):                     Iterations: 1
+      38 20160527 122849 08m19.89s spt (j:9 t:10):                    Total Bytes: 763904
+      39 20160527 122849 08m19.89s spt (j:9 t:10):                   Total Blocks: 48840469
+      40 20160527 122849 08m19.89s spt (j:9 t:10):               Total Operations: 1493
+      41 20160527 122849 08m19.89s spt (j:9 t:10):                     Sense Data: 00 00 00 00 00 00 00 00
+      42 20160527 122849 08m19.89s spt (j:9 t:10):                   Elapsed Time: 08m19.89s
+      43 20160527 122849 08m19.89s spt (j:9 t:10):                  Starting Time: Fri May 27 12:20:29 2016
+      44 20160527 122849 08m19.89s spt (j:9 t:10):                    Ending Time: Fri May 27 12:28:49 2016
+      45 20160527 122849 08m19.89s spt (j:9 t:10): 
+      19 20160527 122849 08m19.89s spt (j:9 t:9): 
+      20 20160527 122849 08m19.89s spt (j:9 t:9):                         Thread: 9
+      21 20160527 122849 08m19.89s spt (j:9 t:9):                    Device Name: /dev/sdb
+      22 20160527 122849 08m19.89s spt (j:9 t:9):                    Device Info: Block Length=512, Capacity=488397167
+      23 20160527 122849 08m19.89s spt (j:9 t:9):                    Block Range: 390717728 - 439557444
+      24 20160527 122849 08m19.89s spt (j:9 t:9):                      SCSI Name: Write Same(16)
+      25 20160527 122849 08m19.89s spt (j:9 t:9):                       SCSI CDB: 93 00 00 00 00 00 1a 32 e1 20 00 00 3c 24 00 00
+      26 20160527 122849 08m19.89s spt (j:9 t:9):                 Data Direction: write
+      27 20160527 122849 08m19.89s spt (j:9 t:9):                    Data Length: 4096
+      28 20160527 122849 08m19.89s spt (j:9 t:9):                    Exit Status: 0 = SUCCESS
+      29 20160527 122849 08m19.89s spt (j:9 t:9):                    Host Status: 0 = DID_OK
+      30 20160527 122849 08m19.89s spt (j:9 t:9):                  Driver Status: 0 = DRIVER_OK
+      31 20160527 122849 08m19.89s spt (j:9 t:9):                    SCSI Status: 0 = SCSI_GOOD
+      32 20160527 122849 08m19.89s spt (j:9 t:9):                     Sense Code: 0 = NO CODE
+      33 20160527 122849 08m19.89s spt (j:9 t:9):                      Sense Key: 0 = NO SENSE
+      34 20160527 122849 08m19.89s spt (j:9 t:9):                        asc/asq: (00, 00) = No additional sense information
+      35 20160527 122849 08m19.89s spt (j:9 t:9):              Bytes Transferred: 512 (data bytes transferred)
+      36 20160527 122849 08m19.89s spt (j:9 t:9):                       Residual: 3584 (bytes not transferred)
+      37 20160527 122849 08m19.89s spt (j:9 t:9):                     Iterations: 1
+      38 20160527 122849 08m19.89s spt (j:9 t:9):                    Total Bytes: 763904
+      39 20160527 122849 08m19.89s spt (j:9 t:9):                   Total Blocks: 48840462
+      40 20160527 122849 08m19.89s spt (j:9 t:9):               Total Operations: 1493
+      41 20160527 122849 08m19.89s spt (j:9 t:9):                     Sense Data: 00 00 00 00 00 00 00 00
+      42 20160527 122849 08m19.89s spt (j:9 t:9):                   Elapsed Time: 08m19.89s
+      43 20160527 122849 08m19.89s spt (j:9 t:9):                  Starting Time: Fri May 27 12:20:29 2016
+      44 20160527 122849 08m19.89s spt (j:9 t:9):                    Ending Time: Fri May 27 12:28:49 2016
+      45 20160527 122849 08m19.89s spt (j:9 t:9): 
+      19 20160527 122849 08m19.89s spt (j:9 t:7): 
+      20 20160527 122849 08m19.89s spt (j:9 t:7):                         Thread: 7
+      21 20160527 122849 08m19.89s spt (j:9 t:7):                    Device Name: /dev/sdb
+      22 20160527 122849 08m19.89s spt (j:9 t:7):                    Device Info: Block Length=512, Capacity=488397167
+      23 20160527 122849 08m19.89s spt (j:9 t:7):                    Block Range: 293038296 - 341878012
+      24 20160527 122849 08m19.89s spt (j:9 t:7):                      SCSI Name: Write Same(16)
+      25 20160527 122849 08m19.89s spt (j:9 t:7):                       SCSI CDB: 93 00 00 00 00 00 14 60 68 d8 00 00 3c 24 00 00
+      26 20160527 122849 08m19.89s spt (j:9 t:7):                 Data Direction: write
+      27 20160527 122849 08m19.89s spt (j:9 t:7):                    Data Length: 4096
+      28 20160527 122849 08m19.89s spt (j:9 t:7):                    Exit Status: 0 = SUCCESS
+      29 20160527 122849 08m19.89s spt (j:9 t:7):                    Host Status: 0 = DID_OK
+      30 20160527 122849 08m19.89s spt (j:9 t:7):                  Driver Status: 0 = DRIVER_OK
+      31 20160527 122849 08m19.89s spt (j:9 t:7):                    SCSI Status: 0 = SCSI_GOOD
+      32 20160527 122849 08m19.89s spt (j:9 t:7):                     Sense Code: 0 = NO CODE
+      33 20160527 122849 08m19.89s spt (j:9 t:7):                      Sense Key: 0 = NO SENSE
+      34 20160527 122849 08m19.89s spt (j:9 t:7):                        asc/asq: (00, 00) = No additional sense information
+      35 20160527 122849 08m19.89s spt (j:9 t:7):              Bytes Transferred: 512 (data bytes transferred)
+      36 20160527 122849 08m19.89s spt (j:9 t:7):                       Residual: 3584 (bytes not transferred)
+      37 20160527 122849 08m19.89s spt (j:9 t:7):                     Iterations: 1
+      38 20160527 122849 08m19.89s spt (j:9 t:7):                    Total Bytes: 763904
+      39 20160527 122849 08m19.89s spt (j:9 t:7):                   Total Blocks: 48840462
+      40 20160527 122849 08m19.89s spt (j:9 t:7):               Total Operations: 1493
+      41 20160527 122849 08m19.89s spt (j:9 t:7):                     Sense Data: 00 00 00 00 00 00 00 00
+      42 20160527 122849 08m19.89s spt (j:9 t:7):                   Elapsed Time: 08m19.89s
+      43 20160527 122849 08m19.89s spt (j:9 t:7):                  Starting Time: Fri May 27 12:20:29 2016
+      44 20160527 122849 08m19.89s spt (j:9 t:7):                    Ending Time: Fri May 27 12:28:49 2016
+      45 20160527 122849 08m19.89s spt (j:9 t:7): 
+[root@cos-lab-test13 testhelper]# echo $?
+0
+[root@cos-lab-test13 testhelper]# 

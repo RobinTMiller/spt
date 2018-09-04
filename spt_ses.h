@@ -43,6 +43,11 @@
 extern int setup_receive_diagnostic(scsi_device_t *sdp, scsi_generic_t *sgp, size_t data_length, uint8_t page);
 extern int setup_send_diagnostic(scsi_device_t *sdp, scsi_generic_t *sgp, uint8_t page);
 
+extern int receive_diagnostic_page(scsi_device_t *sdp, io_params_t *iop,
+				   scsi_generic_t *sgp, void **data, uint8_t page);
+extern int send_diagnostic_page(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp,
+				void *data_buffer, size_t data_length, uint8_t page);
+
 extern int receive_diagnostic_encode(void *arg);
 extern int receive_diagnostic_decode(void *arg);
 

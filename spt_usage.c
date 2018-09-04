@@ -128,10 +128,14 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\tretry=value           The number of times to retry a cmd.\n");
     P (sdp, "\truntime=time          The number of seconds to execute.\n");
     P (sdp, "\tscript=filename       The script file name to execute.\n");
+    P (sdp, "\treport-format=string  The report format: brief or full. (or rfmt=)\n");
+    P (sdp, "\tshow devices [filters] Show SCSI devices (see filters below).\n");
+    P (sdp, "\tshow scsi [filters]   Show SCSI sense errors (see filters below).\n");
     P (sdp, "\tsname=string          The SCSI opcode name (for errors).\n");
     P (sdp, "\tsleep=time            The sleep time (in seconds).\n");
     P (sdp, "\tmsleep=value          The msleep time (in milliseconds).\n");
     P (sdp, "\tusleep=value          The usleep time (in microseconds).\n");
+    P (sdp, "\ttest option           Perform a diagnostic test (see below).\n");
     P (sdp, "\tthreads=value         The number of threads to execute.\n");
     P (sdp, "\ttimeout=value         The timeout value (in milliseconds).\n");
     P (sdp, "\tenable=flag,flag      Enable one or more flags (see below).\n");
@@ -259,6 +263,63 @@ void Help(scsi_device_t *sdp)
     //P (sdp, "    Also Note: Token based xcopy is *not* fully supported.\n");
 #endif /* 0 */
 
+    P (sdp, "\n    Show Devices Filters:\n");
+    P (sdp, "\tdevice(s)=string      The device path(s).\n");
+    P (sdp, "\tdevice_type(s)={value|string},...\n");
+    P (sdp, "\t                      The device type. (or dtype=)\n");
+    P (sdp, "\texclude=string        The exclude path(s).\n");
+    P (sdp, "\tproduct=string        The product name. (or pid=)\n");
+    P (sdp, "\tvendor=string         The vendor name. (or vid=)\n");
+    P (sdp, "\trevision=string       The revision level. (or rev=)\n");
+    P (sdp, "\tfw_version=string     The firmware version. (or fwver=)\n");
+    P (sdp, "\tserial=string         The serial number.\n");
+    P (sdp, "\tshow-fields=string    Show devices brief fields. (or sflds=).\n");
+    P (sdp, "\tshow-format=string    Show devices format control. (or sfmt=).\n");
+    P (sdp, "\tshow-path=string,...  Show devices using path. (or spath=).\n");
+
+    P (sdp, "\n    Examples:\n");
+    P (sdp, "\tshow devices dtypes=direct,enclosure vid=HGST\n");
+    P (sdp, "\tshow edt devices=/dev/sdl,/dev/sdm\n");
+    P (sdp, "\tshow edt exclude=/dev/sdl,/dev/sdm\n");
+
+    P (sdp, "\n    Show Devices Format Control Strings:\n");
+    P (sdp, "\t	           %%paths = The device paths.\n");
+    P (sdp, "\t	     %%device_type = The device type. (or %%dtype)\n");
+    P (sdp, "\t	         %%product = The product identification. (or %%pid)\n");
+    P (sdp, "\t	          %%vendor = The vendor identification. (or %%vid)\n");
+    P (sdp, "\t	        %%revision = The firmware revision level. (or %%rev)\n");
+    P (sdp, "\t	      %%fw_version = The full firmware version. (or %%fwver)\n");
+    P (sdp, "\t	          %%serial = The device serial number.\n");
+    P (sdp, "\t	       %%device_id = The device identification. (or %%wwn)\n");
+    P (sdp, "\t	     %%target_port = The device target port. (or %%tport)\n");
+    P (sdp, "\n    Example:\n");
+    P (sdp, "\tshow devices sfmt='Device Type: %%dtype, Paths: %%path'\n");
+
+    P (sdp, "\n    Show Devices Brief Field: (strings same as above w/o %%)\n");
+    P (sdp, "\t    Default: dtype,pid,rev,serial,tport,paths\n");
+    P (sdp, "\n    Example:\n");
+    P (sdp, "\tshow devices show-fields=vid,pid,wwn,paths\n");
+
+    P (sdp, "\n    Show SCSI Filters:\n");
+    P (sdp, "\tascq=value           The additional sense message.\n");
+    P (sdp, "\tkey=value            The SCSI sense key message.\n");
+    P (sdp, "\tstatus=value         The SCSI status message.\n");
+    P (sdp, "\tuec=value            The HGST UEC message.\n");
+
+    P (sdp, "\n    Examples:\n");
+    P (sdp, "\tshow scsi ascq=0x0404\n");
+    P (sdp, "\tshow scsi key=0x2\n");
+    P (sdp, "\tshow scsi status=28\n");
+    P (sdp, "\tshow scsi uec=0xf504\n");
+
+    P (sdp, "\n    Test Options:\n");
+    P (sdp, "\tabort                 Abort a background test.\n");
+    P (sdp, "\tselftest              Standard self test.\n");
+    P (sdp, "\tbextended             Background extended self test.\n");
+    P (sdp, "\tbshort                Background short self test.\n");
+    P (sdp, "\textended              Foreground extended self test.\n");
+    P (sdp, "\tshort                 Foreground short self test.\n");
+
     P (sdp, "\n    Test Check Options:\n");
     P (sdp, "\tresid=value           The expected residual count.\n");
     P (sdp, "\ttransfer=value        The expected transfer count.\n");
@@ -268,7 +329,7 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\tasq=value             The expected SCSI sense qualifier.\n");
     P (sdp, "\n    Example:\n");
     P (sdp, "\tcdb='1c 01 01 ff fc 00' dir=read length=65532 \\\n");
-    P (sdp, "\ttransfer=240 disable=verbose exp_radix=hex expect=BYTE:0:01:...");
+    P (sdp, "\ttransfer=240 disable=verbose exp_radix=hex expect=BYTE:0:01:...\n");
     P (sdp, "\n    Note: The enable=wait option can be used to wait for status.\n");
 
     P (sdp, "\n");
@@ -331,6 +392,10 @@ void Help(scsi_device_t *sdp)
                                 (sdp->scsi_info_flag) ? enabled_str : disabled_str);
     P (sdp, "\tsense            Display sense data flag.   (Default: %s)\n",
 			 	(sdp->sense_flag) ? enabled_str : disabled_str);
+    P (sdp, "\tshow_caching     Show device caching flag.  (Default: %s)\n",
+                                (sdp->show_caching_flag) ? enabled_str : disabled_str);
+    P (sdp, "\tshow_header      Show devices header flag.  (Default: %s)\n",
+			 	(sdp->show_header_flag) ? enabled_str : disabled_str);
     P (sdp, "\tunique           Unique pattern flag.       (Default: %s)\n",
 			 	(sdp->unique_pattern) ? enabled_str : disabled_str);
     P (sdp, "\tverbose          Verbose output flag.       (Default: %s)\n",
@@ -639,6 +704,7 @@ void Help(scsi_device_t *sdp)
 
     P (sdp, "\n    Environment Variables:\n");
     P (sdp, "\t# export SPT_DEVICE='/dev/sdi'\n");
+    P (sdp, "\t# export SPT_SHOW_FIELDS='dtype,vid,pid,did,tport,paths'\n");
     P (sdp, "\t# export SPT_EMIT_STATUS='Status: %%status, SCSI Status: %%scsi_status, Sense Code: %%sense_code, "
        "Sense Key: %%sense_key, Ascq: %%ascq, Resid: %%resid'\n");
 

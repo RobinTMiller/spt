@@ -24,27 +24,31 @@
  * THIS SOFTWARE.							    *
  *									    *
  ****************************************************************************/
-/************************************************************************
- *									*
- * File:	scsi_cdbs.h						*
- * Date:	April 9, 1991						*
- * Author:	Robin T. Miller						*
- *									*
- * Description:								*
- *	SCSI Command Block Descriptor definitions.			*
- *									*
- ************************************************************************/
- /*
-  * Modification History:
-  *
-  * October 6th, 2015 by Robin T. Miller
-  * 	Adding CDB's from libscsi.c to here.
-  * 	Updating bitfields for native AIX compiler.
-  * 	AIX does NOT like uint8_t or unnamed bit fields!
-  * 
-  * July 31st, 2015 by Robin T. Miller
-  * 	Modify/add new SCSI CDB's (16-byte, etc)
-  */
+/*
+ * File:	scsi_cdbs.h
+ * Date:	April 9, 1991
+ * Author:	Robin T. Miller
+ *
+ * Description:
+ *      SCSI Command Block Descriptor definitions.
+ *
+ * Modification History:
+ *
+ * June 7th, 2018 by Robin T. Miller
+ *      Add ATA Pass-Through 16 byte CDB definition.
+ * 
+ * March 19th, 2018 by Robin T. Miller
+ *      Update Format Unit CDB, woefully out of date.
+ *      Updates based on SCSI Block Commands SBC-4, 20 May 2014.
+ *
+ * October 6th, 2015 by Robin T. Miller
+ * 	Adding CDB's from libscsi.c to here.
+ * 	Updating bitfields for native AIX compiler.
+ * 	AIX does NOT like uint8_t or unnamed bit fields!
+ * 
+ * July 31st, 2015 by Robin T. Miller
+ * 	Modify/add new SCSI CDB's (16-byte, etc)
+ */
 
 #if defined(__IBMC__)
 /* IBM aligns bit fields to 32-bits by default! */
@@ -100,6 +104,8 @@ struct TestUnitReady_CDB {
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
 };
 
+/* ============================================================================================== */
+
 /*
  * Inquiry Command Descriptor Block:
  */
@@ -137,6 +143,90 @@ struct Inquiry_CDB {
 #	error "bitfield ordering is NOT defined!"
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
 };
+
+/* ============================================================================================== */
+
+#define ATA_PASSTHROUGH_OPCODE	0x85
+#define ATA_IDENTIFY_COMMAND	0xEC
+
+#define IDENTIFY_SERIAL_OFFSET	20
+#define IDENTIFY_SERIAL_LENGTH	20
+
+#define IDENTIFY_FW_OFFSET	46
+#define IDENTIFY_FW_LENGTH	8
+
+#define IDENTIFY_MODEL_OFFSET	64
+#define IDENTIFY_MODEL_LENGTH	40
+
+#define IDENTIFY_DATA_LENGTH	512
+#define IDENTIFY_SECTOR_COUNT	1
+
+#define PROTOCOL_HARD_RESET	0
+#define PROTOCOL_SRST		1
+#define PROTOCOL_NON_DATA	3
+#define PROTOCOL_PIO_DATA_IN	4
+#define PROTOCOL_PIO_DATA_OUT	5
+#define PROTOCOL_DMA		6
+#define PROTOCOL_DMA_QUEUED	7
+#define PROTOCOL_DIAGNOSTIC	8
+#define PROTOCOL_DEVICE_RESET	9
+#define PROTOCOL_UDMA_DATA_IN	10
+#define PROTOCOL_UDMA_DATA_OUT	11
+#define PROTOCOL_FPDMA		12
+#define PROTOCOL_RESPONSE_INFO	15
+
+#define BYT_BLOK_TRANSFER_BYTES	 0
+#define BYT_BLOK_TRANSFER_BLOCKS 1
+
+#define T_DIR_TO_ATA_DEVICE	0
+#define T_DIR_FROM_ATA_DEVICE	1
+
+#define T_LENGTH_NO_DATA	0x00	/* No data is transferred. */
+#define T_LENGTH_FEATURE_FIELD	0x01	/* Transfer count specified in the feature field. */
+#define T_LENGTH_SECTOR_COUNT	0x02	/* Transfer count specified in sector count field. */
+#define T_LENGTH_STPSIU		0x03	/* Transfer count specified in STPSIU. */
+
+/*
+ * ATA Pass-Through 16 Command Descriptor Block.
+ */
+typedef struct AtaPassThrough16_CDB {
+    uint8_t	opcode;			/* Operation code.		[0] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t				/*				[1] */
+	extend			: 1,	/*	 		     (b0:1) */
+	protocol		: 4,	/*			     (b2:4) */
+	multiple_count		: 3;	/*			     (b5:3) */
+    bitfield_t				/*				[2] */
+	t_length		: 2,	/*			     (b0:1) */
+	byt_blok		: 1,	/* 			       (b2) */
+	t_dir			: 1,	/*			       (b3) */
+	reserved_byte1_b4	: 1,	/* Reserved.		       (b4) */
+	ck_cond			: 1,	/* 			       (b5) */
+	off_line		: 2;	/*			     (b6:7) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t				/*				[1] */
+	multiple_count		: 3,	/*			     (b5:3) */
+	protocol		: 4,	/*			     (b2:4) */
+	extend			: 2;	/*	 		     (b0:1) */
+    bitfield_t				/*				[2] */
+	off_line		: 2,	/*			     (b6:7) */
+	ck_cond			: 1,	/* 			       (b5) */
+	reserved_byte1_b4	: 1,	/* Reserved.		       (b4) */
+	t_dir			: 1,	/*			       (b3) */
+	byt_blok		: 1,	/* 			       (b2) */
+	t_length		: 2;	/*			     (b0:1) */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+    uint8_t	features_high;		/*				[3] */
+    uint8_t	features_low;		/*				[4] */
+    uint8_t	sector_count_high;	/*				[5] */
+    uint8_t	sector_count_low;	/*				[6] */
+    uint8_t	lba_low[2];		/*			      [7-8] */
+    uint8_t	lba_mid[2];		/*			     [9-10] */
+    uint8_t	lba_high[2];		/*			    [11-12] */
+    uint8_t	device;			/*			       [13] */
+    uint8_t	command;		/*			       [14] */
+    uint8_t	control;		/*			       [15] */
+} AtaPassThrough16_CDB_t;
 
 /* ============================================================================================== */
 /* Note: The page control field values are defined in scsi_log.h */
@@ -494,7 +584,7 @@ struct sense_field_pointer {
  * Additional Sense Bytes Format for "RECOVERED ERROR", "HARDWARE ERROR",
  * or "MEDIUM ERROR" Sense Keys:
  */
-struct sense_retry_count {
+typedef struct sense_retry_count {
 #if defined(_BITFIELDS_LOW_TO_HIGH_)
 	bitfield_t
 	    res_byte15_b0_7	: 7,	/* Reserved.			[15]*/
@@ -506,14 +596,15 @@ struct sense_retry_count {
 #else
 #	error "bitfield ordering is NOT defined!"
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
-	uint8_t	retry_count1;		/* Retry count (MSB byte).	[16]*/
-	uint8_t	retry_count0;		/* Retry count (LSB byte).	[17]*/
-};
+	uint8_t	retry_count[2];		/* Retry count.	             [16-17] */
+} sense_retry_count_t;
 
+#if 0
 /*
- * Additional Sense Bytes Format for "NOT READY" Sense Key:
+ * Additional Sense Bytes Format for "NOT READY" Sense Key, with 
+ * asc/ascq = (0x4, 0x4) - Logical unit not ready, format in progress
  */
-struct sense_format_progress {
+typedef struct sense_format_progress {
 #if defined(_BITFIELDS_LOW_TO_HIGH_)
 	bitfield_t
 	    res_byte15_b0_7	: 7,	/* Reserved.			[15]*/
@@ -525,9 +616,9 @@ struct sense_format_progress {
 #else
 #	error "bitfield ordering is NOT defined!"
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
-	uint8_t	progress_ind1;		/* Progress indicator (MSB byte)[16]*/
-	uint8_t	progress_ind0;		/* Progress indicator (LSB byte)[17]*/
-};
+	uint8_t	progress_indicator[2];	/* Progress indicator.	    [16-17] */
+} sense_format_progress_t;
+#endif /* #if 0 */
 
 /*
  * Write Buffer Command Descriptor Block:
@@ -576,26 +667,27 @@ typedef struct WriteBuffer_CDB {
 /*
  * Format Unit Command Descriptor Block:
  */
-struct FormatUnit_CDB {
+typedef struct FormatUnit_CDB {
 	uint8_t	opcode;			/* Operation Code.		[0] */
 #if defined(_BITFIELDS_LOW_TO_HIGH_)
-	bitfield_t
-	    dlf		: 3,		/* Defect List Format.		[1] */
-	    cmplst	: 1,		/* Complete List.		    */
-	    fmtdat	: 1,		/* Format Data.			    */
-	    lun		: 3;		/* Logical Unit Number.		    */
+	bitfield_t			/*				[1] */
+	    dlf		: 3,		/* Defect List Format.	     (b0:2) */
+	    cmplst	: 1,		/* Complete List.	       (b3) */
+	    fmtdat	: 1,		/* Format Data.		       (b4) */
+	    long_list	: 1,		/* Long list.		       (b5) */
+	    fmtpinfo	: 2;		/* Format Protection Info.   (b6:7) */
 #elif defined(_BITFIELDS_HIGH_TO_LOW_)
-	bitfield_t
-	    lun		: 3,		/* Logical Unit Number.		    */
-	    fmtdat	: 1,		/* Format Data.			    */
-	    cmplst	: 1,		/* Complete List.		    */
-	    dlf		: 3;		/* Defect List Format.		[1] */
+	bitfield_t			/*				[1] */
+	    fmtpinfo	: 2,		/* Format Protection Info.   (b6:7) */
+	    long_list	: 1,		/* Long list.		       (b5) */
+	    fmtdat	: 1,		/* Format Data.		       (b4) */
+	    cmplst	: 1,		/* Complete List.	       (b3) */
+	    dlf		: 3;		/* Defect List Format.	     (b0:2) */
 #else
 #	error "bitfield ordering is NOT defined!"
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
-	uint8_t	pattern;		/* Format Data Pattern.		[2] */
-	uint8_t	interleave1;		/* Interleave Factor.		[3] */
-	uint8_t	interleave0;		/* Interleave Factor.		[4] */
+	uint8_t	vu_byte2;		/* Vendor unique.		[2] */
+	uint8_t	obsolete[2];		/* Obsolete.		      [3-4] */
 #if defined(_BITFIELDS_LOW_TO_HIGH_)
 	bitfield_t
 	    link		: 1,	/* Link.			[5] */
@@ -611,7 +703,7 @@ struct FormatUnit_CDB {
 #else
 #	error "bitfield ordering is NOT defined!"
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
-};
+} FormatUnit_CDB_t;
 
 /*
  * Prevent/Allow Medium Removal Command Descriptor Block:

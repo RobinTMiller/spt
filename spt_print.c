@@ -268,7 +268,7 @@ int
 PrintLogs(scsi_device_t *sdp, FILE *fp, char *buffer)
 {
     hbool_t job_log_flag;
-    int status;
+    int status = SUCCESS;
 
     job_log_flag = (sdp->job && sdp->job->ji_job_logfp);
     /*

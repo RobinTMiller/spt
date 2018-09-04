@@ -28,7 +28,10 @@
  * Date:	September 27th, 2006 
  *  
  * Modification History: 
-
+ *
+ * November 23rd, 2018 by Robin T. Miller
+ *	Add functions to get vendor specific Inquiry serial number.
+ *
  * November 16th, 2017 by Robin T. Miller
  *      Added support for all supported Inquiry log pages.
  * 
@@ -54,7 +57,6 @@ extern char *find_protocol_identifier(uint8_t protocol_identifier);
  * Forward References:
  */ 
 int standard_inquiry(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp, inquiry_t *inquiry);
-
 char *standard_inquiry_to_json(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp, inquiry_t *inquiry, char *page_name);
 
 int PrintInquiryPageHeader(scsi_device_t *sdp, int offset,
@@ -67,14 +69,6 @@ int inquiry_supported_decode(scsi_device_t *sdp, io_params_t *iop,
 char *inquiry_supported_to_json(scsi_device_t *sdp, io_params_t *iop,
 				inquiry_header_t *ihdr, char *page_name);
 
-/* Page 0x03 */
-int inquiry_ascii_information03_decode(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp, inquiry_header_t *ihdr);
-char *inquiry_ascii_information03_decode_json(scsi_device_t *sdp, io_params_t *iop,
-					      scsi_generic_t *sgp, inquiry_header_t *ihdr, char *page_name);
-static char *get_operating_state(uint32_t operating_state);
-static char *get_functional_mode(uint32_t functional_mode);
-static char *get_code_mode_type(uint32_t code_mode_type);
-
 /* Page 0x80 */
 int inquiry_serial_number_decode(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp, inquiry_header_t *ihdr);
 char *inquiry_serial_number_to_json(scsi_device_t *sdp, io_params_t *iop,
@@ -86,7 +80,7 @@ int inquiry_device_identification_decode(scsi_device_t *sdp, io_params_t *iop,
 char *inquiry_device_identification_to_json(scsi_device_t *sdp, io_params_t *iop,
 					    scsi_generic_t *sgp, inquiry_header_t *ihdr, char *page_name);
 
-char *GetDeviceType(uint8_t device_type);
+char *GetDeviceType(uint8_t device_type, hbool_t full_name);
 char *GetPeripheralQualifier(inquiry_t *inquiry, hbool_t fullname);
 char *get_inquiry_page_name(uint8_t device_type, uint8_t page_code, uint8_t vendor_id);
 
@@ -404,7 +398,7 @@ standard_inquiry(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp, inqu
 
     /* Byte 0 */
     PrintHex(sdp, "Peripheral Device Type", inquiry->inq_dtype, DNL);
-    Print(sdp, " (%s)\n", GetDeviceType(inquiry->inq_dtype));
+    Print(sdp, " (%s)\n", GetDeviceType(inquiry->inq_dtype, True));
 
     PrintHex(sdp, "Peripheral Qualifier", inquiry->inq_pqual, DNL);
     Print(sdp, " (%s)\n", GetPeripheralQualifier(inquiry, True));
@@ -471,11 +465,7 @@ standard_inquiry(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp, inqu
 	PrintHex(sdp, "Obsolete (byte 6, bit 3)", inquiry->inq_obsolete_byte6_b3, PNL);
     }
     PrintBoolean(sdp, False, "Multiple SCSI Ports", inquiry->inq_multip, PNL);
-    if ( (inquiry->inq_dtype == DTYPE_DIRECT) &&
-	 (strncmp((char *)inquiry->inq_vid, "HGST", 4) == 0) ) {
-	PrintDecimal(sdp, "Port Receiving Inquiry", inquiry->inq_port, DNL);
-	Print(sdp, " (Port %s)\n", (inquiry->inq_port == 0) ? "A" : "B");
-    } else if (inquiry->inq_vs_byte6_b5 || sdp->DebugFlag) {
+    if (inquiry->inq_vs_byte6_b5 || sdp->DebugFlag) {
 	PrintBoolean(sdp, False, "Vendor Specific (byte 6, bit 5)", inquiry->inq_vs_byte6_b5, PNL);
     }
     PrintBoolean(sdp, False, "Embedded Enclosure Services", inquiry->inq_encserv, PNL);
@@ -572,7 +562,7 @@ standard_inquiry_to_json(scsi_device_t *sdp, io_params_t *iop,
     /* Byte 0 */
     json_status = json_object_set_number(object, "Peripheral Device Type", (double)inquiry->inq_dtype);
     if (json_status != JSONSuccess) goto finish;
-    json_status = json_object_set_string(object, "Peripheral Device Type Description", GetDeviceType(inquiry->inq_dtype));
+    json_status = json_object_set_string(object, "Peripheral Device Type Description", GetDeviceType(inquiry->inq_dtype, True));
     if (json_status != JSONSuccess) goto finish;
 
     json_status = json_object_set_number(object, "Peripheral Qualifier", (double)inquiry->inq_pqual);
@@ -652,12 +642,7 @@ standard_inquiry_to_json(scsi_device_t *sdp, io_params_t *iop,
     json_status = json_object_set_boolean(object, "Multiple SCSI Ports", inquiry->inq_multip);
     if (json_status != JSONSuccess) goto finish;
 
-    if ( (inquiry->inq_dtype == DTYPE_DIRECT) &&
-	 (strncmp((char *)inquiry->inq_vid, "HGST", 4) == 0) ) {
-	str = (inquiry->inq_port == 0) ? "A" : "B";
-	json_status = json_object_set_string(object, "Port Receiving Inquiry", str);
-	if (json_status != JSONSuccess) goto finish;
-    } else if (inquiry->inq_vs_byte6_b5 || sdp->DebugFlag) {
+    if (inquiry->inq_vs_byte6_b5 || sdp->DebugFlag) {
 	json_status = json_object_set_boolean(object, "Vendor Specific (byte 6, bit 5)", inquiry->inq_vs_byte6_b5);
 	if (json_status != JSONSuccess) goto finish;
     }
@@ -729,7 +714,7 @@ PrintInquiryPageHeader(scsi_device_t *sdp, int offset,
 
     offset = PrintHexDebug(sdp, offset, (uint8_t *)ihdr, sizeof(*ihdr));
     PrintHex(sdp, "Peripheral Device Type", ihdr->inq_dtype, DNL);
-    Print(sdp, " (%s)\n", GetDeviceType(ihdr->inq_dtype)); 
+    Print(sdp, " (%s)\n", GetDeviceType(ihdr->inq_dtype, True)); 
     PrintHex(sdp, "Peripheral Qualifier", ihdr->inq_pqual, DNL);
     if (ihdr->inq_pqual & PQUAL_VENDOR_SPECIFIC) {
 	Printf(sdp, " (%s)\n", vendor_specific_str);
@@ -760,7 +745,7 @@ PrintInquiryPageHeaderJson(scsi_device_t *sdp, JSON_Object *object, inquiry_head
     if (json_status != JSONSuccess) return(json_status);
     json_status = json_object_set_number(object, "Peripheral Device Type", (double)ihdr->inq_dtype);
     if (json_status != JSONSuccess) return(json_status);
-    json_status = json_object_set_string(object, "Peripheral Device Type Description", GetDeviceType(ihdr->inq_dtype));
+    json_status = json_object_set_string(object, "Peripheral Device Type Description", GetDeviceType(ihdr->inq_dtype, True));
     if (json_status != JSONSuccess) return(json_status);
     json_status = json_object_set_number(object, "Peripheral Qualifier", (double)ihdr->inq_pqual);
     if (json_status != JSONSuccess) return(json_status);
@@ -1281,45 +1266,76 @@ finish:
 
 /* ============================================================================================== */
 
-static struct {
+static struct device_types {
     char *fname;                /* Full device type name.       */
+    char *sname;		/* Short device type name.	*/
     uint8_t dtype;              /* The Inquiry device type.     */
-} dnames[] = {
-    { "Direct Access Device",          		DTYPE_DIRECT		},
-    { "Sequential Access Device",      		DTYPE_SEQUENTIAL	},
-    { "Printer Device",                		DTYPE_PRINTER		},	/* SPC-5 Obsolete */
-    { "Processor Device",              		DTYPE_PROCESSOR		},
-    { "Write-Once/Read-Many",   		DTYPE_WORM		},	/* SPC-5 Obsolete */
-    { "CD/DVD Device",				DTYPE_MULTIMEDIA	},
-    { "Scanner Device",                		DTYPE_SCANNER		},	/* SPC-5 Reserved */
-    { "Optical Memory Device",         		DTYPE_OPTICAL		},
-    { "Media Changer Device",         		DTYPE_CHANGER		},
-    { "Communications Device",         		DTYPE_COMMUNICATIONS	},	/* SPC-5 Reserved */
-    { "Graphics Pre-press Device",     		DTYPE_PREPRESS_0	},	/* SPC-5 Reserved */
-    { "Graphics Pre-press Device",     		DTYPE_PREPRESS_1	},	/* SPC-5 Reserved */
-    { "Array Controller Device",       		DTYPE_RAID		},
-    { "Enclosure Services Device",      	DTYPE_ENCLOSURE		},
-    { "Simplified Direct-Access Device",	DTYPE_SIMPLIFIED_DIRECT	},
-    { "Optical Card Reader/Writer Device",	DTYPE_OPTICAL_CARD	},
-    { "Object Storage Device",			DTYPE_OBJECT_STORAGE	},
-    { "Automation/Drive Interface",		DTYPE_AUTOMATION_DRIVE	},
-    { "Host Managed Zoned Block Device",	DTYPE_HOST_MANAGED	},
-    { "Well Known Logical Unit",		DTYPE_WELL_KNOWN_LUN	},
-    { "Unknown or No Device Type",     		DTYPE_NOTPRESENT	}
+} dtype_names[] = {
+    { "Direct Access Device",          		"Direct",	DTYPE_DIRECT		},
+    { "Sequential Access Device",      		"Sequential",	DTYPE_SEQUENTIAL	},
+    { "Printer Device",                		"Printer",	DTYPE_PRINTER		}, /* SPC-5 Obsolete */
+    { "Processor Device",              		"Processor",	DTYPE_PROCESSOR		},
+    { "Write-Once/Read-Many",   		"WORM",		DTYPE_WORM		}, /* SPC-5 Obsolete */
+    { "CD/DVD Device",				"CD/DVD",	DTYPE_MULTIMEDIA	},
+    { "Scanner Device",                		"Scanner",	DTYPE_SCANNER		}, /* SPC-5 Reserved */
+    { "Optical Memory Device",         		"Optical",	DTYPE_OPTICAL		},
+    { "Media Changer Device",         		"Changer",	DTYPE_CHANGER		},
+    { "Communications Device",         		"Comm",		DTYPE_COMMUNICATIONS	}, /* SPC-5 Reserved */
+    { "Graphics Pre-press Device",     		"Prepress1",	DTYPE_PREPRESS_0	}, /* SPC-5 Reserved */
+    { "Graphics Pre-press Device",     		"Prepress2",	DTYPE_PREPRESS_1	}, /* SPC-5 Reserved */
+    { "Array Controller Device",       		"RAID",		DTYPE_RAID		},
+    { "Enclosure Services Device",      	"Enclosure",	DTYPE_ENCLOSURE		},
+    { "Simplified Direct-Access Device",	"sDirect",	DTYPE_SIMPLIFIED_DIRECT	},
+    { "Optical Card Reader/Writer Device",	"OpticalCard",	DTYPE_OPTICAL_CARD	},
+    { "Object Storage Device",			"ObjectStorage",DTYPE_OBJECT_STORAGE	},
+    { "Automation/Drive Interface",		"Automation",	DTYPE_AUTOMATION_DRIVE	},
+    { "Host Managed Zoned Block Device",	"HostManaged",	DTYPE_HOST_MANAGED	},
+    { "Well Known Logical Unit",		"KnownLUN",	DTYPE_WELL_KNOWN_LUN	},
+    { "Unknown or No Device Type",     		"NotPresent",	DTYPE_NOTPRESENT	}
 };
-static int dtype_entries = sizeof(dnames) / sizeof(dnames[0]);
+static int dtype_entries = sizeof(dtype_names) / sizeof(dtype_names[0]);
 
 char *
-GetDeviceType(uint8_t device_type)
+GetDeviceType(uint8_t device_type, hbool_t full_name)
 {
     int i;
 
     for (i = 0; i < dtype_entries; i++) {
-	if (dnames[i].dtype == device_type) {
-	    return (dnames[i].fname);
+	if (dtype_names[i].dtype == device_type) {
+	    if (full_name) {
+		return(dtype_names[i].fname);
+	    } else {
+		return(dtype_names[i].sname);
+	    }
 	}
     }
     return ("Reserved");
+}
+
+uint8_t
+GetDeviceTypeCode(scsi_device_t *sdp, char *device_type, int *status)
+{
+    struct device_types *dtp = dtype_names;
+    size_t length = strlen(device_type);
+    int i;
+
+    if (length == 0) {
+	Printf(sdp, "\n");
+	Printf(sdp, "Device Type Codes/Names:\n");
+	for (i = 0; i < dtype_entries; i++, dtp++) {
+	    Printf(sdp, "    0x%02x - %s (%s)\n", dtp->dtype, dtp->fname, dtp->sname);
+	}
+	Printf(sdp, "\n");
+	*status = WARNING;
+	return(DTYPE_UNKNOWN);
+    }
+
+    for (i = 0; i < dtype_entries; i++, dtp++) {
+	if (strcasecmp(device_type, dtp->sname) == 0) {
+	    return( dtp->dtype );
+	}
+    }
+    return(DTYPE_UNKNOWN);
 }
 
 char *
@@ -1364,7 +1380,7 @@ inquiry_page_entry_t inquiry_page_table[] = {
     { INQ_THIRD_PARTY_COPY,	ALL_DEVICE_TYPES,	VID_ALL,	"Third Party Copy",	"third_party_copy"	},
     { INQ_BLOCK_LIMITS_PAGE,	ALL_DEVICE_TYPES,	VID_ALL,	"Block Limits",		"block_limits"		},
     { INQ_BLOCK_CHAR_VPD_PAGE,	ALL_DEVICE_TYPES,	VID_ALL,	"Block Device Characteristics VPD", "block_char_vpd" },
-    { INQ_LOGICAL_BLOCK_PROVISIONING_PAGE, ALL_DEVICE_TYPES, VID_ALL,	"Logical Block Provisioning", "logical_block_prov" },
+    { INQ_LOGICAL_BLOCK_PROVISIONING_PAGE, ALL_DEVICE_TYPES, VID_ALL,	"Logical Block Provisioning", "logical_block_prov" }
 };
 
 int num_inquiry_page_entries = ( sizeof(inquiry_page_table) / sizeof(inquiry_page_entry_t) );

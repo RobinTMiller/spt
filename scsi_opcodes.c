@@ -1702,7 +1702,7 @@ ScsiOpcodeEntry(unsigned char *cdb, unsigned short device_type)
 }
 
 void
-ShowScsiOpcodes(scsi_device_t *sdp)
+ShowScsiOpcodes(scsi_device_t *sdp, char *opstr)
 {
     scsi_opcode_t *sop = scsiOpcodeTable;
     int entrys;
@@ -1712,6 +1712,9 @@ ShowScsiOpcodes(scsi_device_t *sdp)
 
     for (entrys = 0, sop = scsiOpcodeTable; entrys < scsi_opcodeEntries; sop++, entrys++) {
 	char *data_dir;
+	if (opstr && NESC(sop->opname, opstr)) {
+	    continue;
+	}
 	if (sop->data_dir == scsi_data_none) {
 	    data_dir = "none";
 	} else if (sop->data_dir == scsi_data_read) {

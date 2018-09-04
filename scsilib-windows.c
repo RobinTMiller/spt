@@ -53,8 +53,8 @@
  * Local Definitions:
  */
 
-#if !defined(SCSILIB_H)
-#define SCSILIB_H
+#if !defined(WIN_SCSILIB_H)
+#define WIN_SCSILIB_H
 
 /*
  * Note: The best I can recall, this stuff is inline to avoid requiring the DDK include files!
@@ -89,7 +89,7 @@ typedef struct _SPTDWB {
     UCHAR senseBuf[256]; 
 } SPTWB, *PSPTWB;  
 
-#endif /* !defined(SCSILIB_H) */
+#endif /* !defined(WIN_SCSILIB_H) */
 
 /*
  * Forward Declarations:

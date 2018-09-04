@@ -220,7 +220,7 @@ typedef struct ref_temp_log_param {
 #define PROTOCOL_ID_No_Specific_Protocol	0x0F
 
 /*
- * Identify Reason Definitions:
+ * Idenitfy Reason Definitions:
  */
 #define REASON_Power_On				0x00
 #define REASON_Open_Connection_Request		0x01

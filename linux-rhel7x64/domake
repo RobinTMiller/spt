@@ -1,0 +1,6 @@
+#make -f ../Makefile VPATH=.. OS=linux \
+#        PORG="-g -Wall -Wshadow -Wpointer-arith -Wcast-qual -Wstrict-prototypes -Wmissing-prototypes"
+#make -f ../Makefile VPATH=.. OS=linux PORG="-g -std=c99 -Wformat -Wsign-compare -Wmissing-declarations -Wmissing-prototypes -Wreturn-type"
+make -f ../Makefile VPATH=.. OS=linux PORG="-g -Wformat -Wsign-compare -Wmissing-declarations -Wmissing-prototypes -Wreturn-type"
+# Non-debug optimized version!
+#make -f ../Makefile VPATH=.. OS=linux

@@ -73,6 +73,7 @@
 					/* 0x15-0x1D are reserved.	*/
 #define DTYPE_WELL_KNOWN_LUN	0x1E	/* Well known logical unit.	*/
 #define	DTYPE_NOTPRESENT	0x1F	/* Unknown or no device type.	*/
+#define DTYPE_UNKNOWN		0xFF	/* (my) Unknown device type.	*/
 
 /*
  * Device type bitmasks control access to commands and mode pages.
@@ -232,7 +233,6 @@ typedef struct {
 #define inq_obsolete_byte6_b3	s3un.bits.inqf_obsolete_byte6_b3
 #define inq_multip		s3un.bits.inqf_multip
 #define inq_vs_byte6_b5		s3un.bits.inqf_vs_byte6_b5
-#define inq_port		s3un.bits.inqf_vs_byte6_b5	/* HGST */
 #define inq_encserv		s3un.bits.inqf_encserv
 #define inq_obsolete_byte6_b7	s3un.bits.inqf_obsolete_byte6_b7
 	union {
@@ -453,8 +453,6 @@ typedef struct inquiry_network_service_page {
     uint8_t address_length[2];
     uint8_t address[1];
 } inquiry_network_service_page_t;
-
-/* ============================================================================================== */
 
 #if defined(__IBMC__)
 #  pragma options align=reset

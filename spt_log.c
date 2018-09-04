@@ -32,6 +32,9 @@
  *
  * Modification History:
  * 
+ * May 25th, 2018 by Robin T. Miller
+ *      Add support for log page counters and known log pages (hex dump).
+ * 
  * November 16th, 2017 by Robin T. MIller
  *      Add support for report format of brief versus full, where brief format
  * excludes reporting of log page and parameter headers.
@@ -81,11 +84,15 @@ int log_sense_protocol_specific_decode(scsi_device_t *sdp, io_params_t *iop,
 				       scsi_generic_t *sgp, log_page_t *log_page);
 char *log_sense_protocol_specific_to_json(scsi_device_t *sdp, io_params_t *iop,
 					  log_page_t *log_page, char *page_name);
-/* Log Page 0x37 */
-int log_sense_hgst_misc_data_counters_decode(scsi_device_t *sdp, io_params_t *iop,
-					     scsi_generic_t *sgp, log_page_t *log_page);
-char *log_sense_hgst_misc_data_counters_to_json(scsi_device_t *sdp, io_params_t *iop,
-						log_page_t *log_page, char *page_name);
+/* Counter and Other Log Pages. */
+hbool_t isErrorCounterPage(uint8_t page_code);
+int log_page_decode(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp, log_page_t *log_page);
+char *log_page_decode_to_json(scsi_device_t *sdp, io_params_t *iop, log_page_t *log_page, char *page_name);
+void PrintLogParameter(scsi_device_t *sdp, log_parameter_header_t *phdr, uint16_t param_code,
+		       void *param_data, uint32_t param_length, char *param_str);
+JSON_Status PrintLogParameterJson(scsi_device_t *sdp, JSON_Object *object,
+				  log_parameter_header_t *phdr, uint16_t param_code,
+				  void *param_data, uint32_t param_length, char *param_str);
 /*
  * Utility Functions:
  */
@@ -292,7 +299,8 @@ log_sense_decode(void *arg)
     } else if (hdr->log_page_code == LOG_PROTOCOL_SPEC_PAGE) {
 	status = log_sense_protocol_specific_decode(sdp, iop, sgp, log_page);	    /* Page 0x18 */
     } else {
-	sdp->verbose = True;
+	status = log_page_decode(sdp, iop, sgp, log_page);	/* Counters and other pages. */
+	//sdp->verbose = True;
     }
     return(status);
 }
@@ -408,7 +416,8 @@ PrintLogParameterHeader(scsi_device_t *sdp, log_page_header_t *hdr, log_paramete
     if (phdr->obsolete_byte2_b6 || sdp->DebugFlag) {
 	PrintHex(sdp, "Obsolete (byte 2, bit 6)", phdr->obsolete_byte2_b6, PNL);
     }
-    if ( (phdr->log_format_linking == BOUNDED_DATA_COUNTER) &&
+    if ( ((phdr->log_format_linking == BOUNDED_DATA_COUNTER) ||
+	  (phdr->log_format_linking == BOUNDED_UNBOUNDED_DATA_COUNTER)) &&
 	 ((sdp->page_control == LOG_PCF_CURRENT_CUMULATIVE) ||
 	  (sdp->page_control == LOG_PCF_DEFAULT_CUMULATIVE)) ) {
 	PrintBoolean(sdp, False, "Disable Update (DU)", phdr->log_du, DNL);
@@ -481,7 +490,7 @@ PrintLogParameterHeaderJson(scsi_device_t *sdp, JSON_Object *object,
 
     json_status = json_object_set_number(object, "Obsolete (byte 2, bits 2:4)", (double)phdr->obsolete_byte2_b2_4);
     if (json_status != JSONSuccess) return(json_status);
-    json_status = json_object_set_number(object, "Target Save Disable (TSD)", (double)phdr->log_tsd);
+    json_status = json_object_set_number(object, "Target Save Disable", (double)phdr->log_tsd);
     if (json_status != JSONSuccess) return(json_status);
     if (phdr->obsolete_byte2_b6 || sdp->DebugFlag) {
 	json_status = json_object_set_number(object, "Obsolete (byte 2, bit 6)", (double)phdr->obsolete_byte2_b6);
@@ -507,7 +516,7 @@ PrintLogParameterHeaderJson(scsi_device_t *sdp, JSON_Object *object,
  */
 int
 log_sense_supported_decode(scsi_device_t *sdp, io_params_t *iop,
-				 scsi_generic_t *sgp, log_page_t *log_page)
+			   scsi_generic_t *sgp, log_page_t *log_page)
 {
     log_page_header_t *hdr = &log_page->log_hdr;
     uint8_t *pages, page_code = hdr->log_page_code;
@@ -551,7 +560,8 @@ log_sense_supported_decode(scsi_device_t *sdp, io_params_t *iop,
  * Supported Log Pages (Page 0x00) in JSON Format:
  */
 char *
-log_sense_supported_to_json(scsi_device_t *sdp, io_params_t *iop, log_page_header_t *hdr, char *page_name)
+log_sense_supported_to_json(scsi_device_t *sdp, io_params_t *iop,
+			    log_page_header_t *hdr, char *page_name)
 {
     JSON_Value	*root_value;
     JSON_Object *root_object;
@@ -1354,6 +1364,355 @@ finish:
     }
     json_value_free(root_value);
     return(json_string);
+}
+
+/* ============================================================================================== */
+
+/*
+ * Log Page Counters and Other (unknown) Pages:
+ */
+int
+log_page_decode(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp, log_page_t *log_page)
+{
+    log_page_header_t *hdr = &log_page->log_hdr;
+    log_parameter_header_t *phdr = &log_page->log_phdr;
+    uint8_t page_code = hdr->log_page_code;
+    int page_length = (int)StoH(hdr->log_page_length);
+    uint16_t log_parameter_code = 0;
+    uint16_t log_param_length = 0;
+    uint8_t device_type = iop->sip->si_inquiry->inq_dtype;
+    void *log_param_data = NULL;
+    char *page_name = get_log_page_name(device_type, page_code, iop->vendor_id);
+    int offset = 0;
+    int status = SUCCESS;
+
+    if (sdp->output_format == JSON_FMT) {
+	char *json_string = NULL;
+	json_string = log_page_decode_to_json(sdp, iop, log_page, page_name);
+	if (json_string) {
+	    PrintLines(sdp, json_string);
+	    Printnl(sdp);
+	    json_free_serialized_string(json_string);
+	}
+	return(status);
+    }
+    /*
+     * Data Layout: 
+     *  Log Page Header
+     *  Log Parameter Header
+     *  Log Parameter Data
+     */
+    offset = PrintLogPageHeader(sdp, hdr, page_name, offset);
+
+    /*
+     * Loop through variable length log page parameters.
+     */
+    while (page_length > 0) {
+	int param_entry_length = 0;
+	char *param_str = NULL;
+
+	if (CmdInterruptedFlag == True)	break;
+	if (sdp->report_format == REPORT_FULL) Printf(sdp, "\n");
+	offset = PrintLogParameterHeader(sdp, hdr, phdr, offset);
+
+	log_parameter_code = (uint16_t)StoH(phdr->log_parameter_code);
+	log_param_length = phdr->log_parameter_length;
+	log_param_data = (uint8_t *)phdr + sizeof(*phdr);
+
+	offset = PrintHexDebug(sdp, offset, (uint8_t *)log_param_data, log_param_length);
+
+	if ( (isErrorCounterPage(hdr->log_page_code)) &&
+	     (log_parameter_code < num_error_types) ) {
+	    param_str = error_counter_types[log_parameter_code];
+	}
+
+	PrintLogParameter(sdp, phdr, log_parameter_code, log_param_data,
+			  log_param_length, param_str);
+
+	param_entry_length = (sizeof(*phdr) + log_param_length);
+	page_length -= param_entry_length;
+	phdr = (log_parameter_header_t *)((uint8_t *)phdr + param_entry_length);
+    }
+    Printf(sdp, "\n");
+    return(status);
+}
+
+/*
+ * Log Page Counters and Other (unknown) Pages in JSON:
+ */
+char *
+log_page_decode_to_json(scsi_device_t *sdp, io_params_t *iop, log_page_t *log_page, char *page_name)
+{
+    JSON_Value	*root_value;
+    JSON_Object *root_object;
+    JSON_Value  *value;
+    JSON_Object *object;
+    /* Log Parameter List */
+    JSON_Value  *pvalue = NULL;
+    JSON_Object *pobject = NULL;
+    JSON_Array	*pdesc_array;
+    JSON_Value	*pdesc_value = NULL;
+    JSON_Status json_status;
+    char *json_string = NULL;
+    char text[STRING_BUFFER_SIZE];
+    char *tp = NULL;
+    uint8_t *ucp = NULL;
+    int length = 0;
+    /* Normal Declarations */
+    log_page_header_t *hdr = &log_page->log_hdr;
+    log_parameter_header_t *phdr = &log_page->log_phdr;
+    uint8_t page_code = hdr->log_page_code;
+    int page_length = (int)StoH(hdr->log_page_length);
+    int param_length = 0;
+    uint16_t log_parameter_code = 0;
+    uint16_t log_param_length = 0;
+    uint8_t device_type = iop->sip->si_inquiry->inq_dtype;
+    void *log_param_data = NULL;
+    int offset = 0;
+    int status = SUCCESS;
+
+    root_value  = json_value_init_object();
+    if (root_value == NULL) return(NULL);
+    root_object = json_value_get_object(root_value);
+
+    value  = json_value_init_object();
+    if (value == NULL) {
+	json_value_free(root_value);
+	return(NULL);
+    }
+    json_status = json_object_dotset_value(root_object, page_name, value);
+    object = json_value_get_object(value);
+
+    ucp = (uint8_t *)hdr;
+    length = sizeof(*hdr);
+    if (sdp->report_format == REPORT_FULL) {
+	json_status = json_object_set_number(object, "Length", (double)length);
+	if (json_status != JSONSuccess) goto finish;
+	json_status = json_object_set_number(object, "Offset", (double)offset);
+	if (json_status != JSONSuccess) goto finish;
+	offset = FormatHexBytes(text, offset, ucp, length);
+	json_status = json_object_set_string(object, "Bytes", text);
+	if (json_status != JSONSuccess) goto finish;
+    }
+    json_status = PrintLogPageHeaderJson(sdp, object, hdr);
+    if (json_status != JSONSuccess) goto finish;
+
+    while (page_length > 0) {
+	int param_entry_length = 0;
+	char *param_str = NULL;
+	JSON_Object *mobject = object;
+
+	if (sdp->report_format == REPORT_FULL) {
+	    if (pvalue == NULL) {
+		pvalue  = json_value_init_object();
+		pobject = json_value_get_object(pvalue);
+	    }
+	    if (pdesc_value == NULL) {
+		pdesc_value = json_value_init_array();
+		pdesc_array = json_value_get_array(pdesc_value);
+	    }
+	    mobject = pobject;
+	}
+	log_parameter_code = (uint16_t)StoH(phdr->log_parameter_code);
+	log_param_length = phdr->log_parameter_length;
+	log_param_data = (uint8_t *)phdr + sizeof(*phdr);
+
+	ucp = (uint8_t *)phdr;
+	param_length = sizeof(*phdr) + log_param_length;
+	length = param_length;
+	if (sdp->report_format == REPORT_FULL) {
+	    json_status = json_object_set_number(mobject, "Length", (double)length);
+	    if (json_status != JSONSuccess) break;
+	    json_status = json_object_set_number(mobject, "Offset", (double)offset);
+	    if (json_status != JSONSuccess) break;
+	    offset = FormatHexBytes(text, offset, ucp, length);
+	    json_status = json_object_set_string(mobject, "Bytes", text);
+	    if (json_status != JSONSuccess) break;
+	}
+	json_status = PrintLogParameterHeaderJson(sdp, mobject, hdr, phdr);
+	if (json_status != JSONSuccess) goto finish;
+
+
+	if ( (isErrorCounterPage(hdr->log_page_code)) &&
+	     (log_parameter_code < num_error_types) ) {
+	    param_str = error_counter_types[log_parameter_code];
+	}
+
+	json_status = PrintLogParameterJson(sdp, mobject, phdr, log_parameter_code,
+					    log_param_data, log_param_length, param_str);
+	if (json_status != JSONSuccess) goto finish;
+
+	page_length -= param_length;
+	phdr = (log_parameter_header_t *)((uint8_t *)phdr + param_length);
+
+	if (sdp->report_format == REPORT_FULL) {
+	    json_status = json_array_append_value(pdesc_array, pvalue);
+	    pvalue = NULL;
+	    if (json_status != JSONSuccess) break;
+	}
+    }
+    /* Add the Log Parameter List. */
+    if (pdesc_value) {
+	json_status = json_object_dotset_value(object, "Log Parameter List", pdesc_value);
+	pdesc_value = NULL;
+	if (json_status != JSONSuccess) goto finish;
+    }
+
+finish:
+    (void)json_object_set_number(object, "JSON Status", (double)json_status);
+    if (sdp->json_pretty) {
+	json_string = json_serialize_to_string_pretty(root_value);
+    } else {
+	json_string = json_serialize_to_string(root_value);
+    }
+    json_value_free(root_value);
+    return(json_string);
+}
+
+hbool_t
+isErrorCounterPage(uint8_t page_code)
+{
+    hbool_t counter_page = False;
+
+    switch (page_code) {
+	case LOG_WRITE_ERROR_PAGE:
+	case LOG_READ_ERROR_PAGE:
+	case LOG_READREV_ERROR_PAGE:
+	case LOG_VERIFY_ERROR_PAGE:
+	    counter_page = True;
+	    break;
+    }
+    return(counter_page);
+}
+
+/*
+ * General purpose display of parameter data for full/brief formats.
+ */
+void
+PrintLogParameter(scsi_device_t *sdp, log_parameter_header_t *phdr, uint16_t param_code,
+		  void *param_data, uint32_t param_length, char *param_str)
+{
+    char display[STRING_BUFFER_SIZE];
+    uint8_t *bp = (u_char *)param_data;
+    hbool_t unknown_size = FALSE;
+    uint64_t counter = 0;
+
+    if ( ((phdr->log_format_linking == BOUNDED_DATA_COUNTER) ||
+	  (phdr->log_format_linking == BOUNDED_UNBOUNDED_DATA_COUNTER)) ) {
+	if (param_length > sizeof(uint64_t)) {
+	    unknown_size = True;
+	} else if (param_length) {
+	    counter = stoh(bp, param_length);
+	}
+    }
+
+    if ( unknown_size || (phdr->log_format_linking == BINARY_FORMAT_LIST) ) {
+	/*
+	 *  --> Binary Format List Parameters <--
+	 */
+	if (param_length) {
+	    if (param_str) {
+		PrintAscii(sdp, param_str, "", DNL);
+		PrintFields(sdp, bp, param_length);		/* Just hex data. */
+	    } else {
+		if (sdp->report_format == REPORT_FULL) {
+		    PrintAscii(sdp, paramater_data_str, "", DNL);
+		} else {
+		    sprintf(display, "%s 0x%x, %s (%u)",
+			    parameter_str, param_code,
+			    paramater_data_str, param_length);
+		    PrintAscii(sdp, display, "", DNL);
+		}
+		PrintHAFields(sdp, bp, param_length);		/* Hex and Ascii */
+	    }
+	}
+    } else if (phdr->log_format_linking == ASCII_FORMAT_LIST) {
+	/*
+	 *  --> ASCII Format List <--
+	 */
+	memcpy(display, param_data, param_length);
+	display[param_length] = '\0';
+	PrintAscii(sdp, paramater_data_str, display, PNL);
+    } else {
+	/*
+	 *  --> Bounded or Unbounded Data Counter <--
+	 */
+	if (param_str) {
+	    PrintLongLong(sdp, param_str, counter, PNL);
+	} else {
+	    if (sdp->report_format == REPORT_FULL) {
+		sprintf(display, "%s", counter_value_str);
+	    } else {
+		sprintf(display, "%s 0x%x, %s (%u)",
+			parameter_str, param_code,
+			counter_value_str, param_length);
+	    }
+	    PrintLongDecHex(sdp, display, counter, PNL);
+	}
+    }
+    return;
+}
+
+JSON_Status
+PrintLogParameterJson(scsi_device_t *sdp, JSON_Object *object,
+		      log_parameter_header_t *phdr, uint16_t param_code,
+		      void *param_data, uint32_t param_length, char *param_str)
+{
+    char text[STRING_BUFFER_SIZE];
+    uint8_t *bp = (u_char *)param_data;
+    hbool_t unknown_size = FALSE;
+    uint64_t counter = 0;
+    JSON_Status json_status = JSONSuccess;
+
+    if ( ((phdr->log_format_linking == BOUNDED_DATA_COUNTER) ||
+	  (phdr->log_format_linking == BOUNDED_UNBOUNDED_DATA_COUNTER)) ) {
+	if (param_length > sizeof(uint64_t)) {
+	    unknown_size = True;
+	} else if (param_length) {
+	    counter = stoh(bp, param_length);
+	}
+    }
+
+    if ( unknown_size || (phdr->log_format_linking == BINARY_FORMAT_LIST) ) {
+	/*
+	 *  --> Binary Format List Parameters <--
+	 */
+	if (param_length) {
+	    if (param_str) {
+		int offset = 0;
+		(void)FormatHexBytes(text, offset, bp, param_length);
+		json_status = json_object_set_string(object, param_str, text);
+	    } else {
+		int offset = 0;
+		(void)FormatHexBytes(text, offset, bp, param_length);
+		json_status = json_object_set_string(object, paramater_data_str, text);
+	    }
+	}
+    } else if (phdr->log_format_linking == ASCII_FORMAT_LIST) {
+	/*
+	 *  --> ASCII Format List <--
+	 */
+	memcpy(text, param_data, param_length);
+	text[param_length] = '\0';
+	json_status = json_object_set_string(object, paramater_data_str, text);
+    } else {
+	/*
+	 *  --> Bounded or Unbounded Data Counter <--
+	 */
+	if (param_str) {
+	    json_status = json_object_set_number(object, param_str, (double)counter);
+	} else {
+	    if (sdp->report_format == REPORT_FULL) {
+		sprintf(text, "%s", counter_value_str);
+	    } else {
+		sprintf(text, "%s 0x%x, %s (%u)",
+			parameter_str, param_code,
+			counter_value_str, param_length);
+	    }
+	    json_status = json_object_set_number(object, text, (double)counter);
+	}
+    }
+    return(json_status);
 }
 
 /* ============================================================================================== */

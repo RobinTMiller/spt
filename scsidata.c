@@ -32,6 +32,12 @@
  *
  * Modification History:
  *
+ * June 27th, 2018 by Robin T. Miller
+ *      Added decoding of ATA Status Return descriptor.
+ * 
+ * June 13th, 2018 by Robin T. Miller
+ *      Added decoding of format in progress sense specific data.
+ * 
  * October 19th, 2017 by Robin T. Miller
  *      Add additinal asc/ascq entries for asc 0x21 (0x4 thru 0x7 are new).
  * 
@@ -67,6 +73,73 @@
  */
 hbool_t	isReadWriteRequest(scsi_generic_t *sgp);
 	
+/*
+ * parse_show_scsi_args() - Parse the show SCSI keywords.
+ *
+ * Inputs:
+ *      sdp = The SCSI device information.
+ *      argv = the argument array.
+ *      argc = The argument count.
+ *      arg_index = Pointer to current arg index.
+ *
+ * Outputs:
+ *	string = Updated input argument pointer.
+ *
+ * Return Value:
+ *	Returns SUCCESS / FAILURE
+ */ 
+int
+parse_show_scsi_args(scsi_device_t *sdp, char **argv, int argc, int *arg_index)
+{
+    char *string;
+    int status = SUCCESS;
+
+    for ( ; *arg_index < argc; (*arg_index)++) {
+	string = argv[*arg_index];
+
+	if ( match(&string, "ascq=") ) {
+	    uint16_t ascq;
+	    uint8_t asc, asq;
+	    char *ascq_msg;
+	    ascq = (uint16_t)number(sdp, string, HEX_RADIX);
+	    asc = (uint8_t)(ascq >> 8);
+	    asq = (uint8_t)ascq;
+	    ascq_msg = ScsiAscqMsg(asc, asq);
+	    if (ascq_msg) {
+		Print(sdp, "Sense Code/Qualifier = (%#x, %#x) = %s\n",
+		       asc, asq, ascq_msg);
+	    } else {
+		Print(sdp, "Sense Code/Qualifier = (%#x, %#x)\n",
+		       asc, asq);
+	    }
+	    continue;
+	}
+	if ( match(&string, "key=") ) {
+	    char *skey_msg;
+	    uint8_t sense_key;
+	    sense_key = (uint8_t)number(sdp, string, HEX_RADIX);
+	    skey_msg = SenseKeyMsg(sense_key);
+	    Print(sdp, "Sense Key = %#x = %s\n", sense_key, skey_msg);
+	    continue;
+	}
+	if ( match(&string, "status=") ) {
+	    char *scsi_status_msg;
+	    uint8_t scsi_status;
+	    scsi_status = (uint32_t)number(sdp, string, HEX_RADIX);
+	    scsi_status_msg = ScsiStatus(scsi_status);
+	    Print(sdp, "SCSI Status = %#x = %s\n", scsi_status, scsi_status_msg);
+	    continue;
+	}
+	Eprintf(sdp, "Valid show scsi keyword: %s\n", string);
+	Printf(sdp, "Valid show scsi keywords are: ascq|key|status|uec\n");
+	status = FAILURE;
+	/* Unknown keyword, so simply break and continue parsing other args. */
+	//( (*arg_index)-- );
+	break;
+    }
+    return(status);
+}
+
 void
 print_scsi_status(scsi_generic_t *sgp, uint8_t scsi_status, uint8_t sense_key, uint8_t asc, uint8_t ascq)
 {
@@ -271,6 +344,8 @@ struct sense_entry SenseCodeTable[] = {
 	{ 0x04, 0x17, /*               M             */ "Logical unit not ready, calibration required"		},
 	{ 0x04, 0x18, /*               M             */ "Logical unit not ready, a door is open"		},
 	{ 0x04, 0x19, /*               M             */ "Logical unit not ready, operating in sequential mode"	},
+	{ 0x04, 0x1B, /* D T L     R O       B       */ "Host Interface Not Ready, sanitize in progress"	},
+	{ 0x04, 0x1C, /* D T L     R O       B       */ "Logical Unit Not Ready, waiting for power grant"	},
 	{ 0x05, 0x00, /* D T L   W R O M A E B K V F */ "Logical unit does not respond to selection"		},
 	{ 0x06, 0x00, /* D       W R O M     B K     */ "No reference position found"				},
 	{ 0x07, 0x00, /* D T L   W R O M     B K     */ "Multiple peripheral devices selected"			},
@@ -1104,15 +1179,13 @@ DumpSenseData(scsi_generic_t *sgp, hbool_t recursive, scsi_sense_t *ssp)
 	    PrintAscii(opaque, "Bit Pointer Valid", (sksp->bpv) ? "Yes" : "No", PNL);
 	    PrintDec(opaque, "Segment Descriptor", sksp->sd, DNL);
 	    Print(opaque, " (%s)\n", (sksp->sd) ? "error is in segment descriptor"
-					   : "error is in parameter list");
+						: "error is in parameter list");
 	    PrintHex(opaque, "Byte Pointer to Field in Error", field_ptr,
 					    (field_ptr) ? DNL : PNL);
 	    if (field_ptr) {
 		Print(opaque, " (byte %u)\n", (field_ptr + 1)); /* zero-based */
 	    }
-	}
-
-	if (ssp->sense_key == SKV_ILLEGAL_REQUEST) {
+	} else if (ssp->sense_key == SKV_ILLEGAL_REQUEST) {
 	    unsigned short field_ptr;
 	    scsi_sense_illegal_request_t *sksp;
 	    
@@ -1126,11 +1199,19 @@ DumpSenseData(scsi_generic_t *sgp, hbool_t recursive, scsi_sense_t *ssp)
 	    PrintAscii(opaque, "Bit Pointer Valid", (sksp->bpv) ? "Yes" : "No", PNL);
 	    PrintHex (opaque, "Error Field Command/Data (C/D)", sksp->c_or_d, DNL);
 	    Print(opaque, " (%s)\n", (sksp->c_or_d) ? "Illegal parameter in CDB bytes"
-					      : "Illegal parameter in Data sent");
+						    : "Illegal parameter in Data sent");
 	    PrintHex (opaque, "Byte Pointer to Field in Error", field_ptr,
 					    (field_ptr) ? DNL : PNL);
 	    if (field_ptr) {
 		Print(opaque, " (byte %u)\n", (field_ptr + 1)); /* zero-based */
+	    }
+	} else if (ssp->sense_key == SKV_NOT_READY) {
+	    scsi_sense_progress_indication_t *sksp;
+
+	    sksp = (scsi_sense_progress_indication_t *)ssp->sense_key_specific;
+	    if (sksp->sksv) {
+		/* Progress indication is valid. */
+		DumpProgressIndication(sgp, sksp);
 	    }
 	}
     }
@@ -1275,6 +1356,10 @@ DumpSenseDescriptors(scsi_generic_t *sgp, scsi_sense_desc_t *ssdp, int sense_len
 		DumpBlockCommandSense(sgp, (block_command_desc_type_t *)bp);
 		break;
 
+	    case ATA_STATUS_RETURN_DESC_TYPE:
+		DumpAtaStatusReturnSense(sgp, (ata_status_return_desc_type_t *)bp);
+		break;
+
 	    default:
 		Wprintf(opaque, "Unknown descriptor type %#x\n", sdhp->descriptor_type);
 		break;
@@ -1331,6 +1416,14 @@ DumpSenseKeySpecificSense(scsi_generic_t *sgp, sense_key_specific_desc_type_t *s
 		(ssdp->sense_key == SKV_MEDIUM_ERROR) ||
 		(ssdp->sense_key == SKV_HARDWARE_ERROR) ) {
 	DumpMediaErrorSense(sgp, (scsi_media_error_sense_t *)bp);
+    } else if (ssdp->sense_key == SKV_NOT_READY) {
+	scsi_sense_progress_indication_t *sksp;
+
+	sksp = (scsi_sense_progress_indication_t *)bp;
+	if (sksp->sksv) {
+	    /* Progress indication is valid. */
+	    DumpProgressIndication(sgp, sksp);
+	}
     }
     return;
 }
@@ -1357,6 +1450,20 @@ DumpIllegalRequestSense(scsi_generic_t *sgp, scsi_sense_illegal_request_t *sirp)
 	Print(opaque, " (byte %u)\n", (field_ptr + 1)); /* zero-based */
     }
     return;
+}
+
+void
+DumpProgressIndication(scsi_generic_t *sgp, scsi_sense_progress_indication_t *skp)
+{
+    void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
+    uint16_t progress;
+    float progress_percentage;
+    char progress_display[10];
+
+    progress = (uint16_t)StoH(skp->progress_indication);
+    progress_percentage = ((float)progress / (float)65536) * 100;
+    (void)sprintf(progress_display, "%.2f%%", progress_percentage);
+    PrintAscii(opaque, "Progress Indication", progress_display, PNL);
 }
 
 char *error_recovery_types[] = {
@@ -1401,6 +1508,22 @@ DumpBlockCommandSense(scsi_generic_t *sgp, block_command_desc_type_t *bcp)
 {
     void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
     PrintHex(opaque, "ili bit", bcp->ili, PNL);
+    return;
+}
+
+void
+DumpAtaStatusReturnSense(scsi_generic_t *sgp, ata_status_return_desc_type_t *asp)
+{
+    void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
+    PrintYesNo(opaque, True, "Extend", asp->extend, PNL);
+    if (asp->reserved_byte2_bits_1_7) {
+	PrintHex(opaque, "Reserved byte 2, bits 1:7", asp->reserved_byte2_bits_1_7, PNL);
+    }
+    PrintDecHex(opaque, "ATA Error", asp->error, PNL);
+    PrintDecHex(opaque, "ATA Sector Count", (uint32_t)StoH(asp->count), PNL);
+    PrintLongDecHex(opaque, "Logical Block Address", (uint64_t)StoH(asp->lba), PNL);
+    PrintDecHex(opaque, "Device", asp->device, PNL);
+    PrintDecHex(opaque, "ATA Status", asp->status, PNL);
     return;
 }
 

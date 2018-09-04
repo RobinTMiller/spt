@@ -6,6 +6,15 @@ Created on December 15th, 2017
 
 Simple script to call spt directly from Python.
 
+Modification History:
+
+June 11th, 2018 by Robin T. Miller
+    Added option to collect e6logs only, and verify media option.
+    With updated spt, display full FW version, rather than revision.
+
+May 18th, 2018 by Robin T. Miller
+    Update parsing of spts' show devices, to handle multi-path disks.
+
 """
 from __future__ import print_function
 
@@ -18,7 +27,10 @@ STDERR_BUFFER_SIZE = 65536      # 64k
 STDOUT_BUFFER_SIZE = 262144     # 256k (some SES pages are very large!)
 EMIT_BUFFER_SIZE = 8192         # 8k
 
+THREAD_TIMEOUT_DEFAULT = 600    # Max time for thread to be active.
+
 import argparse
+import copy
 import os
 import sys
 import json
@@ -26,6 +38,9 @@ import time
 import subprocess
 import threading
 from ctypes import *
+from datetime import datetime
+
+EB_LOG_DIR  = (os.path.abspath(os.path.dirname(sys.argv[0]))+"/e6logs")
 
 #import pdb; pdb.set_trace()
 
@@ -58,7 +73,10 @@ class SptLib(object):
         self.spt_args['emit_dict'] = None
         self.error_code = EXIT_STATUS_SUCCESS
         self.debug = False
-        self.timeout = 600          # Max time for thread to be active.
+        self.e6logs = False
+        self.log_directory = EB_LOG_DIR
+        self.timeout = THREAD_TIMEOUT_DEFAULT           # Max time for thread to be active.
+        self.verify = False                             # Controls SCSI verify media command.
 
     def _parse_options(self):
         """
@@ -67,8 +85,13 @@ class SptLib(object):
         parser = argparse.ArgumentParser(prog=self.program,
                                          formatter_class=lambda prog: argparse.HelpFormatter(prog, max_help_position=30, width=132))
         parser.add_argument("--debug", action='store_true', default=self.debug, help="The debug flag. (Default: {0})".format(self.debug))
+        parser.add_argument("--e6logs", action='store_true', default=self.e6logs, help="Collect e6logs. (Default: {0})".format(self.e6logs))
+        parser.add_argument("--verify", action='store_true', default=self.verify, help="Do verify media. (Default: {0})".format(self.verify))
         args = parser.parse_args()
+        self.args = args
         self.debug = args.debug
+        self.e6logs = args.e6logs
+        self.verify = args.verify
 
     def main(self):
         """Simple example of executing spt via shared library."""
@@ -85,88 +108,52 @@ class SptLib(object):
             print("version command failed, status = {status}".format(status=status))
 
         #status = self.execute_spt(self.spt_args, "help")
-        """
-        # TODO: Merge in spt "show devices" support!
-        status = self.execute_spt(self.spt_args, "show devices dtype=direct")
+        cmd = "show devices dtype=direct"
+        # Only select HGST drives for e6log collextion.
+        if self.e6logs:
+            cmd += " vendor=HGST"
+
+        status = self.execute_spt(self.spt_args, cmd)
+        if self.e6logs:
+            # Create log directory if it doesn't already exist.
+            cmd = "mkdir -p {0}".format(self.log_directory)
+            process = subprocess.Popen(cmd.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stdout, stderr = process.communicate()
+            if process.returncode:
+                print("Command \"{0}\" failed with return code {1}".format(cmd, process.returncode))
+                raise RuntimeError
+
         # Remember: The JSON is already decoded!
         sdevices = self.spt_args['stdout_dict']
 
         devices = list()
         for entry in sdevices['SCSI Devices']['Device List']:
             device = dict()
+            device['Firmware Version'] = "Unknown"
+            if entry.get('Full Firmware Version') is not None:
+                fwver = entry['Full Firmware Version']
+                if not fwver.startswith('<not available>'):
+                    device['Firmware Version'] = fwver
+            # Parse various Linux paths.
             for path_type in entry['Path Types']:
                 if path_type.get('Linux Device'):
+                    # Handle multiple Linux device paths. (these are "sd" devices)
+                    if device.get('Linux Device Name'):
+                        new_device = copy.deepcopy(device)
+                        devices.append(new_device)
                     device['Linux Device Name'] = path_type['Linux Device']
+                    # Note: The latest spt places SCSI device with Linux device.
+                    if path_type.get('SCSI Device'):
+                        device['SCSI Device Name'] = path_type['SCSI Device']
                 elif path_type.get('SCSI Device'):
+                    # Handle multiple SCSI device paths. (now, "sg" devices only)
+                    if device.get('SCSI Device Name') and path_type.get('SCSI Nexus'):
+                        new_device = copy.deepcopy(device)
+                        devices.append(new_device)
                     device['SCSI Device Name'] = path_type['SCSI Device']
                 elif path_type.get('DMMP Device'):
                     device['DMMP Device Name'] = path_type['DMMP Device']
             devices.append(device)
-        """
-        # Get a list of drives.
-        cmd = "lsscsi --generic --transport | fgrep 'disk'"
-        drives = subprocess.check_output(cmd, shell=True)
-        devices = list()
-        try:
-            #
-            # Format:
-            # $ lsscsi --generic --transport
-            #    [0]         [1]          [2]                       [3]        [4]
-            # [0:0:0:0]    disk    sas:0x5000cca25103b471          /dev/sda   /dev/sg0
-            # [0:0:1:0]    disk    sas:0x5000cca251029301          /dev/sdb   /dev/sg1
-            #    ...
-            # [0:0:14:0]   enclosu sas:0x5001636001caa0bd          -          /dev/sg14
-            # [7:0:0:0]    cd/dvd  usb: 1-1.3:1.2                  /dev/sr0   /dev/sg15
-            #
-            # Special Case:
-            # Handle lines without a transport (spaces only). (screen scrapping danger)
-            # [0:0:10:0]   enclosu sas:0x50030480091d71fd          -         /dev/sg10
-            # [1:0:0:0]    disk        <spaces>                 /dev/sdk  /dev/sg11 <- INTEL disk!
-            #
-            # Another SNAFU! (and why I hate screen scrapping!!!)
-            # [15:0:53597:0]disk    sas:0x5000cca23b359649          /dev/sdg   /dev/sg6
-            # [15:0:53598:0]disk    sas:0x5000cca23b0c0a99          /dev/sdh   /dev/sg7
-            # [15:0:53599:0]disk    sas:0x5000cca23b0b7531          /dev/sdi   /dev/sg8
-            #       ...
-            # [15:0:53686:0]enclosu sas:0x5000ccab040001bc          -          /dev/sg165
-            # [15:0:53766:0]enclosu sas:0x5000ccab040001fc          -          /dev/sg144
-            #
-            for line in drives.splitlines():
-                dinfo = line.split()
-                device = dict()
-                if len(dinfo) < 5:
-                    m = re.search('(?P<device>disk|enclo)', dinfo[0])
-                    if m:
-                        device['Device Type'] = m.group('device')
-                        sas_index = 1
-                        dev_index = 2
-                        sg_index = 3
-                    else:
-                        continue
-                else:
-                    device['Device Type'] = dinfo[1]
-                    sas_index = 2
-                    dev_index = 3
-                    sg_index = 4
-                # Parse remaining information.
-                if 'sas:' in dinfo[sas_index]:
-                    device['SAS Address'] = dinfo[sas_index][4:]
-                else:
-                    device['SAS Address'] = ""
-                # Note: Enclosure has no driver, so reports '-' for name.
-                if '/dev/' in dinfo[dev_index]:
-                    device['Linux Device Name'] = dinfo[dev_index]
-                else:
-                    device['Linux Device Name'] = ""
-                if '/dev/sg' in dinfo[sg_index]:
-                    device['SCSI Device Name'] = dinfo[sg_index]
-                else:
-                    device['SCSI Device Name'] = ""
-                devices.append(device)
-
-        except RuntimeError as exc:
-            self._logger.error("Failed to acquire SCSI devices: {0}".format(exc))
-            raise exc
 
         try:
             # Ensure spt properly handles switching devices.
@@ -187,7 +174,8 @@ class SptLib(object):
                 if device['thread_status'] != EXIT_STATUS_SUCCESS:
                     self.error_code = device['thread_status']
 
-            self.show_device_information(devices)
+            if not self.e6logs:
+                self.show_device_information(devices)
 
         except RuntimeError as e:
             status = EXIT_STATUS_FAILURE
@@ -216,6 +204,26 @@ class SptLib(object):
             # Note: The spt output format defaults to JSON, so ofmt=json is NOT required!
             # Issue a Test Unit Ready with retries, waiting for the drive to become ready.
             status = self.execute_spt(spt_args, "dsf={dsf} cdb=0 status=good retry=100 msleep=100 enable=wait".format(dsf=dsf))
+            status = self.execute_spt(spt_args, "dsf={dsf} inquiry page=serial".format(dsf=dsf))
+            serial = None
+            if (status == EXIT_STATUS_SUCCESS) and spt_args['stdout_dict']:
+                serial = spt_args['stdout_dict']
+                device['Serial Number'] = serial['Serial Number']['Product Serial Number'].strip()
+
+            # Check for collection only e6logs, and omit other commands after collection.
+            if self.e6logs and serial:
+                now = datetime.now()
+                # Generate format used by Reliability Engine for consistency.
+                e6log_file = (self.log_directory + '/LogDump' + '_' +
+                              str(device['Serial Number']) + '_' + str(now.year) + '-' + 
+                              str(now.month).zfill(2) + '-' + str(now.day).zfill(2) + '_' +
+                              str(now.hour).zfill(2) + '-' + str(now.minute).zfill(2) + '-' +
+                              str(now.second).zfill(2) + '.bin')
+                status = self.execute_spt(spt_args, "dsf={dsf} e6logs dout={e6log_file}"\
+                                          .format(dsf=dsf, e6log_file=e6log_file, expected_failure=False))
+                device['thread_status'] = status
+                return status
+
             # Note: "spt show devices" reports Inquiry, Serial, etc, but this is for test!
             status = self.execute_spt(spt_args, "dsf={dsf} inquiry".format(dsf=dsf))
             if (status == EXIT_STATUS_SUCCESS) and spt_args['stdout_dict']:
@@ -225,24 +233,19 @@ class SptLib(object):
                 device['Vendor Identification'] = inquiry['Inquiry']['Vendor Identification'].strip()
                 device['Revision Level'] = inquiry['Inquiry']['Firmware Revision Level'].strip()
 
-            status = self.execute_spt(spt_args, "dsf={dsf} inquiry page=serial".format(dsf=dsf))
-            if (status == EXIT_STATUS_SUCCESS) and spt_args['stdout_dict']:
-                serial = spt_args['stdout_dict']
-                device['Serial Number'] = serial['Serial Number']['Product Serial Number'].strip()
-
             status = self.execute_spt(spt_args, "dsf={dsf} readcapacity16".format(dsf=dsf))
             if (status == EXIT_STATUS_SUCCESS) and spt_args['stdout_dict']:
                 rdcap = spt_args['stdout_dict']
                 device['Drive Capacity'] = int(rdcap['Read Capacity(16)']['Maximum Capacity'])
                 device['Block Length'] = rdcap['Read Capacity(16)']['Block Length']
 
-
             # Do a short non-destructive media verify operation.
             # Note: We cannot execute multiple spt threads since each thread emits status.
-            # TODO: We need dts' dynamic job control so we can emit job statistics!
-            #verify16 = '0x8f'
-            #status = self.execute_spt(spt_args, "dsf={dsf} cdb={opcode} bs=32k limit=1g threads=1"
-            #                          .format(dsf=dsf, opcode=verify16))
+            # TODO: Add dts' dynamic job control so we can emit job statistics!
+            if self.verify:
+                verify16 = '0x8f'
+                status = self.execute_spt(spt_args, "dsf={dsf} cdb={opcode} bs=32k limit=1g threads=1"
+                                          .format(dsf=dsf, opcode=verify16))
 
         except RuntimeError as e:
             status = EXIT_STATUS_FAILURE
@@ -306,12 +309,12 @@ class SptLib(object):
         print("---------- ---------- -------- ---------------- -------- ------------ ------ -------------")
 
         for device in devices:
-            print('{dsf:<10} {sdsf:<10} {vid:<8} {pid:<16}   {rev:<4}   {capacity:>12}  {blocklen:>4}  {serial:<14}'
+            print('{dsf:<10} {sdsf:<10} {vid:<8} {pid:<16} {fw:<8} {capacity:>12}  {blocklen:>4}  {serial:<14}'
                   .format(dsf=device['Linux Device Name'],
                           sdsf=device['SCSI Device Name'],
                           vid=device['Vendor Identification'],
                           pid=device['Product Identification'],
-                          rev=device['Revision Level'],
+                          fw=device['Firmware Version'] if device['Firmware Version'] <> "Unknown" else device['Revision Level'],
                           capacity=device['Drive Capacity'],
                           blocklen=device['Block Length'],
                           serial=device['Serial Number']))

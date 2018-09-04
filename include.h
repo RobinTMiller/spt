@@ -349,6 +349,10 @@ typedef unsigned int iotlba_t;
 # define ispowerof2(x)  ((((x)-1)&(x))==0)
 #endif
 
+#if !defined(offsetof)
+# define offsetof(type, field)   ((long) &((type *)0)->field)
+#endif /* !defined(offsetof) */
+
 /*
  * External Variables:
  */

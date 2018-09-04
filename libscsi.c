@@ -34,6 +34,16 @@
  * 
  * Modification History:
  * 
+ * July 3rd, 2018 by Robin T. Miller
+ *      In isSenseRetryable(), be more selective on "Not Ready" errors.
+ *      This is required to avoid excessive retries during Format Unit,
+ * Sanitize, or short/extended self-tests, which are long operations.
+ *      Previously, with the default 60 retries and two second delay,
+ * we'd retry for two minutes *per* command, making us appear hung!
+ * 
+ * June 7th, 2018 by Robin T. Miller
+ *      Add support for ATA pass-through and Identify command.
+ * 
  * October 13th, 2017 by Robin T. Miller
  *      Handle sense data in both fixed and descriptor formats.
  * 
@@ -153,13 +163,22 @@ isSenseRetryable(scsi_generic_t *sgp, int scsi_status, scsi_sense_t *ssp)
 	    }
 	} else if ( (sense_key == SKV_NOT_READY) &&
 		    (asc == ASC_NOT_READY) ) {
-	    /* Lots of reasons, but we retry them all! */
-	    /* Includes:
-	     * "Logical unit is in process of becoming ready"
-	     * "Logical unit not ready, space allocation in progress"
-	     * Note: We'll be more selective, if this becomes an issue!
-       	     */ 
-	    retriable = True;
+	    /* Be selective on "Not Ready" conditions, to avoid excessive retries. */
+	    /* Note: We don't take any actions, such as Start Unit to spin disk up. */
+	    switch (asq) {
+		case 0x00:		/* Logical unit not ready, cause not reportable. */
+		case 0x01:		/* Logical unit is in process of becoming ready. */
+		case 0x05:		/* Logical unit not ready, rebuild in progress. */
+		case 0x06:		/* Logical unit not ready, recalculation in progress. */
+		case 0x07:		/* Logical unit not ready, operation in progress. */
+		case 0x08:		/* Logical unit not ready, long write in progress. */
+		case 0x0A:		/* Logical unit not accessible, asymmetric access state transition. */
+		case 0x14:		/* Logical unit not ready, space allocation in progress. */
+		    retriable = True;
+		    break;
+		default:
+		    break;
+	    }
 	}
     }
     return(retriable);
@@ -547,6 +566,13 @@ verify_inquiry_header(inquiry_t *inquiry, inquiry_header_t *inqh, unsigned char 
 
 /*
  * GetDeviceIdentifier() - Gets Inquiry Device ID Page.
+ * 
+ * Description:
+ *      This function decodes each of the device ID descriptors and applies
+ * and precedence algorthm to find the *best* device identifier (see table).
+ * 
+ * Note: This API is a wrapper around Inquiry, originally designed to simply
+ * return an identifier string. Therefore, a buffer and length are omitted.
  *
  * Inputs:
  *  fd     = The file descriptor.
@@ -574,25 +600,43 @@ GetDeviceIdentifier(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
     inquiry_page_t inquiry_data;  
     inquiry_page_t *inquiry_page = &inquiry_data;
     inquiry_header_t *inqh = &inquiry_page->inquiry_hdr;
-    inquiry_ident_descriptor_t *iid;
     unsigned char page = INQ_DEVICE_PAGE;
-    size_t page_length;
-    char *bp = NULL;
     int status;
-    /* Identifiers in order of precedence: (the "Smart" way :-) */
-    /* REMEMBER:  The lower values have *higher* precedence!!! */
-    enum pidt {
-	REGEXT, REG, EXT_V, EXT_0, EUI64, TY1_VID, BINARY, ASCII, NONE
-    };
-    enum pidt pid_type = NONE;	/* Precedence ID type. */
 
-    status = Inquiry(fd, dsf, debug, errlog, NULL, NULL,
-		     inquiry_page, sizeof(*inquiry_page), page,
-		     0, timeout, tsp);
+    status = Inquiry(fd, dsf, debug, errlog, NULL, NULL, inquiry_page,
+		     sizeof(*inquiry_page), page, 0, timeout, tsp);
 
     if (status != SUCCESS) return(NULL);
 
     if (verify_inquiry_header(inquiry, inqh, page) == FAILURE) return(NULL);
+
+    return( DecodeDeviceIdentifier(opaque, inquiry, inquiry_page, True) );
+}
+
+/*
+ * DecodeDeviceIdentifier() - Decode the Inquiry Device Identifier. 
+ *  
+ * Note: We allow separate decode, since we may be extracting different parts 
+ * of the device ID page, such as LUN device ID and target port address, and we 
+ * wish to avoid multiple Inquiry page requests (we may have lots of devices). 
+ *  
+ * Return Value: 
+ *      The LUN device identifier string or NULL if none found.
+ *      The buffer is dynamically allocated, so caller must free it.
+ */
+char *
+DecodeDeviceIdentifier(void *opaque, inquiry_t *inquiry,
+		       inquiry_page_t *inquiry_page, hbool_t hyphens)
+{
+    inquiry_ident_descriptor_t *iid;
+    size_t page_length;
+    char *bp = NULL;
+    /* Identifiers in order of precedence: (the "Smart" way :-) */
+    /* REMEMBER: The lower values have *higher* precedence!!! */
+    enum pidt {
+	REGEXT, REG, EXT_V, EXT_0, EUI64, TY1_VID, BINARY, ASCII, NONE
+    };
+    enum pidt pid_type = NONE;	/* Precedence ID type. */
 
     page_length = (size_t) inquiry_page->inquiry_hdr.inq_page_length;
     iid = (inquiry_ident_descriptor_t *)inquiry_page->inquiry_page_data;
@@ -669,15 +713,20 @@ GetDeviceIdentifier(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
 			    if (bp) {
 				free(bp) ; bp = NULL;
 			    };
-			    bptr = bp = (char *)malloc(blen);
+			    bptr = bp = Malloc(opaque, blen);
 			    if (bp == NULL) return(NULL);
+			    if (hyphens == False) {
+				bptr += sprintf(bptr, "0x");
+			    }
 
 			    /* Format as: xxxx-xxxx... */
 			    while (i < (int)iid->iid_ident_length) {
 				bptr += sprintf(bptr, "%02x", fptr[i++]);
-				if (( (i % 2) == 0) &&
-				    (i < (int)iid->iid_ident_length) ) {
-				    bptr += sprintf(bptr, "-");
+				if (hyphens == True) {
+				    if (( (i % 2) == 0) &&
+					(i < (int)iid->iid_ident_length) ) {
+					bptr += sprintf(bptr, "-");
+				    }
 				}
 			    }
 			}
@@ -697,13 +746,18 @@ GetDeviceIdentifier(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
 			};
 			bptr = bp = (char *)malloc(blen);
 			if (bp == NULL)	return(NULL);
+			if (hyphens == False) {
+			    bptr += sprintf(bptr, "0x");
+			}
 
 			/* Format as: xxxx-xxxx... */
 			while (i < (int)iid->iid_ident_length) {
 			    bptr += sprintf(bptr, "%02x", fptr[i++]);
-			    if (( (i % 2) == 0) &&
-				(i < (int)iid->iid_ident_length) ) {
-				bptr += sprintf(bptr, "-");
+			    if (hyphens == True) {
+				if (( (i % 2) == 0) &&
+				    (i < (int)iid->iid_ident_length) ) {
+				    bptr += sprintf(bptr, "-");
+				}
 			    }
 			}
 			break;
@@ -719,9 +773,8 @@ GetDeviceIdentifier(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
 			break;
 
 		    default: {
-			if (debug) {
-			    Fprintf(opaque, "Unknown identifier type %#x\n", iid->iid_ident_type);
-			}
+			/* Note: We need updated with new descriptors added! */
+			//Fprintf(opaque, "Unknown identifier type %#x\n", iid->iid_ident_type);
 			break;
 		    }
 		} /* switch (iid->iid_ident_type) */
@@ -732,9 +785,7 @@ GetDeviceIdentifier(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
 		break;
 
 	    default: {
-		if (debug) {
-		    Fprintf(opaque, "Unknown identifier code set %#x\n", iid->iid_code_set);
-		}
+		//Fprintf(opaque, "Unknown identifier code set %#x\n", iid->iid_code_set);
 		break;
 	    } /* end case of code set. */
 	} /* switch (iid->iid_code_set) */
@@ -834,6 +885,119 @@ GetNAAIdentifier(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
 }
 
 /*
+ * GetTargetPortIdentifier() - Gets Inquiry Device ID Target Port Identifier.
+ *
+ * Inputs:
+ *  fd     = The file descriptor.
+ *  dsf    = The device special file (raw or "sg" for Linux).
+ *  debug  = Flag to control debug output.
+ *  errlog = Flag to control error logging. (True logs error)
+ *                                          (False suppesses)
+ *  sgpp   = Pointer to SCSI generic pointer (optional).
+ *  timeout = The timeout value (in ms).
+ *  tsp = The tool specific information.
+ *
+ * Return Value:
+ *    Returns dynamically allocated buffer w/Target Port or NULL if not found.
+ */
+char *
+GetTargetPortIdentifier(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
+			scsi_generic_t **sgpp, void *inqp,
+			unsigned int timeout, tool_specific_t *tsp)
+{
+    void *opaque = (tsp) ? tsp->opaque : NULL;
+    inquiry_t *inquiry = inqp;
+    inquiry_page_t inquiry_data;  
+    inquiry_page_t *inquiry_page = &inquiry_data;
+    inquiry_header_t *inqh = &inquiry_page->inquiry_hdr;
+    unsigned char page = INQ_DEVICE_PAGE;
+    int status;
+
+    status = Inquiry(fd, dsf, debug, errlog, NULL, NULL,
+		     inquiry_page, sizeof(*inquiry_page), page, 0, 0, tsp);
+
+    if (status != SUCCESS) return(NULL);
+
+    if (verify_inquiry_header(inquiry, inqh, page) == FAILURE) return(NULL);
+    
+    return( DecodeTargetPortIdentifier(opaque, inquiry, inquiry_page) );
+}
+
+/*
+ * DecodeTargetPortIdentifier() - Decode the Target Port Identifier.
+ *  
+ * Note: We allow separate decode, since we may be extracting different parts 
+ * of the device ID page, such as LUN device ID and target port address, and we 
+ * wish to avoid multiple Inquiry page requests (we may have lots of devices). 
+ *  
+ * Return Value: 
+ *      The target port identifier string or NULL if none found.
+ *      The buffer is dynamically allocated, so caller must free it.
+ */
+char *
+DecodeTargetPortIdentifier(void *opaque, inquiry_t *inquiry, inquiry_page_t *inquiry_page)
+{
+    inquiry_ident_descriptor_t *iid;
+    uint8_t *ucp = NULL;
+    size_t page_length;
+
+    page_length = (size_t)inquiry_page->inquiry_hdr.inq_page_length;
+    iid = (inquiry_ident_descriptor_t *)inquiry_page->inquiry_page_data;
+
+    /*
+     * Loop through all identifiers until we find NAA ID. 
+     */
+    while ( (ssize_t)page_length > 0 ) {
+	/*
+	 * Yes this could be simplied with a series of "if" statements, but
+	 * I'm leaving "as is", since this should be a general lookup function.
+	 */ 
+	switch (iid->iid_code_set) {
+	
+	    case IID_CODE_SET_BINARY: {
+
+		switch (iid->iid_association) {
+		    
+		    case IID_ASSOC_TARGET_PORT: {
+
+			switch (iid->iid_ident_type) {
+			
+			    case IID_ID_TYPE_NAA: {
+				unsigned char *fptr = (unsigned char *)iid + sizeof(*iid);
+				size_t id_size = (size_t)iid->iid_ident_length;
+				char *bp;
+				int i = 0;
+
+				bp = ucp = Malloc(opaque, id_size + 3);
+				if (ucp == NULL) return(ucp);
+				ucp += sprintf(ucp, "0x");
+				while (i < (int)iid->iid_ident_length) {
+				    ucp += sprintf(ucp, "%02x", fptr[i++]);
+				}
+				return(bp);
+			    }
+			    default:
+				break;
+			} /* switch (iid->iid_ident_type) */
+		    }
+		    default:
+			break;
+		} /* switch (iid->iid_association) */
+	    } /* case IID_CODE_SET_BINARY */
+
+	    default:
+		break;
+	} /* switch (iid->iid_code_set) */
+
+	page_length -= iid->iid_ident_length + sizeof(*iid);
+	iid = (inquiry_ident_descriptor_t *)((ptr_t) iid + iid->iid_ident_length + sizeof(*iid));
+
+    } /* while ( (ssize_t)page_length > 0 ) */
+
+    return(NULL);
+}
+
+/*
  * GetSerialNumber() - Gets Inquiry Serial Number Page.
  *
  * Inputs:
@@ -874,8 +1038,8 @@ GetSerialNumber(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
 
     if (verify_inquiry_header(inquiry, inqh, page) == FAILURE) return(NULL);
 
-    page_length = (size_t) inquiry_page->inquiry_hdr.inq_page_length;
-    bp = (char *) malloc (page_length + 1);
+    page_length = (size_t)inquiry_page->inquiry_hdr.inq_page_length;
+    bp = (char *)malloc(page_length + 1);
     if (bp == NULL) return(NULL);
     strncpy (bp, (char *)inquiry_page->inquiry_page_data, page_length);
     bp[page_length] = '\0';
@@ -884,7 +1048,7 @@ GetSerialNumber(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
 }
 
 /*
- * MgmtNetworkAddress() - Gets Inquiry Managment Network Address.
+ * GetMgmtNetworkAddress() - Gets Inquiry Managment Network Address.
  *
  * Inputs:
  *  fd     = The file descriptor.
@@ -1010,6 +1174,155 @@ GetUniqueID(HANDLE fd, char *dsf,
 	}
     }
     return(IDT_NONE);
+}
+
+/* ======================================================================== */
+
+/*
+ * AtaGetDriveFwVersion() - Get the ATA Drive FW Version.
+ *
+ * Inputs:
+ *  fd     = The file descriptor.
+ *  dsf    = The device special file (raw or "sg" for Linux).
+ *  debug  = Flag to control debug output.
+ *  errlog = Flag to control error logging. (True logs error)
+ *                                          (False suppesses)
+ *  sap    = Pointer to SCSI address (optional).
+ *  sgpp   = Pointer to SCSI generic pointer (optional).
+ *  inqp   = Pointer to device Inquiry data.
+ *  timeout = The timeout value (in ms).
+ *  tsp = The tool specific information.
+ *
+ * Return Value:
+ *    Returns NULL if no FW version or CDB is invalid (failure).
+ *    Otherwise, returns a pointer to a malloc'd buffer w/FW version.
+ */
+char *
+AtaGetDriveFwVersion(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
+		     scsi_addr_t *sap, scsi_generic_t **sgpp,
+		     void *inqp, unsigned int timeout, tool_specific_t *tsp)
+{
+    void *opaque = (tsp) ? tsp->opaque : NULL;
+    uint8_t identify_data[IDENTIFY_DATA_LENGTH];
+    unsigned int identify_length = IDENTIFY_DATA_LENGTH;
+    char *bp, *fwver;
+    int i, status;
+
+    status = AtaIdentify(fd, dsf, debug, errlog, NULL, NULL,
+			 identify_data, identify_length, 0, 0, tsp);
+
+    if (status != SUCCESS) return(NULL);
+
+    fwver = Malloc(opaque, IDENTIFY_FW_LENGTH + 1);
+    if (fwver == NULL) return(fwver);
+
+    /*
+     * Due to the strangeness of ATA, we MUST byte swap ASCII strings! 
+     * Note: ATA data is packed in 16-bit words, with 2nd character in 
+     * low byte and 1st character in high byte.
+     */
+    for (i = 0, bp = fwver; i < IDENTIFY_FW_LENGTH; i += 2) {
+	*bp++ = identify_data[IDENTIFY_FW_OFFSET + i + 1];
+	*bp++ = identify_data[IDENTIFY_FW_OFFSET + i];
+    }
+    fwver[IDENTIFY_FW_LENGTH] = '\0';
+
+    return(fwver);
+}
+
+/*
+ * AtaIdentify() - Send an ATA Identify Command.
+ *
+ * Inputs:
+ *  fd     = The file descriptor to issue Inquiry to.
+ *  dsf    = The device special file (raw or "sg" for Linux).
+ *  debug  = Flag to control debugging.
+ *  errlog = Flag to control error logging. (True logs error)
+ *                                          (False suppesses)
+ *  sap    = Pointer to SCSI address (optional).
+ *  sgpp   = Pointer to scsi generic pointer (optional).
+ *  data   = Buffer for received Identify data.
+ *  len    = The length of the data buffer.
+ *  sflags = OS specific SCSI flags (if any).
+ *  timeout = The timeout value (in ms).
+ *  tsp = The tool specific information.
+ *
+ * Return Value:
+ *  Returns the status from the IOCTL request which is:
+ *    0 = Success, -1 = Failure
+ *
+ * Note:  If the caller supplies a SCSI generic pointer, then
+ * it's the callers responsibility to free this structure, along
+ * with the data buffer and sense buffer.  This capability is
+ * provided so the caller can examine SCSI status, sense data,
+ * and data transfers, to make (more) intelligent decisions.
+ */
+int
+AtaIdentify(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
+	    scsi_addr_t *sap, scsi_generic_t **sgpp,
+	    void *data, unsigned int len,
+	    unsigned int sflags, unsigned int timeout, tool_specific_t *tsp)
+{
+    scsi_generic_t scsi_generic;
+    scsi_generic_t *sgp = &scsi_generic;
+    void *opaque = (tsp) ? tsp->opaque : NULL;
+    AtaPassThrough16_CDB_t *cdb; 
+    int error;
+
+    /*
+     * Setup and/or allocate a SCSI generic data structure.
+     */
+    if (sgpp && *sgpp) {
+	sgp = *sgpp;
+    } else {
+	sgp = init_scsi_generic(tsp);
+    }
+    sgp->fd         = fd;
+    sgp->dsf        = dsf;
+    memset(sgp->cdb, 0, sizeof(sgp->cdb));
+    if (data && len) memset(data, 0, len);
+
+    cdb             = (AtaPassThrough16_CDB_t *)sgp->cdb;
+    cdb->opcode     = ATA_PASSTHROUGH_OPCODE;
+    cdb->command    = ATA_IDENTIFY_COMMAND;
+    cdb->protocol   = PROTOCOL_PIO_DATA_IN;
+    cdb->t_length   = T_LENGTH_SECTOR_COUNT;
+    cdb->byt_blok   = BYT_BLOK_TRANSFER_BLOCKS;
+    cdb->t_dir      = T_DIR_FROM_ATA_DEVICE;
+    cdb->sector_count_low = IDENTIFY_SECTOR_COUNT;
+
+    sgp->cdb_size   = sizeof(*cdb);
+    sgp->cdb_name   = "ATA Identify";
+    sgp->data_dir   = scsi_data_read;
+    sgp->data_buffer= data;
+    sgp->data_length= len;
+    sgp->debug      = debug;
+    sgp->errlog     = errlog;
+    sgp->sflags     = sflags;
+    sgp->timeout    = (timeout) ? timeout : InquiryTimeout;
+
+    /*
+     * If a SCSI address was specified, do a structure copy.
+     */
+    if (sap) {
+	sgp->scsi_addr = *sap;	/* Copy the SCSI address info. */
+    }
+
+    error = libExecuteCdb(sgp);
+
+    /*
+     * If the user supplied a pointer, send the SCSI generic data
+     * back to them for further analysis.
+     */
+    if (sgpp) {
+	if (*sgpp == NULL) {
+	    *sgpp = sgp;        /* Return the generic data pointer. */
+	}
+    } else {
+	free_palign(opaque, sgp->sense_data);
+	free(sgp);
+    }
+    return(error);
 }
 
 /* ======================================================================== */

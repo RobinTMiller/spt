@@ -1,3 +1,5 @@
+#ifndef SCSILIB_H
+#define SCSILIB_H
 /****************************************************************************
  *									    *
  *			  COPYRIGHT (c) 2006 - 2018			    *
@@ -22,9 +24,19 @@
  * THIS SOFTWARE.							    *
  *									    *
  ****************************************************************************/
-#ifndef SCSILIB_AX_H
-#define SCSILIB_AX_H
-
+ /*
+ * Module:	scsilib.h
+ * Author:	Robin T. Miller
+ * Date:	March 28th, 2005
+ *
+ * Description:
+ *	This file contains the OS SCSI specific function prototypes.
+ *
+ * Modification History:
+ * 
+ * February 12th, 2018 by Robin T. Miller
+ *      Add os_find_scsi_devices() and filters to find desired devices.
+ */
 extern int os_open_device(scsi_generic_t *sgp);
 extern int os_close_device(scsi_generic_t *sgp);
 extern int os_abort_task_set(scsi_generic_t *sgp);
@@ -47,4 +59,21 @@ extern hbool_t os_is_retriable(scsi_generic_t *sgp);
 extern char *os_host_status_msg(scsi_generic_t *sgp);
 extern char *os_driver_status_msg(scsi_generic_t *sgp);
 
-#endif /* SCSILIB_AX_H */
+/* SCSI Filters: */
+typedef struct scsi_filters {
+    char	*device_paths;	/* The device paths. */
+    char	*exclude_paths;	/* The exclude devices. */
+    uint8_t	*device_types;	/* The device type(s). */
+    char	*product;	/* The product name. */
+    char	*vendor;	/* The vendor name. */
+    char	*revision;	/* The revision level. */
+    char	*device_id;	/* The LUN device ID. */
+    char	*serial;	/* The serial number. */
+    char	*target_port;	/* The target port. */
+    char	*fw_version;	/* The firmware version. */
+} scsi_filters_t;
+
+extern hbool_t match_device_paths(char *device_path, char *paths);
+extern int os_find_scsi_devices(scsi_generic_t *sgp, scsi_filters_t *sfp, char *paths);
+
+#endif /* SCSILIB_H */

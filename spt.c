@@ -33,7 +33,6 @@
  * Modification History:
  * 
  * January 19th, 2019 by Robin T. Miller
- *      Add support for HGST "drive reset" command.
  *      Add request sense for monitoring immediate commands such as Format.
  * 
  * January 8th, 2018 by Robin T. Miller
@@ -143,6 +142,7 @@
  */
 #define PROGRAM_DEBUG	"SPT_DEBUG"	/* Define this to enable debug.	*/
 #define DEVICE_ENVNAME  "SPT_DEVICE"    /* SPT eevice env variable.     */
+#define SHOW_DEV_FIELDS	"SPT_SHOW_FIELDS" /* Sets show devices fields.	*/
 #define EMIT_STATUS_ENV	"SPT_EMIT_STATUS" /* The emit status env var.	*/
 #define THREAD_STACK_ENV "SPT_THREAD_STACK_SIZE" /* Thread stack size.	*/
 #define DEFAULT_MAX_THREADS	1024	/* The default maximum threads.	*/
@@ -349,14 +349,9 @@ char *expand_word(scsi_device_t *sdp, char **from, size_t bufsiz, int *status);
 static int parse_args(scsi_device_t *sdp, int argc, char **argv);
 static int parse_exp_data(char *str, scsi_device_t *sdp);
 static int expand_exp_data(scsi_device_t *sdp);
-static int parse_ses_args(char *string, scsi_device_t *sdp);
 hbool_t match(char **sptr, char *s);
 char *concatenate_args(scsi_device_t *sdp, int argc, char **argv, int arg_index);
 void show_expression(scsi_device_t *sdp, uint64_t value);
-static uint32_t number(scsi_device_t *sdp, char *str, int base);
-static uint64_t large_number(scsi_device_t *sdp, char *str, int base);
-static time_t mstime_value(scsi_device_t *sdp, char *str);
-static time_t time_value(scsi_device_t *sdp, char *str);
 int sptGetCommandLine(scsi_device_t *sdp);
 int ExpandEnvironmentVariables(scsi_device_t *sdp, char *bufptr, size_t bufsiz);
 int MakeArgList(scsi_device_t *sdp, char **argv, char *s);
@@ -372,7 +367,6 @@ int clone_devices(scsi_device_t *sdp, scsi_device_t *tsdp);
 void mark_devices_closed(scsi_device_t *sdp);
 #endif /* defined(WIN32) */
 void EmitStatus(scsi_device_t *sdp, char *status_string, hbool_t prefix_flag);
-int HandleExit(scsi_device_t *sdp, int status);
 int MyExit(scsi_device_t *sdp, int status);
 void SignalHandler(int sig);
 int do_post_processing(scsi_device_t *sdp, int status);
@@ -423,6 +417,7 @@ init_devices(scsi_device_t *sdp)
 	sgp->timeout		= ScsiDefaultTimeout;
 	sgp->data_dump_limit	= sdp->dump_limit;	/* Data dumped during CDB errors.  */
 	sgp->sense_length	= RequestSenseDataLength;
+	sgp->sense_data		= malloc_palign(sdp, sgp->sense_length, 0);
 	/*
 	 * Recovery Parameters:
 	 */ 
@@ -1180,13 +1175,10 @@ int
 spt_main(int argc, char **argv, scsi_device_t *msdp)
 {
     char        	*p;
-    //pthread_attr_t	attr;
-    //pthread_attr_t	*attrp = &attr;
     scsi_device_t 	*sdp = NULL;
     scsi_generic_t 	*sgp, *tsgp;
     scsi_addr_t		*sap;
     io_params_t		*iop;
-    //hbool_t		FirstTime = True;
     int         	status = SUCCESS;
 #if !defined(_WIN32)
     size_t		currentStackSize = 0;
@@ -1233,6 +1225,9 @@ spt_main(int argc, char **argv, scsi_device_t *msdp)
     if (sdp->shared_library == False) {
 	if (p = getenv(DEVICE_ENVNAME)) {
 	    sgp->dsf = strdup(p);
+	}
+	if (p = getenv(SHOW_DEV_FIELDS)) {
+	    sdp->show_fields = strdup(p);
 	}
 	if (p = getenv(EMIT_STATUS_ENV)) {
 	    sdp->emit_status = strdup(p);
@@ -1344,6 +1339,11 @@ main_loop(scsi_device_t *sdp)
 	    }
 	}
 
+	if (sdp->op_type == SHOW_DEVICES_OP) {	/* Temorary! */
+	    status = show_devices(sdp, iop, sgp);
+	    HandleExit(sdp, status);
+	    continue;
+	}
 	if (sgp->dsf == NULL) {
 	    Wprintf(sdp, "Please specify a device special file via dsf= option!\n");
 	    HandleExit(sdp, WARNING);
@@ -2026,12 +2026,12 @@ process_cdb_params(scsi_device_t *sdp)
             sgp->data_length = (uint32_t)(iop->cdb_blocks * iop->device_size);
         }
 	/* TODO: Cleanup, name is in too many places now! */
-	if (!sdp->user_sname && iop->sop->opname) {
+	if ( (sdp->user_sname == False) && iop->sop->opname) {
 	    sdp->scsi_name = iop->sop->opname;
 	}
     }
     /* Historic, honor the users' set SCSI name! */
-    if (sdp->scsi_name && !sdp->user_sname) {
+    if (sdp->scsi_name && (sdp->user_sname == False)) {
 	sgp->cdb_name = sdp->scsi_name;
     }
 
@@ -2331,11 +2331,11 @@ check_expected_status(scsi_device_t *sdp, hbool_t report)
 	   (sdp->tci.exp_sense_asc != asc)		 ||
 	   (sdp->tci.exp_sense_asq != asq))) ) {
 	if (sgp->debug || report) {
-	    Fprint(sdp, "Result for %s\n", sgp->cdb_name);
-	    Fprint(sdp, "Expected:\n");
+	    Fprintf(sdp, "Result for %s\n", sgp->cdb_name);
+	    Fprintf(sdp, "Expected:\n");
 	    print_scsi_status(sgp, sdp->tci.exp_scsi_status, sdp->tci.exp_sense_key,
 			      sdp->tci.exp_sense_asc, sdp->tci.exp_sense_asq);
-	    Fprint(sdp, "Actual:\n");
+	    Fprintf(sdp, "Actual:\n");
 	    print_scsi_status(sgp, sgp->scsi_status, sense_key, asc, asq);
 	}
 	expected_found = False;
@@ -2616,10 +2616,6 @@ eloop:
                 mDebugFlag = True;
                 goto eloop;
             }
-	    if (match(&string, "header")) {
-		sdp->logheader_flag = True;
-		goto eloop;
-	    }
             if (match(&string, "xdebug")) {
                 sdp->xDebugFlag = True;
                 goto eloop;
@@ -2652,6 +2648,14 @@ eloop:
                 sdp->log_header_flag = True;
                 goto eloop;
             }
+            if (match(&string, "show_caching")) {
+                sdp->show_caching_flag = True;
+                goto eloop;
+            }
+	    if (match(&string, "show_header")) {
+		sdp->show_header_flag = True;
+		goto eloop;
+	    }
             if (match(&string, "json_pretty")) {
                 sdp->json_pretty = True;
                 goto eloop;
@@ -2678,7 +2682,6 @@ eloop:
 		goto eloop;
 	    }
 	    if (match(&string, "recovery")) {
-		sgp->recovery_flag = True;
 		sdp->recovery_flag = True;
 		goto eloop;
 	    }
@@ -2775,6 +2778,14 @@ dloop:
 	    }
 	    if (match(&string, "header")) {
 		sdp->logheader_flag = False;
+		goto dloop;
+	    }
+            if (match(&string, "show_caching")) {
+                sdp->show_caching_flag = False;
+                goto dloop;
+            }
+	    if (match(&string, "show_header")) {
+		sdp->show_header_flag = False;
 		goto dloop;
 	    }
             if (match(&string, "json_pretty")) {
@@ -3047,7 +3058,7 @@ dloop:
             continue;
         }
 	/* SES diagnostic page to return enclosure help text. */
-	if (match (&string, "showhelp")) {
+	if ( match(&string, "showhelp") ) {
 	    size_t data_length = RECEIVE_DIAGNOSTIC_MAX;
 	    if ( setup_receive_diagnostic(sdp, sgp, data_length, DIAG_HELP_TEXT_PAGE) ) {
 		return( HandleExit(sdp, FAILURE) );
@@ -3118,10 +3129,9 @@ dloop:
 	    uint8_t opcode = sgp->cdb[0];
 	    sdp->page_specified = True;
 	    /* Note: Overloading page={hex|string} */
-	    /* TODO: Update this for log sense/select pages! */
 	    if ( (*string == '\0') || (isHexString(string) == False) ) {
 		if (opcode == SOPC_INQUIRY) {
-		    sdp->page_code = find_inquiry_page_code(sdp,string, &status);
+		    sdp->page_code = find_inquiry_page_code(sdp, string, &status);
 		    if (status == FAILURE) {
 			Eprintf(sdp, "Did not find Inquiry page '%s'!\n", string);
 			return( HandleExit(sdp, status) );
@@ -3461,6 +3471,33 @@ dloop:
 	    sdp->encode_flag = True;
 	    continue;
 	}
+	if (match (&string, "test")) {
+	    send_diagnostic_cdb_t *cdb = (send_diagnostic_cdb_t *)sgp->cdb;
+	    int status = SUCCESS;
+	    if (++i < argc) {
+                string = argv[i];
+	    }
+	    sdp->op_type = SCSI_CDB_OP;
+	    cdb->opcode = SOPC_SEND_DIAGNOSTIC;
+	    if ( match(&string, "abort") ) {
+		cdb->self_test_code = AbortBackgroundSelfTest;
+	    } else if ( match(&string, "self") ) {
+		cdb->self_test = 1;
+	    } else if ( match(&string, "bextended") ) {
+		cdb->self_test_code = BackgroundExtendedSelfTest;
+	    } else if ( match(&string, "bshort") ) {
+		cdb->self_test_code = BackgroundShortSelfTest;
+	    } else if ( match(&string, "extended") ) {
+		cdb->self_test_code = ForgroundExtendedSelfTest;
+	    } else if ( match(&string, "short") ) {
+		cdb->self_test_code = ForgroundShortSelfTest;
+	    } else {
+		Eprintf(sdp, "Valid test keywords are: abort|self[test]|[b]short|[b]extended\n");
+		status = FAILURE;
+		return( HandleExit(sdp, status ) );
+	    }
+            continue;
+	}
 	if (match (&string, "threads=")) {
 	    sdp->threads = number(sdp, string, ANY_RADIX);
 	    continue;
@@ -3520,8 +3557,46 @@ dloop:
 	    return ( HandleExit(sdp, SUCCESS) );
         }
 	if (match (&string,  "showopcodes")) {
-	    ShowScsiOpcodes(sdp);
+	    char *opstr = NULL;
+	    if (++i < argc) {
+                opstr = argv[i];
+	    }
+	    ShowScsiOpcodes(sdp, opstr);
 	    return ( HandleExit(sdp, SUCCESS) );
+	}
+	/* ------------------------------------------------------------------------ */
+	if ( match(&string, "show") ) {
+	    int status = SUCCESS;
+	    if (++i < argc) {
+                string = argv[i];
+		if ( match(&string, "devices") || match(&string, "edt") ) {
+		    sdp->recovery_flag = True;
+		    sdp->report_format = REPORT_BRIEF;
+		    if (++i < argc) {
+			status = parse_show_devices_args(sdp, argv, argc, &i);
+		    }
+		} else if ( match(&string, "scsi") ) {
+		    if (++i < argc) {
+			status = parse_show_scsi_args(sdp, argv, argc, &i);
+			return ( HandleExit(sdp, status) );
+		    }
+		    /* No defaults, keywords must be specified! */
+		    Eprintf(sdp, "Valid show scsi keywords are: ascq|key|status|uec\n");
+		    status = FAILURE;
+		} else {
+		    Eprintf(sdp, "Valid show keywords are: devices|edt|scsi\n");
+		    status = FAILURE;
+		}
+	    } else {
+		Eprintf(sdp, "Format is: show devices|scsi\n");
+		status = FAILURE;
+	    }
+	    if (status == FAILURE) {
+		return( HandleExit(sdp, status) );
+	    }
+	    sdp->op_type = SHOW_DEVICES_OP;
+	    sdp->log_prefix = strdup("");
+	    continue;
 	}
 	/*
 	 * Implement a few useful commands Scu supports. 
@@ -3654,9 +3729,9 @@ dloop:
      */
     if (sdp->tci.wait_for_status && !sdp->tci.check_status) {
 	Eprintf(sdp, "Please specify the SCSI status to wait for!\n");
-	return ( HandleExit(sdp, FATAL_ERROR) );
+	return( HandleExit(sdp, FATAL_ERROR) );
     }
-    return (SUCCESS);
+    return(SUCCESS);
 }
 
 /*
@@ -3857,47 +3932,6 @@ expand_exp_data(scsi_device_t *sdp)
 }
 
 /*
- * parse_ses_args() - Parse the expected SES keywords.
- *
- * Inputs:
- *	string = The string to parse.
- *	sdp = The SCSI device information.
- *
- * Outputs:
- *	string = Updated input argument pointer.
- *
- * Return Value:
- *	Returns SUCCESS / FAILURE
- */ 
-static int
-parse_ses_args(char *string, scsi_device_t *sdp)
-{
-    if (match(&string, "clear=")) {
-	sdp->cmd_type = CMD_TYPE_CLEAR;
-    } else if (match(&string, "set=")) {
-	sdp->cmd_type = CMD_TYPE_SET;
-    } else {
-	Eprintf(sdp, "Invalid SES keyword found: %s\n", string);
-	Printf(sdp, "Valid SES keywords are: clear= or set=\n");
-	return(FAILURE);
-    }
-    if (match(&string, "devoff")) {
-	sdp->cgs_type = CGS_TYPE_DEVOFF;
-    } else if ( match(&string, "fail") || match(&string, "fault")) {
-	sdp->cgs_type = CGS_TYPE_FAULT;
-    } else if ( match(&string, "ident") || match(&string, "locate") ) {
-	sdp->cgs_type = CGS_TYPE_IDENT;
-    } else if ( match(&string, "unlock") ) {
-	sdp->cgs_type = CGS_TYPE_UNLOCK;
-    } else {
-	Eprintf(sdp, "Invalid SES keyword found: %s\n", string);
-	Printf(sdp, "Valid SES keywords are: devoff, fail/fault, ident/locate, unlock\n");
-	return(FAILURE);
-    }
-    return(SUCCESS);
-}
-
-/*
  * match() - Match a Substring within a String.
  *
  * Inputs:
@@ -3988,7 +4022,7 @@ show_expression(scsi_device_t *sdp, uint64_t value)
  * Return Value:
  *      Returns converted number, exits on invalid numbers.
  */
-static uint32_t
+uint32_t
 number(scsi_device_t *sdp, char *str, int base)
 {
     char *eptr;
@@ -4004,7 +4038,7 @@ number(scsi_device_t *sdp, char *str, int base)
     return(value);
 }
 
-static uint64_t
+uint64_t
 large_number(scsi_device_t *sdp, char *str, int base)
 {
     char *eptr;
@@ -4020,7 +4054,7 @@ large_number(scsi_device_t *sdp, char *str, int base)
     return(value);
 }
 
-static time_t
+time_t
 mstime_value(scsi_device_t *sdp, char *str)
 {
     char *eptr;
@@ -4036,7 +4070,7 @@ mstime_value(scsi_device_t *sdp, char *str)
     return(value);
 }
 
-static time_t
+time_t
 time_value(scsi_device_t *sdp, char *str)
 {
     char *eptr;
@@ -4960,12 +4994,14 @@ init_device_information(void)
     sdp->exp_data_entries = EXP_DATA_ENTRIES;
     sdp->exp_data_size	  = (sizeof(exp_data_t) * sdp->exp_data_entries);
     sdp->log_header_flag  = LogHeaderFlagDefault;
+    sdp->show_header_flag = True;
     sdp->report_format    = REPORT_FULL;
     sdp->read_after_write = ReadAfterWriteDefault;
     sdp->prewrite_flag	  = PreWriteFlagDefault; /* Controls CAW data prewrites. */
     sdp->sata_device_flag = SataDeviceFlagDefault;
     sdp->scsi_info_flag   = ScsiInformationDefault;
     sdp->sense_flag 	  = SenseFlagDefault;
+    sdp->show_caching_flag= ShowCachingFlagDefault;
     sdp->verbose	  = VerboseFlagDefault;
     sdp->verify_data	  = VerifyFlagDefault;
     sdp->warnings_flag	  = WarningsFlagDefault;
@@ -5027,51 +5063,51 @@ init_device_defaults(scsi_device_t *sdp)
      * Allow user to specify path to send the SCSI command to.
      * Note: Only supported on AIX with MPIO (at present time).
      */
-    sap->scsi_path = -1;    /* Indicates no path specified. (for AIX) */
+    sap->scsi_path	= -1;    /* Indicates no path specified. (for AIX) */
 
-    sdp->abort_freq = 0;
-    sdp->abort_timeout = AbortDefaultTimeout;
-    sdp->async = False;
-    sdp->emit_all = False;
-    sdp->decode_flag = False;
-    sdp->encode_flag = False;
-    sdp->onerr = ONERR_STOP;
-    sdp->sleep_value = 0;
-    sdp->msleep_value = 0;
-    sdp->usleep_value = 0;
-    sdp->error_count = 0;
-    sdp->repeat_count = RepeatCountDefault;
-    sdp->retry_count = 0;
-    sdp->retry_limit = RetryLimitDefault;
-    sdp->zero_rod_flag = False;
-    sdp->runtime = 0;
-    sdp->din_file = NULL;
-    sdp->dout_file = NULL;
-    sdp->rod_token_file = NULL;
-    sdp->iomode = IOMODE_TEST;
-    sdp->cmd_type = CMD_TYPE_NONE;
-    sdp->cgs_type = CGS_TYPE_NONE;
-    sdp->op_type = UNDEFINED_OP;
+    sdp->abort_freq	= 0;
+    sdp->abort_timeout	= AbortDefaultTimeout;
+    sdp->async		= False;
+    sdp->emit_all	= False;
+    sdp->decode_flag	= False;
+    sdp->encode_flag	= False;
+    sdp->onerr		= ONERR_STOP;
+    sdp->sleep_value	= 0;
+    sdp->msleep_value	= 0;
+    sdp->usleep_value	= 0;
+    sdp->error_count	= 0;
+    sdp->repeat_count	= RepeatCountDefault;
+    sdp->retry_count	= 0;
+    sdp->retry_limit	= RetryLimitDefault;
+    sdp->zero_rod_flag	= False;
+    sdp->runtime	= 0;
+    sdp->din_file	= NULL;
+    sdp->dout_file	= NULL;
+    sdp->rod_token_file	= NULL;
+    sdp->iomode		= IOMODE_TEST;
+    sdp->cmd_type	= CMD_TYPE_NONE;
+    sdp->cgs_type	= CGS_TYPE_NONE;
+    sdp->op_type	= UNDEFINED_OP;
     memset(&sdp->tci, 0, sizeof(sdp->tci));
     sdp->tci.exp_scsi_status = SCSI_GOOD;
-    sdp->exp_data_count = 0;
-    sdp->page_specified = False;
-    sdp->pin_data = False;
-    sdp->pin_length = 0;
-    sdp->slices = 0;
-    sdp->threads = ThreadsDefault;
-    sdp->user_data = False;
-    sdp->user_pattern = False;
-    sdp->compare_data = CompareFlagDefault;
-    sdp->image_copy = ImageModeFlagDefault;
-    sdp->json_pretty = JsonPrettyFlagDefault;
-    sdp->iot_seed = IOT_SEED;
-    sdp->iot_pattern = False;
-    sdp->range_count = RangeCountDefault;
-    sdp->segment_count = SegmentCountDefault;
-    sdp->unique_pattern = UniquePatternDefault;
-    sdp->io_devices = 1;
-    sdp->io_same_lun = False;
+    sdp->exp_data_count	= 0;
+    sdp->page_specified	= False;
+    sdp->pin_data	= False;
+    sdp->pin_length	= 0;
+    sdp->slices		= 0;
+    sdp->threads	= ThreadsDefault;
+    sdp->user_data	= False;
+    sdp->user_pattern	= False;
+    sdp->compare_data	= CompareFlagDefault;
+    sdp->image_copy	= ImageModeFlagDefault;
+    sdp->json_pretty	= JsonPrettyFlagDefault;
+    sdp->iot_seed	= IOT_SEED;
+    sdp->iot_pattern	= False;
+    sdp->range_count	= RangeCountDefault;
+    sdp->segment_count	= SegmentCountDefault;
+    sdp->unique_pattern	= UniquePatternDefault;
+    sdp->io_devices	= 1;
+    sdp->io_same_lun	= False;
     sdp->io_multiple_sources = False;
     /*
      * Storage Enclosure Services Defaults:

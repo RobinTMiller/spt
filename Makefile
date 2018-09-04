@@ -75,14 +75,12 @@ LINTFLAGS=
 
 # end of system makefile definitions
 
-HDRS=	spt.h spt_print.h spt_ses.h include.h inquiry.h libscsi.h scsilib.h scsi_cdbs.h \
-	scsi_diag.h scsi_log.h scsi_opcodes.h scsi_ses.h parson.h
+HDRS=	spt.h spt_devices.h spt_print.h spt_ses.h include.h inquiry.h libscsi.h scsilib.h \
+	scsi_cdbs.h scsi_diag.h scsi_log.h scsi_opcodes.h scsi_ses.h spt_version.h parson.h
 
 ### MKMF:SOURCES ###
 
 CFILES=
-#CFILES=		devid.c		\
-#		mon_vdisk.c
 
 SPT_CFILES=	spt.c		\
 		spt_fmt.c	\
@@ -93,6 +91,7 @@ SPT_CFILES=	spt.c		\
 		spt_print.c	\
 		spt_scsi.c	\
 		spt_ses.c	\
+		spt_show.c	\
 		spt_unix.c	\
 		spt_usage.c	\
 		scsi_opcodes.c
@@ -197,6 +196,7 @@ spt_mtrand64.o spt_mtrand64.ln: spt_mtrand64.c spt_mtrand64.h
 spt_print.o spt_print.ln: spt_print.c $(HDRS)
 spt_scsi.o spt_scsi.ln: spt_scsi.c $(HDRS)
 spt_ses.o spt_ses.ln: spt_ses.c $(HDRS)
+spt_show.o spt_show.ln: spt_show.c $(HDRS)
 spt_usage.o spt_usage.ln: spt_usage.c \
  include.h libscsi.h scsilib.h spt.h scsi_opcodes.h spt_version.h
 libscsi.o libscsi.ln: libscsi.c $(HDRS)

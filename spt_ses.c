@@ -32,6 +32,9 @@
  *
  * Modification History:
  * 
+ * October 6th, 2017 by Robin T. Miller
+ *      In Help page, ensure the ASCII data is null terminated.
+ * 
  * February 1st, 2017 by Robin T. Miller
  *      For SES page 7 (element descriptor) add the element location, which
  * is basically the element descriptor number, used by our automation.
@@ -57,11 +60,6 @@
 /*
  * Forward References:
  */ 
-int receive_diagnostic_page(scsi_device_t *sdp, io_params_t *iop,
-			    scsi_generic_t *sgp, void **data, uint8_t page);
-int send_diagnostic_page(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp,
-			 void *data_buffer, size_t data_length, uint8_t page);
-
 int supported_receive_diagnostic_decode(scsi_device_t *sdp, io_params_t *iop,
 					scsi_generic_t *sgp, diagnostic_page_header_t *dph);
 char *diagnostic_supported_to_json(scsi_device_t *sdp, io_params_t *iop,
@@ -90,6 +88,7 @@ char *ses_enc_status_to_json(scsi_device_t *sdp, io_params_t *iop, scsi_generic_
 JSON_Status ses_common_element_status_json(scsi_device_t *sdp, JSON_Object *dobject, ses_status_common_t *scp);
 JSON_Status ses_element_type_status_json(scsi_device_t *sdp, JSON_Object *dobject,
 					 element_type_t element_type, ses_status_element_t *sep);
+
 /* SES Page 0x07 */
 int ses_element_descriptor_receive_diagnostic_decode(scsi_device_t *sdp, io_params_t *iop,
 						     scsi_generic_t *sgp, diagnostic_page_header_t *dph);
@@ -163,6 +162,49 @@ static uint8_t ses3_element_control_mask_array[NUMBER_ELEMENT_TYPES][NUMBER_ELEM
     {SES_CONTROL_MASK, 0xc0, 0x00, 0x00},   /* ELEMENT_TYPE_SAS_EXPANDER */
     {SES_CONTROL_MASK, 0x80, 0x00, 0x40}    /* ELEMENT_TYPE_SAS_CONNECTOR */
 };
+
+/* ============================================================================================== */
+
+/*
+ * parse_ses_args() - Parse the expected SES keywords.
+ *
+ * Inputs:
+ *	string = The string to parse.
+ *	sdp = The SCSI device information.
+ *
+ * Outputs:
+ *	string = Updated input argument pointer.
+ *
+ * Return Value:
+ *	Returns SUCCESS / FAILURE
+ */ 
+int
+parse_ses_args(char *string, scsi_device_t *sdp)
+{
+    if (match(&string, "clear=")) {
+	sdp->cmd_type = CMD_TYPE_CLEAR;
+    } else if (match(&string, "set=")) {
+	sdp->cmd_type = CMD_TYPE_SET;
+    } else {
+	Eprintf(sdp, "Invalid SES keyword found: %s\n", string);
+	Printf(sdp, "Valid SES keywords are: clear=, set=, or reset=\n");
+	return(FAILURE);
+    }
+    if (match(&string, "devoff")) {
+	sdp->cgs_type = CGS_TYPE_DEVOFF;
+    } else if ( match(&string, "fail") || match(&string, "fault")) {
+	sdp->cgs_type = CGS_TYPE_FAULT;
+    } else if ( match(&string, "ident") || match(&string, "locate") ) {
+	sdp->cgs_type = CGS_TYPE_IDENT;
+    } else if ( match(&string, "unlock") ) {
+	sdp->cgs_type = CGS_TYPE_UNLOCK;
+    } else {
+	Eprintf(sdp, "Invalid SES keyword found: %s\n", string);
+	Printf(sdp, "Valid SES keywords are: devoff, fail/fault, ident/locate, unlock\n");
+	return(FAILURE);
+    }
+    return(SUCCESS);
+}
 
 /* ============================================================================================== */
 
@@ -248,7 +290,8 @@ receive_diagnostic_decode(void *arg)
 
     if (dph == NULL) return(status);
 
-    if (dph->page_code == DIAG_SUPPORTED_PAGES) {					/* Page 0x00 */
+    if ( (dph->page_code == DIAG_SUPPORTED_PAGES) ||					/* Page 0x00 */
+	 (dph->page_code == DIAG_SES_DIAGNOSTIC_PAGES_PAGE) ) {				/* Page 0x0D */
 	status = supported_receive_diagnostic_decode(sdp, iop, sgp, dph);
     } else if (dph->page_code == DIAG_CONFIGURATION_PAGE) {				/* Page 0x01 */
 	status = ses_config_receive_diagnostic_decode(sdp, iop, sgp, dph);
@@ -316,7 +359,7 @@ supported_receive_diagnostic_decode(scsi_device_t *sdp, io_params_t *iop,
 
     if (sdp->DebugFlag) {
 	uint8_t *ucp = (uint8_t *)dph;
-	int length = page_length;
+	int length = page_length + sizeof(*dph);
 	int offset = 0;
 	offset = PrintHexData(sdp, offset, ucp, length);
     }
@@ -369,7 +412,7 @@ diagnostic_supported_to_json(scsi_device_t *sdp, io_params_t *iop, diagnostic_pa
     object = json_value_get_object(value);
 
     ucp = (uint8_t *)dph;
-    length = page_length;
+    length = page_length + sizeof(*dph);
     json_status = json_object_set_number(object, "Length", (double)length);
     if (json_status != JSONSuccess) goto finish;
     json_status = json_object_set_number(object, "Offset", (double)offset);
@@ -596,12 +639,13 @@ ses_config_to_json(scsi_device_t *sdp, ses_configuration_page_t *scp, char *page
     if (root_value == NULL) return(NULL);
     root_object = json_value_get_object(root_value);
 
-    value  = json_value_init_object();
+    value = json_value_init_object();
     if (value == NULL) {
 	json_value_free(root_value);
 	return(NULL);
     }
     json_status = json_object_dotset_value(root_object, page_name, value);
+    if (json_status != JSONSuccess) goto finish;
     object = json_value_get_object(value);
 
     ucp = (uint8_t *)scp;
@@ -3944,7 +3988,8 @@ send_diagnostic_encode(void *arg)
      */
     if (iop->first_time) {
 	char *data = sgp->data_buffer;
-	size_t data_size = sgp->data_length + sizeof(*dph);
+	size_t dsize = sgp->data_length;
+	size_t data_size = dsize + sizeof(*dph);
 	void *data_buffer;
 
 	data_buffer = malloc_palign(sdp, data_size, 0);
@@ -3954,7 +3999,8 @@ send_diagnostic_encode(void *arg)
 	sgp->data_dir = iop->sop->data_dir;
 	sgp->data_length = (unsigned int)data_size;
 	sgp->data_buffer = data_buffer;
-	memcpy((char *)data_buffer+sizeof(*dph), data, data_size);
+	/* Copy user data to after the diagnostic header. */
+	memcpy((char *)data_buffer+sizeof(*dph), data, dsize);
 	free_palign(sdp, data);
 	iop->first_time = False;
     }
@@ -3993,6 +4039,7 @@ send_diagnostic_decode(void *arg)
 }
 
 /* ============================================================================================== */
+
 /*
  * Utility Functions:
  */
@@ -4025,8 +4072,19 @@ diagnostic_page_entry_t diagnostic_page_table[] = {
     { DIAG_DOWNLOAD_MICROCODE_CONTROL_PAGE, DTYPE_ENCLOSURE,	VID_ALL,	"Download Microcode Control/Status", "download"	},
     { DIAG_SUBENCLOSURE_NICKNAME_CONTROL_PAGE, DTYPE_ENCLOSURE,	VID_ALL,	"Subenclosure Nickname Control/Status", "subenc_nickname" },
     /*
+     * Celestica Vendor Specific Enclosure Diagnostic Pages:
+     */
+    { DIAG_CLI_OVER_SES_CONTROL_PAGE,	DTYPE_ENCLOSURE,	VID_CELESTICA,	"CLI Over SES Control/Status", "cls_cli"	},
+    { DIAG_TIMESTAMP_GET_SET_PAGE,	DTYPE_ENCLOSURE,	VID_CELESTICA,	"Timestamp Get/Set",	"cls_timestamp"		},
+    { DIAG_VPD_CONTROL_PAGE,		DTYPE_ENCLOSURE,	VID_CELESTICA,	"VPD Control/Status",	"cls_vpd"		},
+    { DIAG_LOG_CONTROL_PAGE,		DTYPE_ENCLOSURE,	VID_CELESTICA,	"Log Control/status",	"cls_log"		},
+    { DIAG_PHY_CONTROL_PAGE,		DTYPE_ENCLOSURE,	VID_CELESTICA,	"Phy Control/Status",	"cls_phy"		},
+    { DIAG_ERROR_INJECTION_CONTROL_PAGE, DTYPE_ENCLOSURE,	VID_CELESTICA,	"Error Injection Control/Status", "cls_error"	},
+    { DIAG_STATE_PRESERVATION_STATUS_PAGE, DTYPE_ENCLOSURE,	VID_CELESTICA,	"State Preservation Status", "cls_preservation"	},
+    /*
      * Direct Access (disk) Diagnostic Pages:
      */
+    //{ DIAG_TRANS_ADDR_PAGE,		DTYPE_OPTICAL,		VID_ALL,	"Translate Address",	"translate"		},
     { DIAG_TRANS_ADDR_PAGE,		DTYPE_DIRECT,		VID_ALL,	"Translate Address",	"translate"		}
 };
 int num_diagnostic_page_entries = ( sizeof(diagnostic_page_table) / sizeof(diagnostic_page_entry_t) );
