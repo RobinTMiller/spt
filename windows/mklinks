@@ -18,8 +18,8 @@ ln ../spt.h .
 ln ../spt_devices.h .
 ln ../spt_version.h .
 ln ../spt_usage.c .
-ln ../spt_win32.c .
-ln ../spt_win32.h .
+ln ../spt_win.c .
+ln ../spt_win.h .
 ln ../spt_inquiry.c .
 ln ../spt_mtrand64.c .
 ln ../spt_mtrand64.h .
@@ -35,13 +35,3 @@ ln ../spt_ses.h .
 ln ../parson.h .
 ln ../parson.c .
 ln ../spt_log.c .
-# HGST Specific Files:
-ln ../hgst_cdbs.h .
-ln ../hgst_diag.h .
-ln ../hgst_inquiry.h .
-ln ../hgst_log.h .
-ln ../hgst_sense.h .
-ln ../hgst_ses.h .
-ln ../hgst_ses.c .
-ln ../hgst_uec.c* .
-ln ../spt_hgst.c .
