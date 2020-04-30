@@ -2,7 +2,7 @@
 #define SCSILIB_H
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2018			    *
+ *			  COPYRIGHT (c) 2006 - 2020			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -55,22 +55,26 @@ extern int os_set_timeout(scsi_generic_t *sgp, unsigned timeout);
 extern int os_get_qdepth(scsi_generic_t *sgp, unsigned int *qdepth);
 extern int os_set_qdepth(scsi_generic_t *sgp, unsigned int qdepth);
 extern int os_spt(scsi_generic_t *sgp);
+#if defined(_AIX)
+extern int os_spta(scsi_generic_t *sgp);
+#endif /* defined(_AIX) */
 extern hbool_t os_is_retriable(scsi_generic_t *sgp);
 extern char *os_host_status_msg(scsi_generic_t *sgp);
 extern char *os_driver_status_msg(scsi_generic_t *sgp);
 
 /* SCSI Filters: */
 typedef struct scsi_filters {
-    char	*device_paths;	/* The device paths. */
-    char	*exclude_paths;	/* The exclude devices. */
-    uint8_t	*device_types;	/* The device type(s). */
-    char	*product;	/* The product name. */
-    char	*vendor;	/* The vendor name. */
-    char	*revision;	/* The revision level. */
-    char	*device_id;	/* The LUN device ID. */
-    char	*serial;	/* The serial number. */
-    char	*target_port;	/* The target port. */
-    char	*fw_version;	/* The firmware version. */
+    hbool_t	all_device_paths;	/* Include all device paths.	*/
+    char	*device_paths;		/* The device paths.		*/
+    char	*exclude_paths;		/* The exclude devices.		*/
+    uint8_t	*device_types;		/* The device type(s).		*/
+    char	*product;		/* The product name.		*/
+    char	*vendor;		/* The vendor name.		*/
+    char	*revision;		/* The revision level.		*/
+    char	*device_id;		/* The LUN device ID.		*/
+    char	*serial;		/* The serial number.		*/
+    char	*target_port;		/* The target port.		*/
+    char	*fw_version;		/* The firmware version.	*/
 } scsi_filters_t;
 
 extern hbool_t match_device_paths(char *device_path, char *paths);

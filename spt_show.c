@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2018			    *
+ *			  COPYRIGHT (c) 2006 - 2020			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -31,6 +31,13 @@
  *	This module provides functions to show various information.
  * 
  * Modification History:
+ * 
+ * May 27th, 2019 by Robin T. Miller
+ *      Handle case where we don't have a device name or SCSI name to match.
+ * 
+ * April 26th, 2019 by Robin T. Miller
+ *      Switch from strtok() to reentrant version strtok_r() to avoid issues
+ * when multiple functions invoke this API and to be thread safe (libspt.so).
  * 
  * March 17th, 2018 by Robin T. Miller
  *      Update device path display to account for SCSI generic device (sg)
@@ -70,7 +77,7 @@
 #include "parson.h"
 
 #if defined(_WIN32)
-#  include "spt_win32.h"
+#  include "spt_win.h"
 #else /* !defined(_WIN32) */
 #  include "spt_unix.h"
 #endif /* defined(_WIN32) */
@@ -88,6 +95,7 @@ char *show_devices_to_json(scsi_device_t *sdp);
 void FreeScsiDeviceTable(scsi_generic_t *sgp);
 void FreeScsiFilters(scsi_device_t *sdp, scsi_filters_t *sfp);
 
+static char *na_str = "N/A";
 static char *not_available_str = "<not available>";
 
 /*
@@ -124,13 +132,13 @@ parse_show_devices_args(scsi_device_t *sdp, char **argv, int argc, int *arg_inde
 	}
 	if ( match(&string, "device_type=") || match(&string, "dtype=") ||
 	     match(&string, "device_types=") || match(&string, "dtypes=") ) {
-	    char *token, *sep, *str;
+	    char *token, *sep, *str, *saveptr;
 	    uint8_t device_type, device_types[MAX_DTYPES];
 	    int num_dtypes = 0;
 	    /* Allow comma separated list of device types. */
 	    str = strdup(string);
 	    sep = ",";
-	    token = strtok(str, sep);
+	    token = strtok_r(str, sep, &saveptr);
 	    while (token) {
 		/* Note: Overloading dtype={hex|string} */
 		if ((*token == '\0') || (isHexString(token) == False)) {
@@ -149,7 +157,7 @@ parse_show_devices_args(scsi_device_t *sdp, char **argv, int argc, int *arg_inde
 		if (num_dtypes == MAX_DTYPES) {
 		    break;
 		}
-		token = strtok(NULL, sep);
+		token = strtok_r(NULL, sep, &saveptr);
 	    }
 	    if (num_dtypes) {
 		sfp->device_types = Malloc(sdp, sizeof(uint8_t) * (num_dtypes + 1));
@@ -211,7 +219,12 @@ parse_show_devices_args(scsi_device_t *sdp, char **argv, int argc, int *arg_inde
 	if ( match(&string, "show-path=") || match(&string, "spath=") || match(&string, "path=") ||
 	     match(&string, "show-paths=") || match(&string, "spaths=") || match(&string, "paths=") ) {
 	    if (sdp->show_paths) free(sdp->show_paths);
-	    sdp->show_paths = strdup(string);
+	    /* On Linux, we don't show all DM-MP paths, so allow simple way to enable all paths. */
+	    if ( match(&string, "all") || match(&string, "*") ) {
+		sfp->all_device_paths = True;
+	    } else {
+		sdp->show_paths = strdup(string);
+	    }
 	    continue;
 	}
 	/* Unknown keyword, so simply break and continue parsing other args. */
@@ -233,7 +246,7 @@ show_devices(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp)
     int status = SUCCESS;
 
     /* TODO: Implement this for other operating systems, esp. Windows! */
-#if defined(__linux__)
+#if defined(__linux__) || defined(_WIN32)
     if (sdp->show_caching_flag == False) {
 	/* Empty the list to avoid cached information. */
 	FreeScsiDeviceTable(sgp);
@@ -241,7 +254,7 @@ show_devices(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp)
     if (sdeh->sde_flink == sdeh) {
 	status = os_find_scsi_devices(sgp, &sdp->scsi_filters, sdp->show_paths);
     }
-#endif /* defined(__linux__) */
+#endif /* defined(__linux__) || defined(_WIN32) */
     if (sdeh->sde_flink == sdeh) {
 	FreeScsiFilters(sdp, &sdp->scsi_filters);
 	return(WARNING); /* Empty list! */
@@ -273,7 +286,8 @@ match_device_paths(char *device_path, char *paths)
 {
     char *sep = ",";
     char *devs = strdup(paths);
-    char *path = strtok(devs, sep);
+    char *saveptr;
+    char *path = strtok_r(devs, sep, &saveptr);
     hbool_t device_found = False;
 
     while (path != NULL) {
@@ -281,7 +295,7 @@ match_device_paths(char *device_path, char *paths)
 	    device_found = True;
 	    break;
 	}
-	path = strtok(NULL, sep);
+	path = strtok_r(NULL, sep, &saveptr);
     }
     free(devs);
     return(device_found);
@@ -300,10 +314,12 @@ match_user_filters(scsi_device_entry_t *sdep, scsi_filters_t *sfp)
 
     for (sdnp = sdnh->sdn_flink; (sdnp != sdnh); sdnp = sdnp->sdn_flink) {
 	if (sfp->device_paths) {
-	    if ( match_device_paths(sdnp->sdn_device_path, sfp->device_paths) ) {
+	    if ( sdnp->sdn_device_path &&
+		 match_device_paths(sdnp->sdn_device_path, sfp->device_paths) ) {
 		return(True);
 	    }
-	    if ( match_device_paths(sdnp->sdn_scsi_path, sfp->device_paths) ) {
+	    if ( sdnp->sdn_scsi_path &&
+		 match_device_paths(sdnp->sdn_scsi_path, sfp->device_paths) ) {
 		return(True);
 	    }
 	}
@@ -359,7 +375,7 @@ static int num_show_entries = sizeof(show_brief_table) / sizeof(show_brief_table
 
 /* Default Show Devices Format: */
 /* Remember, the SPT_SHOW_FIELDS environment variable can override this! */
-static char *show_brief_fields = "dtype,vid,pid,rev,wwn,paths";
+static char *show_brief_fields = "dtype,vid,pid,rev,serial,paths";
 
 void
 show_devices_brief(scsi_device_t *sdp, scsi_device_entry_t *sdeh)
@@ -371,15 +387,15 @@ show_devices_brief(scsi_device_t *sdp, scsi_device_entry_t *sdeh)
     char line2[STRING_BUFFER_SIZE];
     char paths[STRING_BUFFER_SIZE];
     char *bp = NULL, *pp, *lp1 = line1, *lp2 = line2;
-    char *str, *sep, *token;
+    char *str, *sep, *token, *saveptr;
     char *show_fields = (sdp->show_fields) ? sdp->show_fields : show_brief_fields;
     hbool_t token_found = False;
     int entries;
 
-    /* Copy string to avoid clobbering due to strtok() API! */
+    /* Copy string to avoid clobbering due to strtok_r() API! */
     str = strdup(show_fields);
     sep = ",";
-    token = strtok(str, sep);
+    token = strtok_r(str, sep, &saveptr);
     while (token != NULL) {
 	token_found = False;
 	for (stp = show_brief_table, entries = 0; entries < num_show_entries; entries++, stp++) {
@@ -400,7 +416,7 @@ show_devices_brief(scsi_device_t *sdp, scsi_device_entry_t *sdeh)
 	    Eprintf(sdp, "Invalid show devices field name: %s\n", token);
 	    return;
 	}
-	token = strtok(NULL, sep);
+	token = strtok_r(NULL, sep, &saveptr);
     }
     if (sdp->show_header_flag) {
 	Printf(sdp, "%s\n", line1);
@@ -417,7 +433,7 @@ show_devices_brief(scsi_device_t *sdp, scsi_device_entry_t *sdeh)
 	}
 	/* Note: This could be optimized rather than parsing for each entry! */
 	str = strcpy(str, show_fields);
-	token = strtok(str, sep);
+	token = strtok_r(str, sep, &saveptr);
 	bp = line1;
 	while (token != NULL) {
 	    for (stp = show_brief_table, entries = 0; entries < num_show_entries; entries++, stp++) {
@@ -499,7 +515,7 @@ show_devices_brief(scsi_device_t *sdp, scsi_device_entry_t *sdeh)
 		    }
 		}
 	    }
-	    token = strtok(NULL, sep);
+	    token = strtok_r(NULL, sep, &saveptr);
 	}
 	if (bp[-1] == ' ') {
 	    bp[-1] = '\0';
@@ -727,7 +743,7 @@ show_devices_format(scsi_device_t *sdp, scsi_device_entry_t *sdeh)
  *      %fw_version or %fwrev = The full FW version.
  *	%serial = The device serial number.
  *	%device_id or %did = The device identification (WWID).
- *	%target_port or %tport = The device target port (SAS address).
+ *      %target_port or %tport = The device target port (SAS address).
  *
  * Outputs:
  *	Returns the formatted buffer length.

@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2018			    *
+ *			  COPYRIGHT (c) 2006 - 2019			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -32,6 +32,9 @@
  *
  * Modification History:
  *
+ * June 19th, 2019 by Robin T. Miller
+ *      Add os_find_scsi_devices() to lookup SCSI devices.
+ * 
  * August 26th, 2010 by Robin T. Miller
  * 	When opening device, on EROFS errno, try opening read-only.
  * 
@@ -47,11 +50,34 @@
 #include <sys/types.h>
 
 #include "spt.h"
-//#include "libscsi.h"
+#include "spt_devices.h"
 
 /*
  * Local Definitions:
  */
+
+/*
+ * Forward Declarations:
+ */
+static int process_device(scsi_generic_t *sgp, char *devpath, scsi_filters_t *sfp);
+static scsi_device_entry_t *add_device_entry(scsi_generic_t *sgp, char *path, inquiry_t *inquiry,
+					     char *serial, char *device_id, char *target_port,
+					     int bus, int channel, int target, int lun);
+static scsi_device_entry_t *create_device_entry(scsi_generic_t *sgp, char *path, inquiry_t *inquiry,
+						char *serial, char *device_id, char *target_port,
+						int bus, int channel, int target, int lun);
+static scsi_device_entry_t *find_device_entry(scsi_generic_t *sgp, char *path, char *serial,
+					      char *device_id, int bus, int channel, int target, int lun);
+static scsi_device_name_t *update_device_entry(scsi_generic_t *sgp, scsi_device_entry_t *sdep,
+					       char *path, inquiry_t *inquiry,
+					       char *serial, char *device_id, char *target_port,
+					       int bus, int channel, int target, int lun);
+
+static scsi_device_name_t *create_exclude_entry(scsi_generic_t *sgp, char *path, 
+						int bus, int channel, int target, int lun);
+static scsi_device_name_t *find_exclude_entry(scsi_generic_t *sgp, char *path, int bus, int channel, int target, int lun);
+static void FreeScsiExcludeTable(scsi_generic_t *sgp);
+
 
 #if !defined(WIN_SCSILIB_H)
 #define WIN_SCSILIB_H
@@ -811,4 +837,581 @@ char *
 os_driver_status_msg(scsi_generic_t *sgp)
 {
     return(NULL);
+}
+
+/* ============================================================================================= */
+/*
+ * Functions for Managing the SCSI Device Table:
+ */
+
+int
+os_find_scsi_devices(scsi_generic_t *sgp, scsi_filters_t *sfp, char *paths)
+{
+    void *opaque = sgp->tsp->opaque;
+    FILE *pipef;
+    char cmd_output[STRING_BUFFER_SIZE];
+    char *cmd = "wmic diskdrive get DeviceID";
+    int lines = 0;
+    int status;
+
+    /* Allow user to overide our default directory/device name list. */
+    if (paths) {
+	char *path, *sep, *str;
+	char *saveptr;
+	/* Allow comma separated list of device paths. */
+	str = strdup(paths);
+	sep = ",";
+	path = strtok_r(str, sep, &saveptr);
+	while (path) {
+	    status = process_device(sgp, path, sfp);
+	    //status = find_scsi_devices(sgp, dir_path, dev_name, sfp);
+	    path = strtok_r(NULL, sep, &saveptr);
+	}
+	Free(opaque, str);
+    } else {
+	if (sgp->debug) {
+	    Printf(opaque, "Executing: %s\n", cmd);
+	}
+	pipef = popen(cmd, "r");
+	if (pipef == NULL) {
+	    //os_perror(opaque, "popen() failed");
+	    return(FAILURE);
+	}
+	memset(cmd_output, '\0', sizeof(cmd_output));
+	/*
+	 * Read and log output from the command.
+	 */
+	while (fgets(cmd_output, sizeof(cmd_output), pipef) == cmd_output) {
+	    char *p;
+	    if (lines++ == 0) {
+		/* First line is heading 'DeviceID' so skip this. */
+		continue;
+	    }
+	    p = strchr(cmd_output, ' ');
+	    if (p) { *p = '\0'; }
+	    p = strchr(cmd_output, '\r');
+	    if (p) { *p = '\0'; }
+	    if (strlen(cmd_output)) {
+		status = process_device(sgp, cmd_output, sfp);
+	    }
+	}
+	status = pclose(pipef);
+	status = WEXITSTATUS(status);
+    }
+    return(status);
+}
+
+static int
+process_device(scsi_generic_t *sgp, char *devpath, scsi_filters_t *sfp)
+{
+    void *opaque = sgp->tsp->opaque;
+    int bus = -1, target = -1, lun = -1, channel = -1;
+    char *scsi_device = NULL;
+    char *serial = NULL, *device_id = NULL, *target_port = NULL;
+    char *fw_version = NULL;
+    inquiry_t *inquiry = NULL;
+    inquiry_page_t inquiry_data;  
+    inquiry_page_t *inquiry_page = &inquiry_data;
+    scsi_device_entry_t *sdep = NULL;
+    //struct sg_scsi_id scsi_id, *sid = &scsi_id;
+    char *path = devpath;
+    char *dsf = sgp->dsf;
+    HANDLE fd = INVALID_HANDLE_VALUE;
+    int status = SUCCESS;
+
+    if (sgp->debug == True) {
+	Printf(opaque, "Processing device %s...\n", devpath);
+    }
+
+    /* Filtering here is safe for non-Linux systems. */
+    /* Filter on the device or exclude paths, if specified. */
+    /* Note: Filtering here means we won't find all device paths! */
+    if (sfp && sfp->device_paths) {
+	if ( match_device_paths(path, sfp->device_paths) == False ) {
+	    return(status); /* No match, skip this device. */
+	}
+    }
+    if (sfp && sfp->exclude_paths) {
+	if ( match_device_paths(path, sfp->exclude_paths) == True ) {
+	    return(status); /* Match, so exclude this device. */
+	}
+    }
+
+    fd = CreateFile(path, (GENERIC_READ | GENERIC_WRITE),
+		    (FILE_SHARE_READ | FILE_SHARE_WRITE), NULL,
+		    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (fd == INVALID_HANDLE_VALUE) {
+	os_perror(opaque, "Failed to open device %s", path);
+	return(FAILURE);
+    }
+    /* 
+     * Filter on the device name path(s), if specified.
+     * Note: Filtering here means we won't find all device paths!
+     * Our goal here is to limit device access to those in the list. 
+     * FYI: This logic works fine for single path devices. (YMMV) 
+     * If this is undesirable, remove, filtering is done during show. 
+     */ 
+    if (sfp && sfp->device_paths) {
+	/* 
+	 * Since we have multiple device paths, do lookup by SCSI nexus.
+	 * This allows us to find additional devices such as "sg" or DM-MP. 
+	 * But, this won't find multiple DM-MP device paths, nexus differ! 
+	 * FYI: DM-MP /dev/mapper returns nexus for the active (sd) path. 
+	 */ 
+	sdep = find_device_entry(sgp, path, NULL, NULL, bus, channel, target, lun);
+	if (sdep == NULL) {
+	    if (match_device_paths(path, sfp->device_paths) == False) {
+		if (sgp->debug == True) {
+		    Printf(opaque, "Skipping device %s...\n", path);
+		}
+		goto close_and_continue; /* No match, skip this device. */
+	    }
+	}
+	/* Note: We don't update the entry found, since we may filter below. */
+    }
+    /*
+     * We exclude devices at this point to avoid issuing SCSI commands. 
+     * The idea here is that the device may be broken, so avoid touching! 
+     * Note: Excluding /dev/mapper will NOT exclude /dev/{sd|sg) devices, 
+     * due to the order paths are searched. (see above) 
+     */
+    if (sfp && sfp->exclude_paths) {
+	scsi_device_name_t *sdnp;
+	sdnp = find_exclude_entry(sgp, path, bus, channel, target, lun);
+	if (sdnp == NULL) {
+	    if (match_device_paths(path, sfp->exclude_paths) == True) {
+		sdnp = create_exclude_entry(sgp, path, bus, channel, target, lun);
+	    }
+	}
+	if (sdnp) {
+	    if (sgp->debug == True) {
+		Printf(opaque, "Excluding device %s...\n", path);
+	    }
+	    goto close_and_continue; /* Match, so skip this device. */
+	}
+    }
+    if (inquiry == NULL) {
+	inquiry = Malloc(opaque, sizeof(*inquiry));
+	if (inquiry == NULL) return(FAILURE);
+    }
+    /*
+     * int
+     * Inquiry(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
+     *         scsi_addr_t *sap, scsi_generic_t **sgpp,
+     *         void *data, unsigned int len, unsigned char page,
+     *         unsigned int sflags, unsigned int timeout, tool_specific_t *tsp)
+     *  
+     * Note: We are *not* using our own SCSI generic (sdp) structure, but rather 
+     * leave this empty so one is dynamically allocated and initialized. This is 
+     * done since we are querying multiple devices and avoids sgp cleanup.
+     */
+    status = Inquiry(fd, path, sgp->debug, False, NULL, NULL,
+		     inquiry, sizeof(*inquiry), 0, 0, sgp->timeout, sgp->tsp);
+    if (status) {
+	goto close_and_continue;
+    }
+    /* SCSI Filters */
+    if ( sfp ) {
+	int length = 0;
+	/* List of device types. */
+	if (sfp->device_types) {
+	    int dindex;
+	    hbool_t dtype_found = False;
+	    /* List is terminated with DTYPE_UNKNOWN. */
+	    for (dindex = 0; (sfp->device_types[dindex] != DTYPE_UNKNOWN); dindex++) {
+		if (inquiry->inq_dtype == sfp->device_types[dindex]) {
+		    dtype_found = True;
+		    break;
+		}
+	    }
+	    if (dtype_found == False) {
+		goto close_and_continue;
+	    }
+	}
+	if (sfp->product) {
+	    char pid[sizeof(inquiry->inq_pid)+1];
+	    strncpy(pid, (char *)inquiry->inq_pid, sizeof(inquiry->inq_pid));
+	    pid[sizeof(inquiry->inq_pid)] = '\0';
+	    /* Allow substring match to find things like "SDLF". */
+	    if (strstr(pid, sfp->product) == NULL) {
+		goto close_and_continue;
+	    }
+	}
+	if (sfp->vendor) {
+	    length = (int)strlen(sfp->vendor);
+	    if (strncmp(sfp->vendor, (char *)inquiry->inq_vid, length)) {
+		goto close_and_continue;
+	    }
+	}
+	if (sfp->revision) {
+	    length = (int)strlen(sfp->revision);
+	    if (strncmp(sfp->revision, (char *)inquiry->inq_revlevel, length)) {
+		goto close_and_continue;
+	    }
+	}
+    }
+    if (serial == NULL) {
+	/*
+	 * Get the Inquiry Serial Number page (0x80).
+	 */
+	serial = GetSerialNumber(fd, path, sgp->debug, False,
+				 NULL, NULL, inquiry, sgp->timeout, sgp->tsp);
+    }
+    /* 
+     * We delay filtering until showing device to acquire all paths.
+     */
+    if ( serial && sfp && sfp->serial) {
+	/* Use substring search due to leading spaces in serial number! */
+	if (strstr(serial, sfp->serial) == NULL) {
+	    goto close_and_continue;
+	}
+    } else if (sfp && sfp->serial) { /* Skip devices without a serial number. */
+	goto close_and_continue;
+    }
+    /*
+     * Get Inquiry Device Identification page (0x83).
+     */
+    status = Inquiry(fd, path, sgp->debug, False, NULL, NULL,
+		     inquiry_page, sizeof(*inquiry_page), INQ_DEVICE_PAGE,
+		     0, sgp->timeout, sgp->tsp);
+    if (status == SUCCESS) {
+	/*
+	 * Get the LUN device identifier (aka WWID).
+	 */
+	device_id = DecodeDeviceIdentifier(opaque, inquiry, inquiry_page, False);
+	if ( device_id && sfp && sfp->device_id) {
+	    if (strcmp(sfp->device_id, device_id) != 0) {
+		goto close_and_continue;
+	    }
+	} else if (sfp && sfp->device_id) { /* Skip devices without a device ID. */
+	    goto close_and_continue;
+	}
+	/*
+	 * For SAS protocol, the target port is the drive SAS address.
+	 */
+	target_port = DecodeTargetPortIdentifier(opaque, inquiry, inquiry_page);
+	if ( target_port && sfp && sfp->target_port) {
+	    if (strcmp(sfp->target_port, target_port) != 0) {
+		goto close_and_continue;
+	    }
+	} else if (sfp && sfp->target_port) { /* Skip devices without a target port. */
+	    goto close_and_continue;
+	}
+    } else {
+	status = SUCCESS; /* Device may not support the device ID page, but continue... */
+    }
+
+    /*
+     * For SAS protocol, the target port is the drive SAS address.
+     */
+    target_port = DecodeTargetPortIdentifier(opaque, inquiry, inquiry_page);
+
+    /*
+     * Get the full firmware version string. 
+     * Note: This provides 8 character string versus truncated Inquiry revision! 
+     */
+    if ( (inquiry->inq_dtype == DTYPE_DIRECT) &&
+	 (strncmp((char *)inquiry->inq_vid, "ATA", 3) == 0) ) {
+	fw_version = AtaGetDriveFwVersion(fd, path, sgp->debug, False,
+					  NULL, NULL, inquiry, sgp->timeout, sgp->tsp);
+    }
+
+    /*
+     * Filter on user specified FW version (if any).
+     */
+    if ( fw_version && sfp && sfp->fw_version) {
+	if (strcmp(sfp->fw_version, fw_version) != 0) {
+	    goto close_and_continue;
+	}
+    } else if (sfp && sfp->fw_version) { /* Skip devices without a FW version. */
+	goto close_and_continue;
+    }
+
+    /* 
+     * Now, create the SCSI device table entries.
+     */
+    sdep = add_device_entry(sgp, path, inquiry, serial, device_id,
+			    target_port, bus, channel, target, lun);
+
+    if (fw_version && sdep->sde_fw_version == NULL) {
+	sdep->sde_fw_version = strdup(fw_version);
+    }
+
+close_and_continue:
+    (void)CloseHandle(fd);
+    fd = INVALID_HANDLE_VALUE;
+    if (serial) {
+	Free(opaque, serial);
+	serial = NULL;
+    }
+    if (device_id) {
+	Free(opaque, device_id);
+	device_id = NULL;
+    }
+    if (target_port) {
+	Free(opaque, target_port);
+	target_port = NULL;
+    }
+    if (fw_version) {
+	Free(opaque, fw_version);
+	fw_version = NULL;
+    }
+    if (inquiry) Free(opaque, inquiry);
+    if (serial) Free(opaque, serial);
+    if (device_id) Free(opaque, device_id);
+    if (target_port) Free(opaque, target_port);
+    if (fw_version) Free(opaque, fw_version);
+    return(status);
+}
+
+static scsi_device_entry_t *
+add_device_entry(scsi_generic_t *sgp, char *path, inquiry_t *inquiry,
+		 char *serial, char *device_id, char *target_port,
+		 int bus, int channel, int target, int lun)
+{
+    void *opaque = sgp->tsp->opaque;
+    scsi_device_entry_t *sdep = NULL;
+
+    /* Find device via device ID (WWN), serial number, or SCSI nexus. */
+    sdep = find_device_entry(sgp, path, serial, device_id, bus, channel, target, lun);
+    if (sdep == NULL) {
+	sdep = create_device_entry(sgp, path, inquiry, serial, device_id,
+				   target_port, bus, channel, target, lun);
+    } else { /* Update existing device entry. */
+	//scsi_device_name_t *sdnp;
+	//sdnp = update_device_entry(sgp, sdep, path, inquiry, serial, device_id,
+				   //target_port, bus, channel, target, lun);
+	abort();
+    }
+    return( sdep );
+}
+
+static scsi_device_entry_t *
+create_device_entry(scsi_generic_t *sgp, char *path, inquiry_t *inquiry,
+		    char *serial, char *device_id, char *target_port,
+		    int bus, int channel, int target, int lun)
+{
+    void *opaque = sgp->tsp->opaque;
+    scsi_device_entry_t *sdeh = &scsiDeviceTable;
+    struct scsi_device_entry *sptr = NULL;
+    scsi_device_entry_t *sdep;
+    scsi_device_name_t *sdnp;
+    struct scsi_device_name *sdnh;
+
+    sdep = Malloc(opaque, sizeof(*sdep));
+    if (sdep == NULL) return(NULL);
+    /* Initialize the device name header. */
+    sdnh = &sdep->sde_names;
+    sdnh->sdn_flink = sdnh->sdn_blink = sdnh;
+    /* Setup a new device name entry. */
+    sdnp = Malloc(opaque, sizeof(*sdnp));
+    if (sdnp == NULL) return(NULL);
+    /* Insert at the tail. */
+    sdnh->sdn_flink = sdnh->sdn_blink = sdnp;
+    sdnp->sdn_flink = sdnp->sdn_blink = sdnh;
+    sdnp->sdn_flink = sdnh;
+    sdnh->sdn_blink = sdnp;
+    /* Setup the device information. */
+    sdnp->sdn_device_path = strdup(path);
+    sdnp->sdn_bus = bus;
+    sdnp->sdn_channel = channel;
+    sdnp->sdn_target = target;
+    sdnp->sdn_lun = lun;
+    /* Some devices do *not* support device ID or serial numbers. (CD/DVD, KVM, SES, etc) */
+    if (device_id) {
+	sdep->sde_device_id = strdup(device_id);
+    }
+    if (serial) {
+	sdep->sde_serial = strdup(serial);
+    }
+    if (target_port) {
+	sdnp->sdn_target_port = strdup(target_port);
+	/* Historic, save the target port (for now), even though this is per path! */
+	sdep->sde_target_port = strdup(target_port);
+    }
+    sdep->sde_device_type = inquiry->inq_dtype;
+    sdep->sde_vendor = Malloc(opaque, INQ_VID_LEN + 1);
+    sdep->sde_product = Malloc(opaque, INQ_PID_LEN + 1);
+    sdep->sde_revision = Malloc(opaque, INQ_REV_LEN + 1);
+    (void)strncpy(sdep->sde_vendor, (char *)inquiry->inq_vid, INQ_VID_LEN);
+    (void)strncpy(sdep->sde_product, (char *)inquiry->inq_pid, INQ_PID_LEN);
+    (void)strncpy(sdep->sde_revision, (char *)inquiry->inq_revlevel, INQ_REV_LEN);
+    /* Sort by the first device name. */
+    for (sptr = sdeh->sde_flink; (sptr != sdeh) ; sptr = sptr->sde_flink) {
+	if (sptr->sde_names.sdn_flink) {
+	    /* Sort by name, ensuring "sda,sdb,..." comes before "sdaa", etc. */
+	    if ( ( strlen(path) < strlen(sptr->sde_names.sdn_flink->sdn_device_path) ) ||
+		 ((strlen(path) == strlen(sptr->sde_names.sdn_flink->sdn_device_path) &&
+		   strcmp(path, sptr->sde_names.sdn_flink->sdn_device_path) < 0)) ) {
+		sdep->sde_flink = sptr;
+		sdep->sde_blink = sptr->sde_blink;
+		sptr->sde_blink->sde_flink = sdep;
+		sptr->sde_blink = sdep;
+		return( sdep );
+	    }
+	}
+    }
+    /* Insert at the tail. */
+    sptr = sdeh->sde_blink;
+    sptr->sde_flink = sdep;
+    sdep->sde_blink = sptr;
+    sdep->sde_flink = sdeh;
+    sdeh->sde_blink = sdep;
+    return( sdep );
+}
+
+static scsi_device_entry_t *
+find_device_entry(scsi_generic_t *sgp, char *path, char *serial,
+		  char *device_id, int bus, int channel, int target, int lun)
+{
+    void *opaque = sgp->tsp->opaque;
+    scsi_device_entry_t *sdeh = &scsiDeviceTable, *sdep;
+
+    /* We do lookup by WWN, serial number, or SCSI nexus. */
+    for (sdep = sdeh->sde_flink; (sdep != sdeh) ; sdep = sdep->sde_flink) {
+	/* Lookup device by device ID or serial number. */
+	if (device_id && sdep->sde_device_id) {
+	    if (strcmp(sdep->sde_device_id, device_id) == 0) {
+		return( sdep );
+	    }
+	}
+	if (serial && sdep->sde_serial) {
+	    if (strcmp(sdep->sde_serial, serial) == 0) {
+		return( sdep );
+	    }
+	}
+	/* Find device by SCSI nexus (bus/channel/target/lun). */
+	if ( ( (device_id == NULL) && (serial == NULL) ) ||
+	     ( (sdep->sde_device_id == NULL) && (sdep->sde_serial == NULL) ) ) {
+	    scsi_device_name_t *sdnh = &sdep->sde_names;
+	    scsi_device_name_t *sdnp;
+	    for (sdnp = sdnh->sdn_flink; (sdnp != sdnh); sdnp = sdnp->sdn_flink) {
+		if ( (sdnp->sdn_bus == bus) && (sdnp->sdn_channel == channel) &&
+		     (sdnp->sdn_target == target) && (sdnp->sdn_lun == lun) ) {
+		    return( sdep );
+		}
+	    }
+	}
+    }
+    return(NULL);
+}
+
+#if 0
+static scsi_device_name_t *
+update_device_entry(scsi_generic_t *sgp, scsi_device_entry_t *sdep,
+		    char *path, inquiry_t *inquiry,
+		    char *serial, char *device_id, char *target_port,
+		    int bus, int channel, int target, int lun)
+{
+    void *opaque = sgp->tsp->opaque;
+    struct scsi_device_name *sdnh = &sdep->sde_names;
+    scsi_device_name_t *sdnp;
+    scsi_device_name_t *sptr;
+
+    /* For SCSI generic "sg" devices, try to find an "sd" device path. */
+    if (strncmp(path, SG_PATH_PREFIX, SG_PATH_SIZE) == 0) {
+	sdnp = find_device_by_nexus(sgp, sdep, path, bus, channel, target, lun);
+	if (sdnp) {
+	    sdnp->sdn_scsi_path = strdup(path);
+	    return( sdnp );
+	}
+    }
+    /* We just need to add a new device name. */
+    sdnp = Malloc(opaque, sizeof(*sdnp));
+    if (sdnp == NULL) return(NULL);
+    sdnp->sdn_device_path = strdup(path);
+    if (target_port) {
+	sdnp->sdn_target_port = strdup(target_port);
+    }
+    sdnp->sdn_bus = bus;
+    sdnp->sdn_channel = channel;
+    sdnp->sdn_target = target;
+    sdnp->sdn_lun = lun;
+    /* Sort by device name. */
+    for (sptr = sdnh->sdn_flink; (sptr != sdnh) ; sptr = sptr->sdn_flink) {
+	if (sptr->sdn_flink) {
+	    /* Sort by name, ensuring "sda,sdb,..." comes before "sdaa", etc. */
+	    if ( ( strlen(path) < strlen(sptr->sdn_device_path) ) ||
+		 ((strlen(path) == strlen(sptr->sdn_device_path) &&
+		   strcmp(path, sptr->sdn_device_path) < 0)) ) {
+		sdnp->sdn_flink = sptr;
+		sdnp->sdn_blink = sptr->sdn_blink;
+		sptr->sdn_blink->sdn_flink = sdnp;
+		sptr->sdn_blink = sdnp;
+		return( sdnp );
+	    }
+	}
+    }
+    /* Insert at the tail. */
+    sptr = sdnh->sdn_blink;
+    sptr->sdn_flink = sdnp;
+    sdnp->sdn_blink = sptr;
+    sdnp->sdn_flink = sdnh;
+    sdnh->sdn_blink = sdnp;
+    return( sdnp );
+}
+#endif /* 0 */
+
+/* ========================================================================================================= */
+/*
+ * Definitions and functions for managing the exclude device table.
+ */
+scsi_device_name_t scsiExcludeTable = { .sdn_flink = &scsiExcludeTable, .sdn_blink = &scsiExcludeTable };
+
+static scsi_device_name_t *
+create_exclude_entry(scsi_generic_t *sgp, char *path, int bus, int channel, int target, int lun)
+{
+    void *opaque = sgp->tsp->opaque;
+    struct scsi_device_name *sdnh = &scsiExcludeTable;
+    scsi_device_name_t *sdnp;
+    scsi_device_name_t *sptr;
+
+    /* We just need to add a new device name. */
+    sdnp = Malloc(opaque, sizeof(*sdnp));
+    if (sdnp == NULL) return(NULL);
+    sdnp->sdn_device_path = strdup(path);
+    sdnp->sdn_bus = bus;
+    sdnp->sdn_channel = channel;
+    sdnp->sdn_target = target;
+    sdnp->sdn_lun = lun;
+    /* Insert at the tail. */
+    sptr = sdnh->sdn_blink;
+    sptr->sdn_flink = sdnp;
+    sdnp->sdn_blink = sptr;
+    sdnp->sdn_flink = sdnh;
+    sdnh->sdn_blink = sdnp;
+    return( sdnp );
+}
+
+/* Find device by SCSI nexus (bus/channel/target/lun). */
+static scsi_device_name_t *
+find_exclude_entry(scsi_generic_t *sgp, char *path, int bus, int channel, int target, int lun)
+{
+    void *opaque = sgp->tsp->opaque;
+    scsi_device_name_t *sdnh = &scsiExcludeTable;
+    scsi_device_name_t *sdnp;
+
+    for (sdnp = sdnh->sdn_flink; (sdnp != sdnh); sdnp = sdnp->sdn_flink) {
+	if ( (sdnp->sdn_bus == bus) && (sdnp->sdn_channel == channel) &&
+	     (sdnp->sdn_target == target) && (sdnp->sdn_lun == lun) ) {
+	    return( sdnp );
+	}
+    }
+    return(NULL);
+}
+
+static void
+FreeScsiExcludeTable(scsi_generic_t *sgp)
+{
+    void *opaque = sgp->tsp->opaque;
+    scsi_device_name_t *sdnh = &scsiExcludeTable;
+    scsi_device_name_t *sdnp;
+
+    while ( (sdnp = sdnh->sdn_flink) != sdnh) {
+	sdnp->sdn_blink->sdn_flink = sdnp->sdn_flink;
+	sdnp->sdn_flink->sdn_blink = sdnp->sdn_blink;
+	Free(opaque, sdnp->sdn_device_path);
+	Free(opaque, sdnp);
+    }
+    return;
 }

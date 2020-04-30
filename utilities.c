@@ -32,6 +32,14 @@
  * 
  * Modification History:
  * 
+ * April 30th, 2020 by Robin Miller.
+ *      On Windows, switch to _strtoui64() for converting 64-bit string values,
+ * since POSIX strtoul() (on Windows) only returns 32-bit values, rather than
+ * 64-bit values Like Unix systems when compiled for 64-bit executable. This
+ * inadvertantly caused a false data corruption when invoked from dt workloads
+ * doing unmaps with disks greater than 2TB. The wrong LBA range was unmapped!
+ * Actually, the code existed, but wrongly conditionalized for Windows! :(
+ * 
  * June 15th, 2014 by Robin T. Miller
  * 	When reporting CDB information, display the CDB, dir, and length.
  * 
@@ -276,20 +284,30 @@ CvtStrtoLarge(char *nstr, char **eptr, int base)
 {
     uint64_t n = 0, val;
 
-#if defined(QuadIsLong)
+    /* TODO: Cleanup this mess! */
+    /* Thankfully we have POSIX standards, eh? :-( */
+    /* 
+     * Note: All modern day POSIX compliance compilers should support,
+     * strtoull() and strtoumax() API's. But I am not doing cleanup yet,
+     * since that requires build and test across a set of OS's, so later!
+     */
+#if defined(WIN32)
+    if ( (n = _strtoui64(nstr, eptr, base)) == (uint64_t) 0) {
+#elif defined(QuadIsLong)
+    /* Note: The assumption here is that 64-bit OS's strtoul() return 64-bits! */
+    /*       Now this was true on 64-bit Tru64 Unix on Alpha, but true for all OS's? */
+    /*       FYI: This is NOT true for Windows! (grrr) */
     if ( (n = strtoul (nstr, eptr, base)) == (uint64_t) 0) {
 #elif defined(QuadIsLongLong)
-# if defined(__sun) || defined(_AIX) || defined(__hpux)
-    if ( (n = strtoull (nstr, eptr, base)) == (uint64_t) 0) {
-# elif defined(_WIN32)
-    if ( (n = _strtoui64 (nstr, eptr, base)) == (uint64_t) 0) {
-# else /* !defined(WIN32) */
-    if ( (n = strtouq (nstr, eptr, base)) == (uint64_t) 0) {
-# endif /* if defined(__sun) || defined(_AIX) */
-#else /* !defined(QuadIsLong) && !defined(QuadIsLongLong) */
-# error Need to define Quad definition!
-        if ( (n = strtoul (nstr, eptr, base)) == (uint64_t) 0) {
-#endif /* defined(QuadIsLong) || defined(__hpux) */
+# if defined(__hpux)
+    if ( (n = strtoumax(nstr, eptr, base)) == (uint64_t) 0) {
+# else /* All other OS's */
+    if ( (n = strtoull(nstr, eptr, base)) == (uint64_t) 0) {
+# endif /* defined(__hpux) */
+#else
+  #error "Define 64-bit string conversion API!"
+#endif /* defined(WIN32) */
+	/* TODO: Add error checking AFTER standardizing on API! */
         if (nstr == *eptr) {
             n++;
         }

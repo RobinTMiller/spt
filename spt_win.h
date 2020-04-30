@@ -253,7 +253,9 @@ extern struct tm *localtime_r(const time_t *timep, struct tm *tm);
 #define mkdir		_mkdir
 #define popen(cmd, mode) _popen(cmd, mode "b")
 #define pclose		_pclose
+#define strcasecmp	_stricmp
 #define strncasecmp	_strnicmp
+#define strcasestr	strstr		/* Note: This is NOT case-insensitive! Equiv API? */
 #define strtoll		_strtoi64
 #define strtoull	_strtoui64
 #define strtok_r	strtok_s
