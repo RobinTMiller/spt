@@ -2,7 +2,7 @@
 #define SCSI_SES_H 1
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2018			    *
+ *			  COPYRIGHT (c) 2006 - 2019			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -46,7 +46,7 @@
 #define ELEMENT_INDEX_OVERALL		-1
 #define ELEMENT_INDEX_UNINITIALIZED	ELEMENT_INDEX_OVERALL
 
-typedef enum element_status {
+typedef enum {
     ELEMENT_STATUS_UNINITIALIZED	= -1,	/* Element status uninitialized. (internal) */
     ELEMENT_STATUS_UNSUPPORTED		= 0x00,	/* Status detection not implemented for this element. */
     ELEMENT_STATUS_OK			= 0x01,	/* Element is installed and no error conditions are known. */
@@ -59,9 +59,9 @@ typedef enum element_status {
     ELEMENT_STATUS_NO_ACCESS		= 0x08,	/* No access allowed from initiator port. */
     ELEMENT_STATUS_RESERVED_START	= 0x09,	/* Reserved start. */
     ELEMENT_STATUS_RESERVED_END		= 0x0F	/* Reserved end. */
-} element_status_t ;
+} element_status_t;
 
-typedef enum element_type {
+typedef enum {
     ELEMENT_TYPE_UNINITIALIZED		= -1,	/* Element type uninitialized. (internal) */
     ELEMENT_TYPE_UNSPECIFIED		= 0x00,	/* Unspecified */
     ELEMENT_TYPE_DEVICE_SLOT		= 0x01,	/* Device Slot */
@@ -327,7 +327,7 @@ typedef struct ses_status_power_supply_element {
 	fail			: 1,		/* Failure LED.			       (b6) */
 	rqsted_on		: 1,		/* Requested on.		       (b5) */
 	off			: 1,		/* Power supply off.		       (b4) */
-	over_emp_fail		: 1,		/* Over temperature failure.	       (b3) */
+	over_temp_fail		: 1,		/* Over temperature failure.	       (b3) */
 	temp_warn		: 1,		/* Over temperature warning.	       (b2) */
 	ac_fail			: 1,		/* AC fail.			       (b1) */
 	dc_fail			: 1;		/* DC fail.			       (b0) */
@@ -498,7 +498,7 @@ typedef struct ses_status_door_element {
     bitfield_t					/*          				[3] */
 	reserved_byte3_b2_7	: 6,		/* Reserved.            	     (b2:7) */
         open		        : 1,		/* Door open.            	       (b1) */
-	unlocked		: 1,		/* Door unlocked.        	       (b0) */
+	unlocked		: 1;		/* Door unlocked.        	       (b0) */
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
 } ses_status_door_element_t;
 
@@ -586,7 +586,7 @@ typedef struct ses_control_enclosure_element {
 	rqst_ident		: 1,		/* Request identify LED.	       (b7) */
 	reserved_byte1_b0_6	: 7;		/* Reserved.			     (b0:6) */
     bitfield_t					/*					[2] */
-	power_cycle_request	: 2;		/* Power cycle request. 	     (b6:7) */
+	power_cycle_request	: 2,		/* Power cycle request. 	     (b6:7) */
 	power_cycle_delay	: 6;		/* Power cycle delay.		     (b0:5) */
     bitfield_t					/*					[3] */
 	power_off_duration      : 6,	        /* Power off duration.               (b2:7) */
@@ -1303,7 +1303,7 @@ typedef struct ses_download_microcode_descriptor {
 /*
  * Download Microcode Status Codes:
  */
-typedef enum ses_download_status {
+typedef enum {
     /* Interim Status Codes */
     DMS_NO_OPERATION_IN_PROGRESS = 0x00,	/* No download microcode is in progress.	*/
     DMS_OPERATION_IS_IN_PROGRESS = 0x01,	/* A download microcode is in progress.		*/

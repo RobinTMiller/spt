@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2018			    *
+ *			  COPYRIGHT (c) 2006 - 2020			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -207,7 +207,7 @@ libIsRetriable(scsi_generic_t *sgp)
 	    if (retriable == False) {
 		/*
 		 * Note: For XCOPY, there may be additional SCSI sense data. 
-		 * Also Note: This only works for fixed sesne data! 
+		 * Also Note: This only works for fixed sense data! 
 		 */
 		if ( (sgp->cdb[0] == SOPC_EXTENDED_COPY) &&
 		     (ssp->sense_key == SKV_COPY_ABORTED) ) {
@@ -516,7 +516,7 @@ Inquiry(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
 	cdb->page_code = page;
 	cdb->evpd   = True;
     }
-    cdb->allocation_length = len;
+    HtoS(cdb->allocation_length,  len);
     sgp->cdb_size   = InquiryCdbSize;
     sgp->cdb_name   = InquiryName;
     sgp->data_dir   = scsi_data_read;
@@ -554,7 +554,7 @@ Inquiry(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
 int
 verify_inquiry_header(inquiry_t *inquiry, inquiry_header_t *inqh, unsigned char page)
 {
-    if ( (inqh->inq_page_length == 0) ||
+    if ( (StoH(inqh->inq_page_length) == 0) ||
 	 (inqh->inq_page_code != page) ||
 	 (inqh->inq_dtype != inquiry->inq_dtype) ) {
 	return(FAILURE);
@@ -638,7 +638,7 @@ DecodeDeviceIdentifier(void *opaque, inquiry_t *inquiry,
     };
     enum pidt pid_type = NONE;	/* Precedence ID type. */
 
-    page_length = (size_t) inquiry_page->inquiry_hdr.inq_page_length;
+    page_length = (size_t)StoH(inquiry_page->inquiry_hdr.inq_page_length);
     iid = (inquiry_ident_descriptor_t *)inquiry_page->inquiry_page_data;
 
     /*
@@ -800,7 +800,7 @@ DecodeDeviceIdentifier(void *opaque, inquiry_t *inquiry,
 }
 
 /*
- * GetNAAIdentifier() - Gets Inquiry Device ID NAA Identifier.
+ * GetXcopyDesignator() - Gets Extended Copy Designator Identifier.
  *
  * Inputs:
  *  fd     = The file descriptor.
@@ -809,16 +809,18 @@ DecodeDeviceIdentifier(void *opaque, inquiry_t *inquiry,
  *  errlog = Flag to control error logging. (True logs error)
  *                                          (False suppesses)
  *  sgpp   = Pointer to SCSI generic pointer (optional).
- *  naa_id = Pointer to return NAA identifier buffer.
- *  naa_len = Pointer to return NAA identifier length;
+ *  designator_id = Pointer to buffer to return designator ID.
+ *  designator_len = Pointer to buffer to return designator length.
+ *  designator_type = Pointer to buffer for designator type.
  *  tsp = The tool specific information.
  *
  * Return Value:
  *    Returns Success / Failure.
  */
 int
-GetNAAIdentifier(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
-		 scsi_generic_t **sgpp, uint8_t **naa_id, int *naa_len, tool_specific_t *tsp)
+GetXcopyDesignator(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
+		   scsi_generic_t **sgpp, uint8_t **designator_id,
+		   int *designator_len, int *designator_type, tool_specific_t *tsp)
 {
     inquiry_page_t inquiry_data;  
     inquiry_page_t *inquiry_page = &inquiry_data;
@@ -832,11 +834,11 @@ GetNAAIdentifier(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
 
     if (status != SUCCESS) return(status);
 
-    page_length = (size_t) inquiry_page->inquiry_hdr.inq_page_length;
+    page_length = (size_t)StoH(inquiry_page->inquiry_hdr.inq_page_length);
     iid = (inquiry_ident_descriptor_t *)inquiry_page->inquiry_page_data;
 
     /*
-     * Loop through all identifiers until we find NAA ID.* 
+     * Loop through all identifiers until we find NAA ID. 
      */
     while ( (ssize_t)page_length > 0 ) {
 
@@ -854,13 +856,16 @@ GetNAAIdentifier(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
 
 			switch (iid->iid_ident_type) {
 			
+			    case IID_ID_TYPE_EUI64:
+        			/* Fall through... */
 			    case IID_ID_TYPE_NAA: {
 				unsigned char *fptr = (unsigned char *)iid + sizeof(*iid);
 				size_t id_size = (size_t)iid->iid_ident_length;
 	
-				*naa_id = Malloc(NULL, id_size);
-				*naa_len = (int)id_size;
-				memcpy(*naa_id, fptr, id_size);
+				*designator_id = Malloc(NULL, id_size);
+				*designator_len = (int)id_size;
+        			*designator_type = iid->iid_ident_type;
+				memcpy(*designator_id, fptr, id_size);
 				return (SUCCESS);
 			    }
 			    default:
@@ -941,7 +946,7 @@ DecodeTargetPortIdentifier(void *opaque, inquiry_t *inquiry, inquiry_page_t *inq
     uint8_t *ucp = NULL;
     size_t page_length;
 
-    page_length = (size_t)inquiry_page->inquiry_hdr.inq_page_length;
+    page_length = (size_t)StoH(inquiry_page->inquiry_hdr.inq_page_length);
     iid = (inquiry_ident_descriptor_t *)inquiry_page->inquiry_page_data;
 
     /*
@@ -1038,7 +1043,7 @@ GetSerialNumber(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
 
     if (verify_inquiry_header(inquiry, inqh, page) == FAILURE) return(NULL);
 
-    page_length = (size_t)inquiry_page->inquiry_hdr.inq_page_length;
+    page_length = (size_t)StoH(inquiry_page->inquiry_hdr.inq_page_length);
     bp = (char *)malloc(page_length + 1);
     if (bp == NULL) return(NULL);
     strncpy (bp, (char *)inquiry_page->inquiry_page_data, page_length);
@@ -1174,6 +1179,72 @@ GetUniqueID(HANDLE fd, char *dsf,
 	}
     }
     return(IDT_NONE);
+}
+
+/* ======================================================================== */
+
+/*
+ * GetBlockLimits() - Gets Inquiry Block Limits Page.
+ *
+ * Inputs:
+ *  fd     = The file descriptor.
+ *  dsf    = The device special file (raw or "sg" for Linux).
+ *  debug  = Flag to control debug output.
+ *  errlog = Flag to control error logging. (True logs error)
+ *                                          (False suppesses)
+ *  block_limits = Pointer to application block limits.
+ *  tsp = The tool specific information.
+ *
+ * Return Value:
+ *    Returns SUCCESS / FAILURE
+ */
+int
+GetBlockLimits(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
+	       inquiry_block_limits_t *block_limits, tool_specific_t *tsp)
+{
+    inquiry_page_t inquiry_data;  
+    inquiry_page_t *inquiry_page = &inquiry_data;
+    inquiry_header_t *inqh = &inquiry_page->inquiry_hdr;
+    inquiry_block_limits_page_t *blp;
+    unsigned char page = INQ_BLOCK_LIMITS_PAGE;
+    size_t page_length;
+    int status;
+
+    status = Inquiry(fd, dsf, debug, errlog, NULL, NULL,
+		     inquiry_page, sizeof(*inquiry_page), page,	0, 0, tsp);
+
+    if (status != SUCCESS) return(status);
+
+    /*
+     * Note: The extra check is for non-compliant SCSI devices.
+     */
+    if (inqh->inq_page_code != page) {
+	return(FAILURE);
+    }
+
+    page_length = (size_t)inquiry_page->inquiry_hdr.inq_page_length;
+    //blp = (scsit_inq_block_limits_page_t *)inquiry_page->inquiry_page_data;
+    /* Note: SCSIT header defines each page with the Inquiry header! */
+    blp = (inquiry_block_limits_page_t *)inqh;
+
+    /* 
+     * Decode all values, and let caller decide what they want to use. 
+     */
+    block_limits->wsnz = blp->wsnz;
+    block_limits->max_caw_len = blp->max_caw_len;
+    block_limits->opt_xfer_len_granularity = (uint16_t)StoH(blp->opt_xfer_len_granularity);
+    block_limits->max_xfer_len = (uint32_t)StoH(blp->max_xfer_len);
+    block_limits->opt_xfer_len = (uint32_t)StoH(blp->opt_xfer_len);
+    block_limits->max_prefetch_xfer_len = (uint32_t)StoH(blp->max_prefetch_xfer_len);
+    block_limits->max_unmap_lba_count = (uint32_t)StoH(blp->max_unmap_lba_count);
+    block_limits->max_unmap_descriptor_count = (uint32_t)StoH(blp->max_unmap_descriptor_count);
+    block_limits->optimal_unmap_granularity = (uint32_t)StoH(blp->optimal_unmap_granularity);
+    block_limits->unmap_granularity_alignment = (uint32_t)StoH(blp->unmap_granularity_alignment);
+    block_limits->unmap_granularity_alignment_valid =
+	(block_limits->unmap_granularity_alignment_valid & UGAVALID_BIT) ? True : False;
+    block_limits->unmap_granularity_alignment &= ~UGAVALID_BIT; /* Clear this bit! */
+    block_limits->max_write_same_len = (uint64_t)StoH(blp->max_write_same_len);
+    return(status);
 }
 
 /* ======================================================================== */
@@ -1800,8 +1871,6 @@ Write16(scsi_generic_t *sgp, uint64_t lba, uint32_t blocks, uint32_t bytes)
     return(error);
 }
 
-#if 0
-
 /* ======================================================================== */
 
 /*
@@ -1820,14 +1889,14 @@ Write16(scsi_generic_t *sgp, uint64_t lba, uint32_t blocks, uint32_t bytes)
 int
 PopulateToken(scsi_generic_t *sgp, unsigned int listid, void *data, unsigned int bytes)
 {
-    scsi_populate_token_cdb *cdb = (scsi_populate_token_cdb *)sgp->cdb;
+    populate_token_cdb_t *cdb = (populate_token_cdb_t *)sgp->cdb;
     int error;
 
     memset(sgp->cdb, 0, sizeof(sgp->cdb));
-    cdb             = (scsi_populate_token_cdb *)sgp->cdb;
+    cdb             = (populate_token_cdb_t *)sgp->cdb;
     cdb->opcode     = SOPC_EXTENDED_COPY;
     cdb->service_action = SCSI_XCOPY_POPULATE_TOKEN;
-    HtoS(cdb->list_id, listid);
+    HtoS(cdb->list_identifier, listid);
     HtoS(cdb->parameter_list_length, bytes);
     sgp->cdb_size   = sizeof(*cdb);
     sgp->cdb_name   = "XCOPY - Populate Token";
@@ -1859,14 +1928,14 @@ PopulateToken(scsi_generic_t *sgp, unsigned int listid, void *data, unsigned int
 int
 ReceiveRodTokenInfo(scsi_generic_t *sgp, unsigned int listid, void *data, unsigned int bytes)
 {
-    scsi_receive_copy_results *cdb;
+    receive_copy_results_cdb_t *cdb;
     int error;
 
     memset(sgp->cdb, 0, sizeof(sgp->cdb));
-    cdb             = (scsi_receive_copy_results *)sgp->cdb;
+    cdb             = (receive_copy_results_cdb_t *)sgp->cdb;
     cdb->opcode     = SOPC_RECEIVE_ROD_TOKEN_INFO;
-    cdb->service_action = SCSI_TGT_RECEIVE_ROD_TOKEN_INFORMATION;
-    HtoS(cdb->list_id, listid);
+    cdb->service_action = RECEIVE_ROD_TOKEN_INFORMATION;
+    HtoS(cdb->list_identifier, listid);
     HtoS(cdb->allocation_length, bytes);
     sgp->cdb_size   = sizeof(*cdb);
     sgp->cdb_name   = "Receive ROD Token Information";
@@ -1881,8 +1950,6 @@ ReceiveRodTokenInfo(scsi_generic_t *sgp, unsigned int listid, void *data, unsign
 
     return(error);
 }
-
-#endif /* 0 */
 
 /* ======================================================================== */
 

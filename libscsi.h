@@ -1,7 +1,7 @@
 #ifndef LIBSCSI_H
 /****************************************************************************
  *                                                                          *
- *                      COPYRIGHT (c) 2006 - 2018                           *
+ *                      COPYRIGHT (c) 2006 - 2020                           *
  *                       This Software Provided                             *
  *                                  By                                      *
  *                      Robin's Nest Software Inc.                          *
@@ -279,6 +279,9 @@ typedef struct scsi_generic {
 #define ASC_RECOVERED_DATA      0x17  /* Recovered data. (success)      */
 #define ASC_POWER_ON_RESET      0x29  /* A power on reset condition.    */
 #define ASC_PARAMETERS_CHANGED  0x2A  /* Parameters changed condition.  */
+
+/* (0x4, 0xb) - Logical unit not accessible, target port in standby state */
+#define ASQ_STANDBY_STATE	0x0B  /* Target port in standby state.    */
 
 /*
  * Generic Request Sense Data:
@@ -566,7 +569,7 @@ typedef struct inquiry_block_limits {
     uint16_t opt_xfer_len_granularity;
     uint32_t max_xfer_len;
     uint32_t opt_xfer_len;
-    uint32_t max_prefetch_xdread_xdwrite_xfer_len;
+    uint32_t max_prefetch_xfer_len;
     uint32_t max_unmap_lba_count;
     uint32_t max_unmap_descriptor_count;
     uint32_t optimal_unmap_granularity;
@@ -612,21 +615,22 @@ extern int verify_inquiry_header(inquiry_t *inquiry, inquiry_header_t *inqh, uns
 
 extern char *GetDeviceIdentifier(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
                                  scsi_addr_t *sap, scsi_generic_t **sgpp,
-                 void *inqp, unsigned int timeout, tool_specific_t *tsp);
+				 void *inqp, unsigned int timeout, tool_specific_t *tsp);
 extern char *DecodeDeviceIdentifier(void *opaque, inquiry_t *inquiry,
                     inquiry_page_t *inquiry_page, hbool_t hyphens);
-extern int GetNAAIdentifier(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
-                scsi_generic_t **sgpp, uint8_t **naa_id, int *naa_len, tool_specific_t *tsp);
+extern int GetXcopyDesignator(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
+			      scsi_generic_t **sgpp, uint8_t **designator_id,
+			      int *designator_len, int *designator_type, tool_specific_t *tsp);
 extern char *GetTargetPortIdentifier(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
-                     scsi_generic_t **sgpp, void *inqp,
-                     unsigned int timeout, tool_specific_t *tsp);
+				     scsi_generic_t **sgpp, void *inqp,
+				     unsigned int timeout, tool_specific_t *tsp);
 extern char *DecodeTargetPortIdentifier(void *opaque, inquiry_t *inquiry, inquiry_page_t *inquiry_page);
 extern char *GetSerialNumber(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
                              scsi_addr_t *sap, scsi_generic_t **sgpp,
-                 void *inqp, unsigned int timeout, tool_specific_t *tsp);
+			     void *inqp, unsigned int timeout, tool_specific_t *tsp);
 extern char *GetMgmtNetworkAddress(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
-                   scsi_addr_t *sap, scsi_generic_t **sgpp,
-                   void *inqp, unsigned int timeout, tool_specific_t *tsp);
+				   scsi_addr_t *sap, scsi_generic_t **sgpp,
+				   void *inqp, unsigned int timeout, tool_specific_t *tsp);
 
 typedef enum id_type {
   IDT_NONE, IDT_DEVICEID, IDT_SERIALID
@@ -636,7 +640,7 @@ extern idt_t GetUniqueID(HANDLE fd, char *dsf, char **identifier, idt_t idt,
              hbool_t debug, hbool_t errlog, unsigned int timeout, tool_specific_t *tsp);
 extern int GetBlockLimits(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,  inquiry_block_limits_t *block_limits, tool_specific_t *tsp);
 extern int GetLogicalBlockProvisioning(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
-                       inquiry_logical_block_provisioning_t *block_provisioning, tool_specific_t *tsp);
+				       inquiry_logical_block_provisioning_t *block_provisioning, tool_specific_t *tsp);
 /* ATA API's */
 extern char *AtaGetDriveFwVersion(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
                                   scsi_addr_t *sap, scsi_generic_t **sgpp,
@@ -647,13 +651,13 @@ extern int AtaIdentify(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
                        unsigned int sflags, unsigned int timeout, tool_specific_t *tsp);
 
 extern int ReadCapacity10(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
-              scsi_addr_t *sap, scsi_generic_t **sgpp,
-              void *data, unsigned int len, unsigned int sflags,
-              unsigned int timeout, tool_specific_t *tsp);
+			  scsi_addr_t *sap, scsi_generic_t **sgpp,
+			  void *data, unsigned int len, unsigned int sflags,
+			  unsigned int timeout, tool_specific_t *tsp);
 extern int ReadCapacity16(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
-              scsi_addr_t *sap, scsi_generic_t **sgpp,
-              void *data, unsigned int len, unsigned int sflags,
-              unsigned int timeout, tool_specific_t *tsp);
+			  scsi_addr_t *sap, scsi_generic_t **sgpp,
+			  void *data, unsigned int len, unsigned int sflags,
+			  unsigned int timeout, tool_specific_t *tsp);
 int ReadData(scsi_io_type_t read_type, scsi_generic_t *sgp, uint64_t lba, uint32_t blocks, uint32_t bytes);
 extern int Read6(scsi_generic_t *sgp, uint32_t lba, uint8_t length, uint32_t bytes);
 extern int Read10(scsi_generic_t *sgp, uint32_t lba, uint16_t length, uint32_t bytes);
@@ -666,10 +670,10 @@ extern int PopulateToken(scsi_generic_t *sgp, unsigned int listid, void *data, u
 extern int ReceiveRodTokenInfo(scsi_generic_t *sgp, unsigned int listid, void *data, unsigned int bytes);
 extern int TestUnitReady(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
                          scsi_addr_t *sap, scsi_generic_t **sgpp,
-             unsigned int timeout, tool_specific_t *tsp) ;
+			 unsigned int timeout, tool_specific_t *tsp) ;
 
 #define StoH(fptr)      stoh(fptr, sizeof(fptr))
-#define HtoS(fptr,val)      htos(fptr, val, sizeof(fptr))
+#define HtoS(fptr,val)  htos(fptr, val, sizeof(fptr))
 
 extern uint64_t stoh(unsigned char *bp, size_t size);
 extern void htos(unsigned char *bp, uint64_t value, size_t size);
@@ -705,6 +709,21 @@ extern char *SenseCodeMsg(uint8_t error_code);
 extern int LookupSenseKey(char *sense_key_name);
 extern char *ScsiStatus(unsigned char scsi_status);
 extern int LookupScsiStatus(char *status_name);
+
+#include "scsi_cdbs.h"
+
+extern void DumpXcopyData(scsi_generic_t *sgp);
+extern void DumpParameterListDescriptor(scsi_generic_t *sgp, xcopy_lid1_parameter_list_t *paramp, unsigned offset);
+extern void DumpTargetDescriptor(scsi_generic_t *sgp, xcopy_id_cscd_ident_desc_t *tgtdp, int target_number, unsigned offset);
+/* TODO: Re-add this after code is updated for multiple descriptor types! */
+//extern void DumpTargetDescriptor(scsi_generic_t *sgp, xcopy_id_cscd_desc_t *tgtdp, int target_number, unsigned offset);
+extern void DumpSegmentDescriptor(scsi_generic_t *sgp, xcopy_b2b_seg_desc_t *segdpi, int segment_number, unsigned offset);
+
+extern void DumpPTData(scsi_generic_t *sgp);
+extern char *RRTICopyStatus(unsigned char copy_status);
+extern void DumpRRTIData(scsi_generic_t *sgp);
+extern void DumpWUTData(scsi_generic_t *sgp);
+extern void DumpRangeDescriptor(scsi_generic_t *sgp, range_descriptor_t *rdp, int descriptor_number, unsigned offset);
 
 extern void GenerateSptCmd(scsi_generic_t *sgp);
 

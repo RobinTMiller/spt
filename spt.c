@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2018			    *
+ *			  COPYRIGHT (c) 2006 - 2019			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -31,6 +31,10 @@
  *	This utility permits sending any SCSI command desired.
  *
  * Modification History:
+ * 
+ * April 26th, 2019 by Robin T. Miller
+ *      Switch from strtok() to reentrant version strtok_r() to avoid issues
+ * when multiple functions invoke this API and to be thread safe (libspt.so).
  * 
  * January 19th, 2019 by Robin T. Miller
  *      Add request sense for monitoring immediate commands such as Format.
@@ -551,8 +555,9 @@ cleanup_devices(scsi_device_t *sdp, hbool_t master)
 	iop->slice_lba		= 0;
 	iop->slice_length	= 0;
 	iop->slice_resid	= 0;
-	iop->naa_identifier	= 0;
-	iop->naa_identifier_len	= 0;
+	iop->designator_id	= 0;
+	iop->designator_length	= 0;
+        iop->designator_type	= 0;
 	iop->deallocated_blocks	= 0;
 	iop->mapped_blocks	= 0;
 	iop->total_lba_blocks	= 0;
@@ -571,7 +576,7 @@ cleanup_devices(scsi_device_t *sdp, hbool_t master)
 	if (iop->cloned_device) {
 	    sgp->sense_data = NULL;
 	    sgp->data_buffer = NULL;
-	    iop->naa_identifier = NULL;
+	    iop->designator_id = NULL;
 	    sgp->dsf = NULL;
 	    sgp->adsf = NULL;
 	}
@@ -580,9 +585,9 @@ cleanup_devices(scsi_device_t *sdp, hbool_t master)
 	    free_palign(sdp, sgp->data_buffer);
 	    sgp->data_buffer = NULL;
 	}
-	if (iop->naa_identifier) {
-	    free(iop->naa_identifier);
-	    iop->naa_identifier = NULL;
+	if (iop->designator_id) {
+	    free(iop->designator_id);
+	    iop->designator_id = NULL;
 	}
 	if (master == False) {
 	    if (sgp->dsf) {
@@ -1744,8 +1749,8 @@ top:
 		    sdp->status = SUCCESS;	/* We matched, that's success! */
 		    /* Continue to allow other checks below... */
 		} else if (reached_limit) {
-		    Eprintf(sdp, "Retry limit of " LUF" reached for SCSI opcode 0x%x (%s)\n",
-			    (sdp->iterations + 1), sgp->cdb[0], sgp->cdb_name);
+		    Eprintf(sdp, "Retry limit of %u reached for SCSI opcode 0x%x (%s)\n",
+			    sdp->retry_limit, sgp->cdb[0], sgp->cdb_name);
 		    sdp->status = FAILURE;
 		    break;
 		} else {
@@ -2117,7 +2122,7 @@ process_input_file(scsi_device_t *sdp)
 	 * Only allocate buffer for user defined pattern, otherwise each
 	 * thread gets its' own data buffer later.
 	 */
-	if (!sdp->user_data && sdp->user_pattern) {
+	if ( (sdp->user_data == False) && (sdp->user_pattern == True) ) {
 	    sgp->data_buffer = malloc_palign(sdp, sgp->data_length, 0);
 	    InitBuffer(sgp->data_buffer, (size_t)sgp->data_length, sdp->pattern);
 	}
@@ -2380,14 +2385,14 @@ parse_args(scsi_device_t *sdp, int argc, char **argv)
 	}
         if (match (&string, "cdb=")) {
 	    uint32_t value;
-            char *str, *token;
+            char *str, *token, *saveptr;
 	    char *sep = " ";
 	    if (strchr(string, ',')) {
 		sep = ",";
 	    }
 	    sgp->cdb_size = 0;
 	    str = strdup(string);
-            token = strtok(str, sep);
+            token = strtok_r(str, sep, &saveptr);
             while (token != NULL) {
 		value = number(sdp, token, HEX_RADIX);
 		if (value > 0xFF) {
@@ -2396,7 +2401,7 @@ parse_args(scsi_device_t *sdp, int argc, char **argv)
 		    return ( HandleExit(sdp, FATAL_ERROR) );
 		}
                 sgp->cdb[sgp->cdb_size++] = (uint8_t)value;
-                token = strtok(NULL, sep);
+                token = strtok_r(NULL, sep, &saveptr);
                 if (sgp->cdb_size >= MAX_CDB) {
                     Eprintf(sdp, "Maximum CDB size is %d bytes!\n", MAX_CDB);
 		    Free(sdp, str);
@@ -3024,6 +3029,13 @@ dloop:
 	    sdp->verbose = False;
             continue;
         }
+	if (match (&string, "readcapacity10")) {
+	    if ( setup_read_capacity10(sdp, sgp) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+            continue;
+        }
 	if (match (&string, "readcapacity16")) {
 	    if ( setup_read_capacity16(sdp, sgp) ) {
 		return( HandleExit(sdp, FAILURE) );
@@ -3033,6 +3045,13 @@ dloop:
         }
 	if (match (&string, "requestsense")) {
 	    if ( setup_request_sense(sdp, sgp) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+	    continue;
+	}
+	if (match (&string, "rtpg")) {
+	    if ( setup_rtpg(sdp, sgp) ) {
 		return( HandleExit(sdp, FAILURE) );
 	    }
 	    sdp->verbose = False;
@@ -3199,7 +3218,7 @@ dloop:
 	}
 	if (match (&string, "pin=")) {
 	    uint32_t value;
-	    char *str, *token;
+	    char *str, *token, *saveptr;
 	    char *pin;
 	    char *sep = " ";
 	    if (strchr(string, ',')) {
@@ -3212,7 +3231,7 @@ dloop:
     	    sdp->compare_data = True;
 	    pin = sdp->pin_buffer;
 	    str = strdup(string);
-	    token = strtok(str, sep);
+	    token = strtok_r(str, sep, &saveptr);
 	    while (token != NULL) {
 		value = number(sdp, token, HEX_RADIX);
 		if (value > 0xFF) {
@@ -3221,14 +3240,14 @@ dloop:
 		    return ( HandleExit(sdp, FATAL_ERROR) );
 		}
 		pin[sdp->pin_length++] = (uint8_t)value;
-		token = strtok(NULL, sep);
+		token = strtok_r(NULL, sep, &saveptr);
 	    }
 	    Free(sdp, str);
 	    continue;
 	}
         if (match (&string, "pout=")) {
             uint32_t value;
-            char *str, *token;
+            char *str, *token, *saveptr;
             char *pout;
 	    char *sep = " ";
 	    if (strchr(string, ',')) {
@@ -3240,7 +3259,7 @@ dloop:
 	    sdp->user_data = True;
             pout = sgp->data_buffer;
 	    str = strdup(string);
-            token = strtok(str, sep);
+            token = strtok_r(str, sep, &saveptr);
             while (token != NULL) {
 		value = number(sdp, token, HEX_RADIX);
 		if (value > 0xFF) {
@@ -3249,7 +3268,7 @@ dloop:
 		    return ( HandleExit(sdp, FATAL_ERROR) );
 		}
                 pout[sgp->data_length++] = (uint8_t)value;
-                token = strtok(NULL, sep);
+                token = strtok_r(NULL, sep, &saveptr);
             }
 	    Free(sdp, str);
             continue;
@@ -3752,7 +3771,7 @@ parse_exp_data(char *string, scsi_device_t *sdp)
 {
     uint32_t	byte_index;
     exp_data_t	*edp;
-    char	*str, *strp, *token;
+    char	*str, *strp, *token, *saveptr;
     int		i;
 
     if (sdp->exp_data_count == sdp->exp_data_entries) {
@@ -3763,15 +3782,15 @@ parse_exp_data(char *string, scsi_device_t *sdp)
 	if (sdp->exp_data == NULL) return (FAILURE);
     }
 
-    /* Copy string to avoid clobbering due to strtok() API! */
+    /* Copy string to avoid clobbering due to strtok_r() API! */
     str = strp = strdup(string);
     /* Note: Remember match() updates "str"! */
     if ( match(&str, "C:") || match(&str, "CHAR:")) {
 	/* Format: C[HAR]:index:string,string */
-	token = strtok(str, ":");
+	token = strtok_r(str, ":", &saveptr);
 	if (token == NULL) goto parse_error;
 	byte_index = number(sdp, token, sdp->exp_radix);
-	token = strtok(NULL, ",");
+	token = strtok_r(NULL, ",", &saveptr);
 	if (token == NULL) goto parse_error;
 	while (token != NULL) {
 	    while (*token) {
@@ -3786,15 +3805,15 @@ parse_exp_data(char *string, scsi_device_t *sdp)
 		sdp->exp_data_count++;
 		token++;
 	    }
-	    token = strtok(NULL, ",");
+	    token = strtok_r(NULL, ",", &saveptr);
 	}
     } else if ( match(&str, "B:") || match(&str, "BYTE:") ) {
 	uint32_t value;
 	/* Format: B[YTE]:index:value,value... */
-	token = strtok(str, ":");
+	token = strtok_r(str, ":", &saveptr);
 	if (token == NULL) goto parse_error;
 	byte_index = number(sdp, token, sdp->exp_radix);
-	token = strtok(NULL, ",");
+	token = strtok_r(NULL, ",", &saveptr);
 	if (token == NULL) goto parse_error;
 	while (token != NULL) {
 	    if (sdp->exp_data_count == sdp->exp_data_entries) {
@@ -3811,15 +3830,15 @@ parse_exp_data(char *string, scsi_device_t *sdp)
 	    edp->exp_byte_index = byte_index++;
 	    edp->exp_byte_value = value;
 	    sdp->exp_data_count++;
-	    token = strtok(NULL, ",");
+	    token = strtok_r(NULL, ",", &saveptr);
 	}
     } else if ( match(&str, "S:") || match(&str, "SHORT:") ) {
 	uint32_t value;
 	/* Format: S[HORT]:index:value,value... */
-	token = strtok(str, ":");
+	token = strtok_r(str, ":", &saveptr);
 	if (token == NULL) goto parse_error;
 	byte_index = number(sdp, token, sdp->exp_radix);
-	token = strtok(NULL, ",");
+	token = strtok_r(NULL, ",", &saveptr);
 	if (token == NULL) goto parse_error;
 	while (token != NULL) {
 	    value = number(sdp, token, sdp->exp_radix);
@@ -3838,15 +3857,15 @@ parse_exp_data(char *string, scsi_device_t *sdp)
 		edp->exp_byte_value = LTOB(value,i);
 		sdp->exp_data_count++;
 	    }
-	    token = strtok(NULL, ",");
+	    token = strtok_r(NULL, ",", &saveptr);
 	}
     } else if ( match(&str, "W:") || match(&str, "WORD:") ) {
 	uint32_t value;
 	/* Format: W[ORD]:index:value,value... */
-	token = strtok(str, ":");
+	token = strtok_r(str, ":", &saveptr);
 	if (token == NULL) goto parse_error;
 	byte_index = number(sdp, token, sdp->exp_radix);
-	token = strtok(NULL, ",");
+	token = strtok_r(NULL, ",", &saveptr);
 	if (token == NULL) goto parse_error;
 	while (token != NULL) {
 	    value = number(sdp, token, sdp->exp_radix);
@@ -3861,15 +3880,15 @@ parse_exp_data(char *string, scsi_device_t *sdp)
 		edp->exp_byte_value = LTOB(value,i);
 		sdp->exp_data_count++;
 	    }
-	    token = strtok(NULL, ",");
+	    token = strtok_r(NULL, ",", &saveptr);
 	}
     } else if ( match(&str, "L:") || match(&str, "LONG:") ) {
 	uint64_t value;
 	/* Format: L[ONG]:index:value,value... */
-	token = strtok(str, ":");
+	token = strtok_r(str, ":", &saveptr);
 	if (token == NULL) goto parse_error;
 	byte_index = number(sdp, token, sdp->exp_radix);
-	token = strtok(NULL, ",");
+	token = strtok_r(NULL, ",", &saveptr);
 	if (token == NULL) goto parse_error;
 	while (token != NULL) {
 	    value = large_number(sdp, token, sdp->exp_radix);
@@ -3884,7 +3903,7 @@ parse_exp_data(char *string, scsi_device_t *sdp)
 		edp->exp_byte_value = LTOB(value,i);
 		sdp->exp_data_count++;
 	    }
-	    token = strtok(NULL, ",");
+	    token = strtok_r(NULL, ",", &saveptr);
 	}
     } else {
 	goto parse_error;
@@ -4871,10 +4890,13 @@ setup_thread_attributes(scsi_device_t *sdp, pthread_attr_t *tattrp, hbool_t join
 
     /*
      * The default stack size on Linux is 10M, which limits the threads created!
-     * ( Note: On a 32-bit executable, 10M is stealing too much address space! )
+     * ( Note: On a 32-bit executable, 10M is stealing too much address space! ) 
+     * Note: LOG_BUFSIZE is rather large, so ensure the thread stack is big enough!
+     * The log buffer was made large for lots of parameter data, but this size also
+     * gets used for stack allocated buffers, so increase as required! HP-UX issue.
      */
-    if (currentStackSize && desiredStackSize && (currentStackSize > desiredStackSize) ) {
-	/* Too small and we seg fault, too large limits our threads. */
+    if (currentStackSize && desiredStackSize && (currentStackSize != desiredStackSize) ) {
+	/* Too small and we seg fault, too large limits our threads (on 32-bit systems). */
 	status = pthread_attr_setstacksize(tattrp, desiredStackSize);
 	if (status == SUCCESS) {
 	    if (sdp->debug_flag || sdp->tDebugFlag) {

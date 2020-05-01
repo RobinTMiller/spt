@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2018			    *
+ *			  COPYRIGHT (c) 2006 - 2020			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -31,6 +31,13 @@
  *  This module contains the OS SCSI specific functions for Linux.
  *
  * Modification History:
+ * 
+ * July 8th, 2019 by Robin T. Miller
+ *      Update find_scsi_devices() to close file descriptors in error paths.
+ * 
+ * April 26th, 2019 by Robin T. Miller
+ *      Switch from strtok() to reentrant version strtok_r() to avoid issues
+ * when multiple functions invoke this API and to be thread safe (libspt.so).
  * 
  * May 17th, 2018 by Robin T. Miller
  *      Update SCSI generic device lookup processing, to map "sg" to "sd"
@@ -105,6 +112,8 @@
 #define SD_PATH_SIZE	7
 #define SG_PATH_PREFIX	"/dev/sg"
 #define SG_PATH_SIZE	7
+#define DM_PATH_PREFIX	"/dev/dm"
+#define DM_PATH_SIZE	7
 #define DMMP_PATH_PREFIX "/dev/mapper"
 #define DMMP_PATH_SIZE	11
 
@@ -1184,10 +1193,10 @@ force_path_failover(scsi_generic_t *sgp)
  * IOW, this list of directories are *not* required for say Windows. 
  */
 static scsi_dir_path_t scsi_dir_paths[] = {
-    {	"/dev",		"sd",	"Linux Device"	},
-    {	"/dev",		"sg",	"SCSI Device"	},
-    {	"/dev",		"dm",	"DMMP Device"	},	/* A /dev/dm-NN for each partition (too noisy). */
-    {	"/dev/mapper",	NULL,	"DMMP Device"	},
+    {	DEV_PATH,		"sd",	"Linux Device",	True	},
+    {	DEV_PATH,		"sg",	"SCSI Device",	True	},
+    {	DEV_PATH,		"dm",	"DMMP Device",	False	},
+    {	DMMP_PATH_PREFIX,	NULL,	"DMMP Device",	True	},
     {	NULL,		NULL		}
 };
 
@@ -1220,10 +1229,11 @@ os_find_scsi_devices(scsi_generic_t *sgp, scsi_filters_t *sfp, char *paths)
     /* Allow user to overide our default directory/device name list. */
     if (paths) {
 	char *path, *sep, *str;
-	/* Allow comma separated list of device types. */
+	char *saveptr;
+	/* Allow comma separated list of device paths. */
 	str = strdup(paths);
 	sep = ",";
-	path = strtok(str, sep);
+	path = strtok_r(str, sep, &saveptr);
 	while (path) {
 	    /* Manual page states these API's modify path, so we must duplicate! */
 	    char *dirp = strdup(path);
@@ -1231,20 +1241,19 @@ os_find_scsi_devices(scsi_generic_t *sgp, scsi_filters_t *sfp, char *paths)
 	    char *dir_path = dirname(dirp);
 	    char *dev_name = basename(basep);
 	    if (strcmp(dev_name, "*") == 0) {
-		dev_name = NULL;
+		dev_name = NULL;	/* Wildcard '*' says use all device names! */
 	    }
 	    if (dir_path) {
 		status = find_scsi_devices(sgp, dir_path, dev_name, sfp);
 	    }
 	    Free(opaque, dirp);
 	    Free(opaque, basep);
-	    path = strtok(NULL, sep);
+	    path = strtok_r(NULL, sep, &saveptr);
 	}
 	Free(opaque, str);
     } else {
 	for (sdp = scsi_dir_paths; sdp->sdp_dir_path; sdp++) {
-	    if ( sdp->sdp_dev_name && (strcmp(sdp->sdp_dev_name, "dm") == 0) ) {
-		/* A /dev/dm-NN for each partition (too noisy). */
+	    if ( (sfp->all_device_paths == False) && (sdp->default_scan == False) ) {
 		continue;
 	    }
 	    status = find_scsi_devices(sgp, sdp->sdp_dir_path, sdp->sdp_dev_name, sfp);
@@ -1386,7 +1395,7 @@ find_scsi_devices(scsi_generic_t *sgp, char *devpath, char *scsi_name, scsi_filt
 		} else { /* Control w/debug? */
 		    Perror(opaque, "Failed to open device %s", path);
 		}
-		continue;
+		goto close_and_continue;
 	    }
 	    if (strncmp(dirent->d_name, "sg", 2) == 0) {
 		if (ioctl(fd, SG_GET_SCSI_ID, sid) == SUCCESS) {
@@ -1396,12 +1405,12 @@ find_scsi_devices(scsi_generic_t *sgp, char *devpath, char *scsi_name, scsi_filt
 		    lun = sid->lun;
 		} else {
 		    Perror(opaque, "SG_GET_SCSI_ID failed on device %s", path);
-		    continue;
+		    goto close_and_continue;
 		}
 	    } else {
 		int rc = get_device_nexus(sgp, path, fd, &bus, &channel, &target, &lun);
 		if (rc == FAILURE) {
-		    continue;
+		    goto close_and_continue;
 		}
 	    }
 	    if (sgp->debug == True) {
@@ -1409,7 +1418,7 @@ find_scsi_devices(scsi_generic_t *sgp, char *devpath, char *scsi_name, scsi_filt
 		       path, bus, channel, target, lun);
 	    }
 #define SinglePathDevices 1
-#if defined(SinglePathDevices)
+#if SinglePathDevices
 	    /* 
 	     * Filter on the device name path(s), if specified.
 	     * Note: Filtering here means we won't find all device paths!
@@ -1430,11 +1439,12 @@ find_scsi_devices(scsi_generic_t *sgp, char *devpath, char *scsi_name, scsi_filt
 			if (sgp->debug == True) {
 			    Printf(opaque, "Skipping device %s...\n", path);
 			}
-			continue; /* No match, skip this device. */
+			goto close_and_continue; /* No match, skip this device. */
 		    }
 		}
 		/* Note: We don't update the entry found, since we may filter below. */
 	    }
+#endif /* SinglePathDevices */
 	    /*
 	     * We exclude devices at this point to avoid issuing SCSI commands. 
 	     * The idea here is that the device may be broken, so avoid touching! 
@@ -1453,10 +1463,9 @@ find_scsi_devices(scsi_generic_t *sgp, char *devpath, char *scsi_name, scsi_filt
 		    if (sgp->debug == True) {
 			Printf(opaque, "Excluding device %s...\n", path);
 		    }
-		    continue; /* Match, so skip this device. */
+		    goto close_and_continue; /* Match, so skip this device. */
 		}
 	    }
-#endif /* defined(SinglePathDevices) */
 	    if (inquiry == NULL) {
 		inquiry = Malloc(opaque, sizeof(*inquiry));
 		if (inquiry == NULL) return(FAILURE);
@@ -1603,6 +1612,7 @@ find_scsi_devices(scsi_generic_t *sgp, char *devpath, char *scsi_name, scsi_filt
 	    if (fw_version && sdep->sde_fw_version == NULL) {
 		sdep->sde_fw_version = strdup(fw_version);
 	    }
+
 close_and_continue:
 	    (void)close(fd);
 	    fd = INVALID_HANDLE_VALUE;

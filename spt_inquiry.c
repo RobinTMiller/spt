@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2018			    *
+ *			  COPYRIGHT (c) 2006 - 2020			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -29,6 +29,9 @@
  *  
  * Modification History: 
  *
+ * March 2nd, 2019 by Robin T. Miller
+ *      Display Inquiry Device ID Relative Target Port in hex, rather than decimal.
+ * 
  * November 23rd, 2018 by Robin T. Miller
  *	Add functions to get vendor specific Inquiry serial number.
  *
@@ -57,6 +60,7 @@ extern char *find_protocol_identifier(uint8_t protocol_identifier);
  * Forward References:
  */ 
 int standard_inquiry(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp, inquiry_t *inquiry);
+
 char *standard_inquiry_to_json(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp, inquiry_t *inquiry, char *page_name);
 
 int PrintInquiryPageHeader(scsi_device_t *sdp, int offset,
@@ -172,8 +176,8 @@ setup_inquiry(scsi_device_t *sdp, scsi_generic_t *sgp, size_t data_length, uint8
 	cdb->evpd = True;
 	cdb->page_code = page;
     }
-    if (cdb->allocation_length == 0) {
-	cdb->allocation_length = sgp->data_length;
+    if ((int)StoH(cdb->allocation_length) == 0) {
+	HtoS(cdb->allocation_length, sgp->data_length);
     }
     return(status);
 }
@@ -197,8 +201,8 @@ inquiry_encode(void *arg)
 	cdb->evpd = True;
 	cdb->page_code = sdp->page_code;
     }
-    if (cdb->allocation_length == 0) {
-	cdb->allocation_length = sgp->data_length;
+    if ((int)StoH(cdb->allocation_length) == 0) {
+	HtoS(cdb->allocation_length, sgp->data_length);
     }
     return(status);
 }
@@ -211,6 +215,7 @@ inquiry_decode(void *arg)
     scsi_generic_t *sgp = &iop->sg;
     inquiry_t *inquiry = sgp->data_buffer;
     inquiry_header_t *ihdr = sgp->data_buffer;
+    uint8_t page_code = 0;
     struct Inquiry_CDB *cdb;
     int status = SUCCESS;
 
@@ -224,17 +229,21 @@ inquiry_decode(void *arg)
 	status = standard_inquiry(sdp, iop, sgp, inquiry);
 	return(status);
     }
+    page_code = ihdr->inq_page_code;
+    /* 
+     * Request Inquiry for Device Type and Vendor/Product ID's.
+     */
     if (iop->first_time) {
 	status = get_inquiry_information(sdp, iop, sgp);
 	if (status == FAILURE) return(status);
 	iop->first_time = False;
     }
 
-    if (ihdr->inq_page_code == INQ_ALL_PAGES) {
+    if (page_code == INQ_ALL_PAGES) {
 	status = inquiry_supported_decode(sdp, iop, sgp, ihdr);			/* Page 0x00 */
-    } else if (ihdr->inq_page_code == INQ_SERIAL_PAGE) {
+    } else if (page_code == INQ_SERIAL_PAGE) {
 	status = inquiry_serial_number_decode(sdp, iop, sgp, ihdr);		/* Page 0x80 */
-    } else if (ihdr->inq_page_code == INQ_DEVICE_PAGE) {
+    } else if (page_code == INQ_DEVICE_PAGE) {
 	status = inquiry_device_identification_decode(sdp, iop, sgp, ihdr);	/* Page 0x83 */
     } else {
 	sdp->verbose = True;
@@ -254,7 +263,7 @@ inquiry_supported_decode(scsi_device_t *sdp, io_params_t *iop,
     inquiry_page_t *inquiry_page = (inquiry_page_t *)ihdr;
     uint8_t device_type = iop->sip->si_inquiry->inq_dtype;
     uint8_t *pages, page_code = ihdr->inq_page_code;
-    int page_length = ihdr->inq_page_length;
+    int page_length = (int)StoH(ihdr->inq_page_length);
     char *page_name = NULL;
     int status = SUCCESS;
 
@@ -307,7 +316,7 @@ inquiry_supported_to_json(scsi_device_t *sdp, io_params_t *iop,
     char *json_string = NULL;
     inquiry_page_t *inquiry_page = (inquiry_page_t *)ihdr;
     uint8_t *pages, page_code = INQ_ALL_PAGES;
-    int page_length = ihdr->inq_page_length;
+    int page_length = (int)StoH(ihdr->inq_page_length);
     uint8_t device_type = iop->sip->si_inquiry->inq_dtype;
     char *inq_page_name = NULL;
     char text[STRING_BUFFER_SIZE];
@@ -705,7 +714,7 @@ PrintInquiryPageHeader(scsi_device_t *sdp, int offset,
 		       inquiry_header_t *ihdr, vendor_id_t vendor_id)
 {
     uint8_t page_code = ihdr->inq_page_code;
-    int page_length = ihdr->inq_page_length;
+    int page_length = (int)StoH(ihdr->inq_page_length);
     char *page_name = get_inquiry_page_name(ihdr->inq_dtype, page_code, vendor_id);
 
     Printf(sdp, "\n");
@@ -722,9 +731,6 @@ PrintInquiryPageHeader(scsi_device_t *sdp, int offset,
 	Print(sdp, " (%s)\n", pqual_table[ihdr->inq_pqual].fname);
     }
     PrintHex(sdp, "Page Code", page_code, PNL);
-    if (ihdr->inq_reserved_byte2 || sdp->DebugFlag) {
-	PrintHex(sdp, "Reserved (byte 2)", ihdr->inq_reserved_byte2, PNL);
-    }
     PrintDecHex(sdp, "Page Length", page_length, PNL);
     return(offset);
 }
@@ -733,7 +739,7 @@ JSON_Status
 PrintInquiryPageHeaderJson(scsi_device_t *sdp, JSON_Object *object, inquiry_header_t *ihdr)
 {
     uint8_t page_code = ihdr->inq_page_code;
-    int page_length = ihdr->inq_page_length;
+    int page_length = (int)StoH(ihdr->inq_page_length);
     char text[STRING_BUFFER_SIZE];
     JSON_Status json_status;
 
@@ -756,7 +762,6 @@ PrintInquiryPageHeaderJson(scsi_device_t *sdp, JSON_Object *object, inquiry_head
 	json_status = json_object_set_string(object, "Peripheral Qualifier Description", pqual_table[ihdr->inq_pqual].fname);
 	if (json_status != JSONSuccess) return(json_status);
     }
-    json_status = json_object_set_number(object, "Reserved (byte 2)", (double)ihdr->inq_reserved_byte2);
     return(json_status);
 }
 
@@ -768,7 +773,7 @@ inquiry_serial_number_decode(scsi_device_t *sdp, io_params_t *iop, scsi_generic_
     inquiry_page_t *inquiry_page = (inquiry_page_t *)ihdr;
     uint8_t device_type = iop->sip->si_inquiry->inq_dtype;
     uint8_t page_code = ihdr->inq_page_code;
-    int page_length = ihdr->inq_page_length;
+    int page_length = (int)StoH(ihdr->inq_page_length);
     char *page_name = get_inquiry_page_name(device_type, page_code, iop->vendor_id);
     char text[STRING_BUFFER_SIZE];
     uint8_t *ucp = NULL;
@@ -814,7 +819,7 @@ inquiry_serial_number_to_json(scsi_device_t *sdp, io_params_t *iop,
     JSON_Object *object;
     JSON_Status json_status;
     char *json_string = NULL;
-    int page_length = ihdr->inq_page_length;
+    int page_length = (int)StoH(ihdr->inq_page_length);
     char text[STRING_BUFFER_SIZE];
     uint8_t *ucp = NULL;
     int length = 0;
@@ -871,7 +876,7 @@ inquiry_device_identification_decode(scsi_device_t *sdp, io_params_t *iop,
     uint8_t device_type = iop->sip->si_inquiry->inq_dtype;
     uint8_t page_code = ihdr->inq_page_code;
     inquiry_ident_descriptor_t *iid;
-    int page_length = ihdr->inq_page_length;
+    int page_length = (int)StoH(ihdr->inq_page_length);
     char *page_name = get_inquiry_page_name(device_type, page_code, iop->vendor_id);
     char *bp = NULL;
     char *identifier = NULL;
@@ -986,7 +991,9 @@ inquiry_device_identification_decode(scsi_device_t *sdp, io_params_t *iop,
 		    case IID_ID_TYPE_RELTGTPORT: {
 			if (iid->iid_association == IID_ASSOC_TARGET_PORT) {
 			    int target_port = (fptr[2] << 8) | fptr[3];
-			    PrintDecimal(sdp, identifier, target_port, PNL);
+			    ucp = text;
+			    ucp += sprintf(ucp, "0x%04x", target_port);
+			    PrintAscii(sdp, identifier, text, PNL);
 			    break;
 			}
 			/* Fall through... */
@@ -1041,7 +1048,7 @@ inquiry_device_identification_to_json(scsi_device_t *sdp, io_params_t *iop,
     JSON_Value	*ident_value = NULL;
     JSON_Status json_status;
     char *json_string = NULL;
-    int page_length = ihdr->inq_page_length;
+    int page_length = (int)StoH(ihdr->inq_page_length);
     char *bp = NULL;
     char *identifier = NULL;
     char text[STRING_BUFFER_SIZE];
@@ -1195,7 +1202,10 @@ inquiry_device_identification_to_json(scsi_device_t *sdp, io_params_t *iop,
 		    case IID_ID_TYPE_RELTGTPORT: {
 			if (iid->iid_association == IID_ASSOC_TARGET_PORT) {
 			    int target_port = (fptr[2] << 8) | fptr[3];
-			    json_status = json_object_set_number(sobject, identifier, (double)target_port);
+			    ucp = text;
+        		    /* Note: Formatting hex value the way RTPG reports it! */
+			    ucp += sprintf(ucp, "0x%04x", target_port);
+			    json_status = json_object_set_string(sobject, identifier, text);
 			    if (json_status != JSONSuccess) goto finish;
 			    break;
 			}

@@ -2,7 +2,7 @@
 #define SPT_DEVICES_H 1
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2018			    *
+ *			  COPYRIGHT (c) 2006 - 2020			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -77,6 +77,7 @@ typedef struct scsi_dir_path {
     char	*sdp_dir_path;		/* The SCSI directory.		*/
     char	*sdp_dev_name;		/* The SCSI device name.	*/
     char	*sdp_dev_path_type;	/* The device path type.	*/
+    hbool_t	default_scan;		/* Include in default scan.	*/
 } scsi_dir_path_t;
 
 extern char *os_get_device_path_type(scsi_device_name_t *sdnp);

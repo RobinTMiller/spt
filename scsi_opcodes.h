@@ -2,7 +2,7 @@
 #define SCSI_OPCODES_H 1
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 1988 - 2018			    *
+ *			  COPYRIGHT (c) 1988 - 2020			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -80,6 +80,43 @@ typedef struct scsi_opcodes {
 #define SCSI_MAX_BLOCKS10	0xFFFF		/* Max 10-byte blocks.	*/
 #define SCSI_MAX_LBA16		0xFFFFFFFFFFFFFFFFLL /* Max 16-byte LBA	*/
 #define SCSI_MAX_BLOCKS16	0xFFFFFFFF	/* Max 16-byte blocks.	*/
+
+/*
+ * Extended Copy and Token Based Copy Definitions: 
+ * Note: Adjust as required for your storage array! 
+ * TODO: Implement Receive Copy Result / Report Operating Parameters. 
+ *   Receive copy results cmd: 84 03 00 00 00 00 00 00 00 00 00 00 02 08 00 00 
+ * Then set the max length dynamically, since this differs per storage array! 
+ */
+#if defined(Nimble)
+#  define XCOPY_MAX_BLOCKS_PER_SEGMENT 0x2000	/* Max blocks per segment. */
+#  define XCOPY_MAX_SEGMENT_LENGTH     8191	/* That's 4MB-b of blocks. */
+#else /* !defined(Nimble) */
+#  define XCOPY_MAX_BLOCKS_PER_SEGMENT 0xFFFF	/* Max blocks per segment. */
+#  define XCOPY_MAX_SEGMENT_LENGTH     65535	/* That's 32M-b of blocks. */
+#endif /* defined(Nimble) */
+
+#if defined(Nimble)
+
+// NIMBLE_MAX_ODX_SIZE
+// Max ODX operation size supported by Nimble
+#define NIMBLE_MAX_ODX_SIZE   (64 * 1024 * 1024)
+
+// NIMBLE_MAX_XCOPY_SIZE
+// Max XCOPY operation size supported by Nimble
+#define NIMBLE_MAX_XCOPY_SIZE NIMBLE_MAX_ODX_SIZE
+#define XCOPY_PT_MAX_BLOCKS	131072		/* 64M / 512 byte blocks.  */
+
+#endif /* defined(Nimble) */
+
+/* Note: These may need tweaked for Nimble storage as well! */
+#if !defined(XCOPY_PT_MAX_BLOCKS)
+#  define XCOPY_PT_MAX_BLOCKS	     16384	/* Max blocks all desc.    */
+						/* That's 0x4000 or 8MB!   */
+#endif /* !defined(XCOPY_PT_MAX_BLOCKS) */
+#define XCOPY_PT_MAX_DESCRIPTORS     8		/* The max descriptors.    */
+#define XCOPY_PT_MAX_BLOCKS_PER_SEGMENT (XCOPY_PT_MAX_BLOCKS / XCOPY_PT_MAX_DESCRIPTORS)
+						/* Max blocks per segment. */
 
 /* This limit keeps us from timing out. Otherwise a longer timeout is required. */
 #define VERIFY_DATA_MAX_BLOCKS16	65536	/* 256Mb/4k per request.  */
@@ -184,6 +221,7 @@ typedef struct scsi_opcodes {
  */ 
 typedef enum {
     SCSI_XCOPY_EXTENDED_COPY_LID1	= 0x00,
+    SCSI_XCOPY_EXTENDED_COPY_LID4	= 0x05,
     SCSI_XCOPY_POPULATE_TOKEN 		= 0x10,
     SCSI_XCOPY_WRITE_USING_TOKEN 	= 0x11,
 } scsi_xcopy_service_action_t;

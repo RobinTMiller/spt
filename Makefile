@@ -1,6 +1,6 @@
 #/****************************************************************************
 # *                                                                          *
-# *                       COPYRIGHT (c) 2006 - 2018                          *
+# *                       COPYRIGHT (c) 2006 - 2020                          *
 # *                        This Software Provided                            *
 # *                                  By                                      *
 # *                       Robin's Nest Software Inc.                         *
@@ -67,7 +67,7 @@ AWK=	awk
 #CC=	gcc
 # Note: Solaris needs "-D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT"
 # Also Note: Linux does NOT define O_DIRECT without -D_GNU_SOURCE! (WTF!)
-CFLAGS= $(PORG) -I.. -D_ALL_SOURCE -D_GNU_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT
+CFLAGS= $(PORG) -I.. -D_ALL_SOURCE -D_GNU_SOURCE -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT -DNimble
 CPP=	/usr/local/bin/cpp
 CPPOPTS= -M ${CFLAGS}
 LDFLAGS= 

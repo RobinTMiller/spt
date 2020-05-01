@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2018			    *
+ *			  COPYRIGHT (c) 2006 - 2020			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -239,7 +239,8 @@ typedef enum vendor_ident {
     VID_ALL		= 0,		/* Support for all vendors.	*/
     VID_CELESTICA,			/* Celestica vendor identity.   */
     VID_HGST,				/* HGST vendor identity.        */
-    VID_WDC				/* Western Digital identity.    */
+    VID_WDC,				/* Western Digital identity.    */
+    VID_NIMBLE				/* HPE/Nimble storage array.	*/
 } vendor_id_t;
 
 typedef enum product_ident {
@@ -387,8 +388,9 @@ typedef struct {
     uint64_t	slice_resid;		/* The residual slice blocks.	*/
 
     /* Xcopy Specific Parameters: */
-    uint8_t	*naa_identifier;	/* The device identifier.	*/
-    int		naa_identifier_len;	/* The device ID length.	*/
+    uint8_t	*designator_id;		/* The designator identifier.	*/
+    int		designator_length;	/* The designator length.	*/
+    int		designator_type;	/* The designator type.		*/
     
     /* Get LBA Status Parameters: */
     uint64_t	deallocated_blocks;	/* Deallocated blocks (holes).	*/
@@ -731,9 +733,15 @@ extern uint8_t GetDeviceTypeCode(scsi_device_t *sdp, char *device_type, int *sta
 extern char *GetVendorSerialNumber(scsi_device_t *sdp, inquiry_t *inquiry);
 
 /* scsi_opcodes.c */
-int setup_read_capacity16(scsi_device_t *sdp, scsi_generic_t *sgp);
-int setup_request_sense(scsi_device_t *sdp, scsi_generic_t *sgp);
+extern int setup_rtpg(scsi_device_t *sdp, scsi_generic_t *sgp);
+extern int setup_read_capacity10(scsi_device_t *sdp, scsi_generic_t *sgp);
+extern int setup_read_capacity16(scsi_device_t *sdp, scsi_generic_t *sgp);
+extern int setup_request_sense(scsi_device_t *sdp, scsi_generic_t *sgp);
 extern void ShowScsiOpcodes(scsi_device_t *sdp, char *opstr);
+extern void init_swapped(      scsi_device_t   *sdp,
+			       void            *buffer,
+			       size_t          count,
+			       uint32_t        pattern );
 
 /* spt_fmt.c */
 extern int FmtEmitStatus(scsi_device_t *sdp, io_params_t *uiop, scsi_generic_t *usgp, char *format, char *buffer);

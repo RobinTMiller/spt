@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2018			    *
+ *			  COPYRIGHT (c) 2006 - 2020			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -155,8 +155,10 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\tinquiry {page=value}  Show Inquiry or specific page.\n");
     P (sdp, "\tlogsense {page=value} Show Log pages supported or page.\n");
     P (sdp, "\tzerolog {page=value}  Zero all Log pages or specific page.\n");
+    P (sdp, "\treadcapacity10        Show disk capacity (10 byte CDB).\n");
     P (sdp, "\treadcapacity16        Show disk capacity (16 byte CDB).\n");
     P (sdp, "\trequestsense          Show request sense information.\n");
+    P (sdp, "\trtpg                  Report target port groups.\n");
     P (sdp, "\n    Examples:\n");
     P (sdp, "\t# spt inquiry page=ascii_info\n");
     P (sdp, "\t# spt logsense page=protocol\n");
@@ -189,12 +191,12 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\t    W[ORD]            Word (32 bit) values to expect.\n");
     P (sdp, "\t    L[ONG]            Long (64 bit) values to expect.\n");
     P (sdp, "\n\tNote: Byte index and values are taken as decimal (by default).\n");
-    P (sdp, "\n    Inquiry Verify Example:\n");
+    P (sdp, "\n    Inquiry Verify Example: (Nimble Storage)\n");
     P (sdp, "\t# spt dsf=/dev/sg3                                          \\\n");
     P (sdp, "\t      cdb='12 00 00 00 ff 00' dir=read length=255           \\\n");
-    P (sdp, "\t      expect=BYTE:0:0x0d,0x00,0x06,0x02,0x5b,0x00,0x40,0x02 \\\n");
-    P (sdp, "\t      expect=C:8:'HGST    ','STOR ENCL JBOD  '              \\\n");
-    P (sdp, "\t      expect=CHAR:32:'0116' disable=verbose\n");
+    P (sdp, "\t      expect=BYTE:0:0x00,0x00,0x05,0x32,0x3f,0x18,0x10,0x02 \\\n");
+    P (sdp, "\t      expect=C:8:'Nimble  ','Server          '              \\\n");
+    P (sdp, "\t      expect=CHAR:32:'1.0 ' disable=verbose\n");
     P (sdp, "\n    Please see Test Check Options below for more test controls.\n");
 
     P (sdp, "\n    Unpack Data Options:\n");
@@ -245,7 +247,6 @@ void Help(scsi_device_t *sdp)
     P (sdp, "    Errors retried are OS specific, plus SCSI Busy and Unit Attention\n");
     P (sdp, "    Note: Errors are NOT automatically retried, use enable=recovery required.\n");
 
-#if 0
     P (sdp, "\n    Extended Copy Options:\n");
     P (sdp, "\tsrc=device            The source special file.\n");
     P (sdp, "\tdst=device            The destination special file.\n");
@@ -254,14 +255,13 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\twritetype=string      The SCSI write type (write8, write10, write16, writev16).\n");
     P (sdp, "\tlistid=value          The list identifier.\n");
     P (sdp, "\tranges=value          The block device range descriptors.\n");
-    P (sdp, "\trod_timeout=value     The ROD inactivity timeout (in secs).\n");
-    P (sdp, "\trod_token=file        The extended copy ROD token file.\n");
+    //P (sdp, "\trod_timeout=value     The ROD inactivity timeout (in secs).\n");
+    //P (sdp, "\trod_token=file        The extended copy ROD token file.\n");
     P (sdp, "\tsegments=value        The number of extended copy segments.\n");
     P (sdp, "\n");
     P (sdp, "    These can be used in conjunction with the I/O options.\n");
     P (sdp, "    Note: The read options are only used with data compares.\n");
     //P (sdp, "    Also Note: Token based xcopy is *not* fully supported.\n");
-#endif /* 0 */
 
     P (sdp, "\n    Show Devices Filters:\n");
     P (sdp, "\tdevice(s)=string      The device path(s).\n");
@@ -281,6 +281,9 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\tshow devices dtypes=direct,enclosure vid=HGST\n");
     P (sdp, "\tshow edt devices=/dev/sdl,/dev/sdm\n");
     P (sdp, "\tshow edt exclude=/dev/sdl,/dev/sdm\n");
+#if defined(Nimble)
+    P (sdp, "\tshow devices show-fields='dtype,pid,vid,serial,fwver,swver,syncrep,paths'\n");
+#endif /* defined(Nimble) */
 
     P (sdp, "\n    Show Devices Format Control Strings:\n");
     P (sdp, "\t	           %%paths = The device paths.\n");
@@ -292,6 +295,12 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\t	          %%serial = The device serial number.\n");
     P (sdp, "\t	       %%device_id = The device identification. (or %%wwn)\n");
     P (sdp, "\t	     %%target_port = The device target port. (or %%tport)\n");
+#if defined(Nimble)
+
+    P (sdp, "\t	      %%sw_version = The array software version. (or %%swver)\n");
+    P (sdp, "\t	     %%target_type = The target type. (or %%ttype)\n");
+    P (sdp, "\t	%%sync_replication = The synchronous replication. (or %%syncrep)\n");
+#endif /* defined(Nimble) */
     P (sdp, "\n    Example:\n");
     P (sdp, "\tshow devices sfmt='Device Type: %%dtype, Paths: %%path'\n");
 
@@ -304,13 +313,11 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\tascq=value           The additional sense message.\n");
     P (sdp, "\tkey=value            The SCSI sense key message.\n");
     P (sdp, "\tstatus=value         The SCSI status message.\n");
-    P (sdp, "\tuec=value            The HGST UEC message.\n");
 
     P (sdp, "\n    Examples:\n");
     P (sdp, "\tshow scsi ascq=0x0404\n");
     P (sdp, "\tshow scsi key=0x2\n");
     P (sdp, "\tshow scsi status=28\n");
-    P (sdp, "\tshow scsi uec=0xf504\n");
 
     P (sdp, "\n    Test Options:\n");
     P (sdp, "\tabort                 Abort a background test.\n");
@@ -586,7 +593,6 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\t# spt cdb='5f 00 00 00 00 00 00 00 18 00' length=24 \\\n"
 	    "\t      pout='00 00 00 00 00 00 00 00 11 22 33 44 55 66 77 88 00 00 00 00 01 00 00 00'\n"); 
     
-#if 0
     P (sdp, "    Extended Copy: (source lun to destination lun)\n");
     P (sdp, "\t# spt cdb=0x83 src=/dev/sdj dst=/dev/sdd enable=sense'\n");
     P (sdp, "    Extended Copy (Populate Token): (List ID 0A, two block range descriptors)\n");
@@ -597,10 +603,9 @@ void Help(scsi_device_t *sdp)
     P (sdp, "    Write Using Token (WUT): (List ID 0E, one descriptor, read ROD token from file 'token.dat')\n");
     P (sdp, "\t# spt cdb='83 11 00 00 00 00 00 00 00 0E 00 00 02 28 00 00' length=552 rod_token=token.dat \\\n"
 	    "\t      pout='0 2e 0 0  0 0 0 0  0 0 0 0 0 0  0 20  0 0 0 0 0 0 0 20  0 0 0 10  0 0 0 0'\n"); 
-    
+
     P (sdp, "    Compare and Write(16): (with read-after-write)\n");
     P (sdp, "\t# spt cdb=89 starting=0 limit=25m ptype=iot enable=raw\n");
-#endif /* 0 */
     P (sdp, "    Read(6) 1 block: (lba 2097151)\n");
     P (sdp, "\t# spt cdb='08 1f ff ff 01 00' dir=read length=512\n");         
     P (sdp, "    Read(10) 1 block: (lba 134217727)\n");
@@ -641,10 +646,8 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\t# spt cdb='91 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00'\n");
     P (sdp, "    Test Unit Ready:\n");
     P (sdp, "\t# spt cdb='00 00 00 00 00 00'\n"); 
-#if 0
     P (sdp, "    Unmap: [ all blocks ]\n");
     P (sdp, "\t# spt cdb=42 starting=0 enable=sense,recovery\n");
-#endif /* 0 */
     P (sdp, "    Verify(10): [ lba 65535 for 64K blocks ]\n");
     P (sdp, "\t# spt cdb='2f 00 00 00 ff ff 00 ff ff 00'\n");
     P (sdp, "    Verify(16): [ lba 65535 for 64K blocks ]\n");
@@ -655,9 +658,9 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\t# spt cdb='2a 00 ff ff ff ff 00 00 01 00' dir=write din=data length=512\n");
     P (sdp, "    Write(16) 1 block: (lba 34359738367)\n");
     P (sdp, "\t# spt cdb='8a 00 00 00 0f ff ff ff ff ff 00 00 00 01 00 00' dir=write din=data length=512\n");
-    P (sdp, "    Write Same(10) all blocks: (not valid for RR.1 and beyond)\n");
+    P (sdp, "    Write Same(10) all blocks:\n");
     P (sdp, "\t# spt cdb='41 00 00 00 00 00 00 00 00 00' dir=write length=512 timeout=5m\n");
-    P (sdp, "    Write Same(16) 499712 blocks: (unmap) (max permitted in c-mode)\n");
+    P (sdp, "    Write Same(16) 499712 blocks: (unmap)\n");
     P (sdp, "\t# spt cdb='93 08 00 00 00 00 00 00 00 00 07 a0 00 00 00 00' dir=write length=512\n");
     P (sdp, "    Write and Verify(10) 8 blocks: (lba 2097151)\n");
     P (sdp, "\t# spt cdb='2e 00 00 1f ff ff 00 00 08 00' dir=write din=data length=4096\n");
@@ -673,8 +676,14 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\n    Builtin Support Examples:\n\n");
     P (sdp, "    Inquiry Information: (human readable)\n");
     P (sdp, "\t# spt inquiry logprefix=\n");
+    P (sdp, "    Read Capacity(10): (for older SCSI devices or USB)\n");
+    P (sdp, "\t# spt readcapacity10\n");
     P (sdp, "    Read Capacity(16): (shows thin provisioning)\n");
     P (sdp, "\t# spt readcapacity16 ofmt=json\n");
+    P (sdp, "    Report LUNs:\n");
+    P (sdp, "\t# spt cdb=a0 enable=encode,decode disable=verbose\n");
+    P (sdp, "    Report Target Group Support:\n");
+    P (sdp, "\t# spt cdb='a3 0a' enable=encode,decode disable=verbose\n");
     P (sdp, "    Write and Read/Compare IOT Pattern: (32k, all blocks)\n");
     P (sdp, "\t# spt cdb=8a dir=write length=32k enable=compare,recovery,sense starting=0 ptype=iot\n");
     P (sdp, "    Read and Compare IOT Pattern: (32k, all blocks)\n");
@@ -683,7 +692,6 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\t# spt cdb=8a starting=0 bs=64k limit=1g ptype=iot enable=raw emit=default\n");
     P (sdp, "    Write Same: (all blocks)\n");
     P (sdp, "\t# spt cdb='93' starting=0 dir=write length=4k blocks=4m/b\n");
-#if 0
     P (sdp, "    Write Same w/Unmap: (all blocks)\n");
     P (sdp, "\t# spt cdb='93 08' starting=0 dir=write length=512 blocks=4m/b\n");
     P (sdp, "    Unmap All Blocks: (incrementing blocks per range)\n");
@@ -692,11 +700,10 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\t# spt cdb='9e 12' starting=0\n");
     P (sdp, "    Extended Copy Operation: (non-token based, used by VMware)\n");
     P (sdp, "\t# spt cdb=83 src=${SRC} starting=0 dst=${DST} starting=0 enable=compare,recovery,sense\n");
-    P (sdp, "    Extended Copy Operation: (token based, used by Microsoft)\n");
+    P (sdp, "    Extended Copy Operation: (token based, used by Microsoft, aka ODX)\n");
     P (sdp, "\t# spt cdb='83 11' src=${SRC} starting=0 dst=${DST} starting=0 enable=compare,recovery,sense\n");
     P (sdp, "    Zero ROD Token: (10 slices, all blocks, space allocation needs enabled)\n");
     P (sdp, "\t# spt cdb='83 11' dsf=${DST} starting=0 enable=zerorod slices=10 enable=recovery,sense\n");
-#endif /* 0 */
     P (sdp, "    Copy/Verify Source to Destination Device: (uses read/write operations)\n");
     P (sdp, "\t# spt iomode=copy length=32k dsf=${SRC} starting=0 dsf1=${DST} starting=0 enable=compare,recovery,sense\n");
     P (sdp, "    Write Source and Verify with Mirror Device: (10 threads for higher performance)\n");

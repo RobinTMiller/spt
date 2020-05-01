@@ -2,7 +2,7 @@
 #define SCSI_CDBS_INCLUDE 1
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2018			    *
+ *			  COPYRIGHT (c) 2006 - 2020			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -33,7 +33,13 @@
  *      SCSI Command Block Descriptor definitions.
  *
  * Modification History:
- *
+ * 
+ * January 5th, 2019 by Robin T. Miller
+ *      Adding Get LBA Status, Unmap, and Report LUNs definitions.
+ * 
+ * December 18th, 2018 by Robin T. Miller
+ *      Increase the Inquiry allocation length, introduced in SPC-3.
+ * 
  * June 7th, 2018 by Robin T. Miller
  *      Add ATA Pass-Through 16 byte CDB definition.
  * 
@@ -125,8 +131,7 @@ struct Inquiry_CDB {
 #	error "bitfield ordering is NOT defined!"
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
 	uint8_t	page_code;		/* EVPD Page Code.		[2] */
-	uint8_t	reserved_byte3;		/* Reserved.			[3] */
-	uint8_t	allocation_length;	/* Allocation Length.		[4] */
+	uint8_t	allocation_length[2];	/* Allocation Length.	      [3-4] */
 #if defined(_BITFIELDS_LOW_TO_HIGH_)
 	bitfield_t
 	    link		: 1,	/* Link.			[5] */
@@ -755,30 +760,21 @@ struct PreventAllow_CDB {
  * Read Capacity(10) Command Descriptor Block:
  */
 typedef struct ReadCapacity10_CDB {
-    uint8_t opcode;
-    uint8_t reserved_byte1;
-    uint8_t lba[4];
-    uint8_t reserved_byte7;
-    uint8_t reserved1_byte8;
-#if defined(_BITFIELDS_LOW_TO_HIGH_)
-    bitfield_t
-	pmi		: 1,		/* Partial medium indicator             */
-        res_byte9_b1_7	: 7;		/* 7 bits reserved                      */
-#elif defined(_BITFIELDS_HIGH_TO_LOW_)
-    bitfield_t
-	res_byte9_b1_7	: 7,		/* 7 bits reserved                      */
-	pmi		: 1;		/* Partial medium indicator             */
-#else
-#       error "bitfield ordering is NOT defined!"
-#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
-    uint8_t control;
+    uint8_t opcode;			/* Operation code.			[0] */
+    uint8_t reserved_byte1;		/* Reserved.				[1] */
+    uint8_t obsolete_byte2_5[4];	/* Obsolete in SPC4r02.		      [2-5] */
+    uint8_t reserved_byte6_8[3];	/* Reserved.			      [6-8] */
+    uint8_t control;			/* Control.				[9] */
 } ReadCapacity10_CDB_t;
 
 typedef struct ReadCapacity10_data {
-    uint8_t last_block[4];
-    uint8_t block_length[4];
+    uint8_t last_block[4];		/* LBA of last block.		      [0-3] */
+    uint8_t block_length[4];		/* Logical block length (in bytes).   [4-7] */
 } ReadCapacity10_data_t;
 
+/*
+ * Read Capacity(16) Command Descriptor Block:
+ */
 typedef struct ReadCapacity16_CDB {
     uint8_t opcode;
     uint8_t service_action;
@@ -788,9 +784,6 @@ typedef struct ReadCapacity16_CDB {
     uint8_t control;
 } ReadCapacity16_CDB_t;
 
-/*
- * Read Capacity(16) Command Descriptor Block:
- */
 typedef struct ReadCapacity16_data {
     uint8_t last_block[8];
     uint8_t block_length[4];
@@ -861,6 +854,16 @@ struct ReassignBlocks_CDB {
 #	error "bitfield ordering is NOT defined!"
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
 };
+
+typedef struct CompareWrite16_CDB {
+    uint8_t opcode;			/* Operation code.		[0] */
+    uint8_t flags;			/* Flags.			[1] */
+    uint8_t lba[8];			/* Logical block address.     [2-9] */
+    uint8_t reserved_byte10_12[3];	/* Reserved.		    [10-12] */
+    uint8_t blocks;			/* Number of blocks.	       [13] */
+    uint8_t group_number; 		/* Group number.	       [14] */
+    uint8_t control;			/* Control flags.	       [15] */
+} CompareWrite16_CDB_t;
 
 /*
  * Disk Read / Write / Seek CDB's.
@@ -1780,6 +1783,596 @@ struct CdSetAddressFormat_CDB {
 #	error "bitfield ordering is NOT defined!"
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
 };
+
+/* ======================================================================== */
+
+typedef struct get_lba_status_cdb {
+    uint8_t opcode;			/* Operation code.		[0] */
+    uint8_t service_action;		/* Service action.		[1] */
+    uint8_t start_lba[8];		/* Starting logicial block.   [2-9] */
+    uint8_t allocation_length[4];	/* Allocation length.	    [10-13] */
+    uint8_t reserved_byte14;		/* Reserved.		       [14] */
+    uint8_t control;			/* Control.		       [15] */
+} get_lba_status_cdb_t;
+
+typedef struct get_lba_status_param_data {
+    uint8_t parameter_data_length[4];	/* Parameter data length.     [0-3] */
+    uint8_t reserved_bytes4_7[4];	/* Reserved.		      [4-7] */
+} get_lba_status_param_data_t;
+
+#define MAX_LBA_STATUS_DESC     650
+
+typedef struct lba_status_descriptor {
+    uint8_t start_lba[8];		/* Starting logical block.	[0-7] */
+    uint8_t extent_length[4];		/* Extent length.	       [8-12] */
+    uint8_t provisioning_status;	/* Provisioning status.	         [13] */
+    uint8_t reserved_bytes14_16[3];	/* Reserved.		      [14-16] */
+} lba_status_descriptor_t;
+
+#define SCSI_PROV_STATUS_MAPPED 0x0
+#define SCSI_PROV_STATUS_HOLE	0x1
+
+/* ======================================================================== */
+/* Report LUN Definitions: */
+
+#define SCSI_PeripheralDeviceAddressing		0x0
+#define SCSI_FlatSpaceAddressing		0x1
+#define SCSI_LogicalUnitAddressing		0x2
+#define SCSI_ExtendedLogicalUnitAddressing	0x3
+
+#define SCSIT_REPORT_ALL_LUNS   0x0
+#define SCSIT_REPORT_WELL_KNOWN_LUNS 0x1
+#define SCSIT_REPORT_2          0x2
+#define SCSIT_REPORT_INDEPENDENT_LUS 0xFE
+#define SCSIT_REPORT_BOUND_VVOLS 0xFF
+
+typedef struct report_luns_cdb {
+    uint8_t opcode;
+    uint8_t reserved0;
+    uint8_t select_report;
+    uint8_t reserved2;
+    uint8_t reserved3;
+    uint8_t reserved4;
+    uint8_t length[4];
+    uint8_t reserved5;
+    uint8_t control;
+} report_luns_cdb_t;
+
+typedef struct report_luns_header {
+    uint8_t list_len[4];
+    uint8_t reserved[4];
+} report_luns_header_t;
+
+typedef struct report_luns_entry {
+    uint8_t lun_entry[8];
+} report_luns_entry_t;
+
+#define SCSI_BusIdentifierLun		0
+#define SCSI_BusIdentifierDomain	1
+
+typedef struct PeripheralDeviceAddressing {
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t				/*				[0] */
+	bus_identifier : 6,		/* Bus identifier.	     (b0:5) */
+	address_method : 2;		/* The address method.	     (b6:7) */
+    uint8_t target_or_lun[7];		/* Target or LUN.		[1] */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t				/*				[0] */
+	address_method : 2,		/* The address method.	     (b6:7) */
+    	bus_identifier : 6;		/* Bus identifier.	     (b0:5) */
+    uint8_t target_or_lun[7];		/* Target or LUN.		[1] */
+#else
+#	error "bitfield ordering is NOT defined!"
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+} PeripheralDeviceAddressing_t;
+
+/* ======================================================================== */
+
+/*
+ * Maintenance In Definitions:
+ */
+typedef struct maintenance_in_cdb {
+    uint8_t opcode;			/* Operation code.		[0] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t				/*				[1] */
+	service_action		: 5,    /* Service action.	     (b0:4) */
+	reserved_byte1_b5_7	: 3;    /* Reserved.		     (b5:7) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t				/*				[1] */
+	reserved_byte1_b5_7	: 3,    /* Reserved.		     (b5:7) */
+	service_action		: 5;    /* Service action.	     (b0:4) */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+    uint8_t mgmt_protocol;		/* Management protocol.		[2] */
+    uint8_t mgmt_protocol_specific[3];	/* Mgmt protocol specific.    [3-5] */
+    uint8_t allocation_length[4];	/* Allocation length.	      [6-9] */
+    uint8_t control;			/* Control.		       [10] */
+} maintenance_in_cdb_t;
+
+/*
+ * Report Target Group Definitions:
+ */
+typedef enum target_alua_port_group_states {
+    SCSI_TGT_ALUA_ACTIVE_OPTIMIZED     = 0x0,
+    SCSI_TGT_ALUA_ACTIVE_NON_OPTIMIZED = 0x1,
+    SCSI_TGT_ALUA_STANDBY              = 0x2,
+    SCSI_TGT_ALUA_UNAVAILABLE          = 0x3,
+    SCSI_TGT_ALUA_OFFLINE              = 0xE,
+    SCSI_TGT_ALUA_TRANSITIONING        = 0xF,
+    SCSI_TGT_ALUA_NO_STATE             = 0xFF,
+} target_alua_port_group_states_t;
+
+typedef struct {
+    uint8_t length[4];			/* Returned data length.      [0-3] */
+} rtpg_header_t;
+
+typedef struct rtpg_desc_extended_header {
+    uint8_t length[4];			/* Returned data length.		[0-3]     */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    uint8_t reserved_0_3	: 4,	/* Reserved,				[4](b0:3) */
+	    format_type		: 3,	/* The format type.		`	   (b4:3) */
+	    reserved_7		: 1;	/* Reserved.				   (b7:1) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    uint8_t reserved_7		: 1,	/* Reserved.				[4](b7:1) */
+	    format_type		: 3,	/* The format type.		`	   (b4:3) */
+	    reserved_0_3	: 4;	/* Reserved.				   (b0:3) */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */    
+    uint8_t implicit_transition_time;	/* Implicit transition time.		[5]       */
+    uint8_t reserved_6_7[2];		/* Reserved.				[6-7]     */
+					/* First target port group descriptor.		  */
+} rtpg_desc_extended_header_t;
+
+typedef struct report_target_port_group_desc {
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    uint8_t alua_state		: 4,	/* ALUA state.				[0](0:3) */
+	    reserved_0_4_3	: 3,	/* Reserved.				   (4:3) */
+	    pref		: 1;	/* Preferred TPG to access LUN.	   	   (7:1) */
+    uint8_t ao_sup		: 1,	/* Active/optimized supported.		[1](b0)  */
+            an_sup		: 1,	/* Active/non-optimized supported.	   (b1)  */
+            s_sup		: 1,	/* Standby supported.			   (b2)  */
+            u_sup		: 1,	/* Unavailable supported.		   (b3)  */
+            reserved_1_4_3	: 3,	/* Reserved.				   (4:3) */
+            t_sup		: 1;	/* Transition supported.		   (b7) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    uint8_t pref		: 1,	/* Preferred TPG to access LUN.		[0](7:1) */
+	    reserved_0_4_3	: 3,	/* Reserved.				   (4:3) */
+	    alua_state		: 4;	/* ALUA state.				   (0:3) */
+    uint8_t t_sup		: 1,	/* Transition supported.		[1](b7)  */
+	    reserved_1_4_3	: 3,	/* Reserved.				   (4:3) */
+	    u_sup		: 1,	/* Unavailable supported.		   (b3)  */
+	    s_sup		: 1,	/* Standby supported.			   (b2)  */
+	    an_sup		: 1,	/* Active/non-optimized supported.	   (b1)  */
+	    ao_sup		: 1;	/* Active/optimized supported.		   (b0)  */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+    uint8_t target_port_group[2];	/* Target port group.			[2-3]   */
+    uint8_t reserved_byte4;		/* Reserved.				[4]     */
+    uint8_t status_code;		/* Status code.				[5]     */
+    uint8_t vendor_specific;		/* Vendor specific.			[6]     */
+    uint8_t target_port_count;		/* Target port count.			[7]     */
+					/* First target port descriptor.		*/
+} report_target_port_group_desc_t;
+
+typedef struct target_port_desc {
+    uint8_t obsolete[2];		/* Obsolete.				[0-1] */
+    uint8_t relative_target_port_id[2];	/* Relative target port identifier.	[2-3] */
+} target_port_desc_t;
+
+/* ======================================================================== */
+
+/*
+ * Unmap Definitions:
+ */
+typedef struct unmap_cdb {
+    uint8_t opcode;			/* Operation code.		[0] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t				/*				[1] */
+	anchor			: 1,    /* LBA deallocated or anchored.(b0) */
+	reserved_byte1_b1_7	: 7;    /* Reserved.		     (b1:7) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t				/*				[1] */
+	reserved_byte1_b1_7	: 7,    /* Reserved.		     (b1:7) */
+	anchor			: 1;    /* LBA deallocated or anchored.(b0) */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+    uint8_t reserved_byte2_5[4];	/* Reserved.		      [2-5] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t				/*				[6] */
+	group_number		: 5,    /* Group number.	     (b0:4) */
+	reserved_byte6_b5_7	: 3;    /* Reserved.		     (b5:7) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t				/*				[6] */
+	reserved_byte6_b5_7	: 3,    /* Reserved.		     (b5:7) */
+	group_number		: 5;    /* Group number.	     (b0:4) */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+    uint8_t parameter_list_length[2];	/* Parameter list length.     [7-8] */
+    uint8_t control;			/* Control.			[9] */
+} unmap_cdb_t;
+
+typedef struct unmap_parameter_list_header {
+    uint8_t data_length[2];
+    uint8_t block_descriptor_length[2];
+    uint8_t reserved[4];
+} unmap_parameter_list_header_t;
+
+typedef struct unmap_block_descriptor {
+    uint8_t lba[8];
+    uint8_t length[4];
+    uint8_t reserved[4];
+} unmap_block_descriptor_t;
+
+/* ======================================================================== */
+
+/*
+ * Extended Copy and Token Based Copy Definitions:
+ */
+/* 
+ * Extended Copy Defintions:
+ */
+typedef struct xcopy_cdb {
+    uint8_t opcode;			/* Operation code.		[0] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t				/*				[1] */
+	service_action		: 5,    /* Service action.	     (b0:4) */
+	reserved_byte1_b5_7	: 3;    /* Reserved.		     (b5:7) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t				/*				[1] */
+	reserved_byte1_b5_7	: 3,    /* Reserved.		     (b5:7) */
+	service_action		: 5;    /* Service action.	     (b0:4) */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+    uint8_t reserved[8];		/* Reserved.		      [2-9] */
+    uint8_t parameter_list_length[4];	/* Parameter list.	    [10-13] */
+    uint8_t reserved_byte14;		/* Reserved.		       [14] */
+    uint8_t control;			/* Control.	               [15] */
+} xcopy_cdb_t;
+
+/*
+ * Extended Copy LID1 Parameters:
+ */
+typedef struct xcopy_lid1_parameter_list {
+    uint8_t list_identifier;		/* List Identifier.		[0] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t				/*				[1] */
+	priority        : 3,		/* Priority.		  	(b0:2) */
+	nlid            : 1,		/* No List Identifier.	   	(b3)   */
+	nrcr		: 1,		/* No Receive Copy Results	(b4)   */
+	str		: 1,		/* Sequential Striped.		(b5)   */
+	reserved_6_7    : 2;		/* Reserved bits.		(b6:7) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t				/*				[1] */
+	reserved_6_7    : 2,		/* Reserved bits.		(b6:7) */
+	str		: 1,		/* Sequential Striped.		(b5)   */
+	nrcr	    	: 1,		/* No Receive Copy Results	(b4)   */
+	nlid            : 1,		/* No List Identifier.	   	(b3)   */
+	priority        : 3;		/* Priority.		  	(b0:2) */
+#else
+#       error "bitfield ordering is NOT defined!"
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+    uint8_t cscd_desc_list_length[2];	/* CSCD desc list length.     [2-3] */
+    uint8_t reserved_4_7[4];		/* Reserved.		      [4-8] */
+    uint8_t seg_desc_list_length[4];	/* Segment desc list length. [8-11] */
+    uint8_t inline_data_length[4];	/* Inline data length.	    [12-15] */
+    //uint8_t desc_data[0];		/* CSCD and segment descriptors. */
+} xcopy_lid1_parameter_list_t;
+
+typedef struct xcopy_type_spec_params {
+    uint8_t byte1;
+    uint8_t disk_block_length[3];
+} xcopy_type_spec_params_t;
+
+/* 
+ * CSCD Type Codes Descriptors:
+ */
+#define XCOPY_CSCD_TYPE_CODE_FC_N_PORT_NAME	0xE0	/* Fibre Channel N_Port_Name.	*/
+#define XCOPY_CSCD_TYPE_CODE_FC_N_PORT_ID	0xE1	/* Fibre Channel N_Port_ID.	*/
+#define XCOPY_CSCD_TYPE_CODE_FC_N_PORT_ID_NAME	0xE2	/* Fibre Channel N_Port_ID w/N_Port_Name checking. */
+#define XCOPY_CSCD_TYPE_CODE_PARALLEL_INT_T_L	0xE3	/* Parallel Interface T_L.	*/
+#define XCOPY_CSCD_TYPE_CODE_IDENTIFICATION	0xE4	/* Identification Descriptor.	*/
+#define XCOPY_CSCD_TYPE_CODE_IPV4		0xE5	/* IPv4.			*/
+#define XCOPY_CSCD_TYPE_CODE_ALIAS		0xE6	/* Alias.			*/
+#define XCOPY_CSCD_TYPE_CODE_RDMA		0xE7	/* RDMA.			*/
+#define XCOPY_CSCD_TYPE_CODE_IEEE_EUI_64	0xE8	/* IEEE 1394 EUI-64.		*/
+#define XCOPY_CSCD_TYPE_CODE_SAS_SERIAL_SCSI	0xE9	/* SAS Serial SCSI Protocol.	*/
+#define XCOPY_CSCD_TYPE_CODE_IPV6		0xEA	/* IPv6 CSCD descriptor.	*/
+#define XCOPY_CSCD_TYPE_CODE_COPY_SERVICE	0xEB	/* IP Copy Service.		*/
+// 0xEC to FDh Reserved for CSCD descriptors
+// 0xFE ROD CSCD descriptor
+
+#define XCOPY_ASSOCIATION_SHIFT		6
+
+/* CSCD Descriptor Type Codes Definitions. (NAA?) */
+typedef struct xcopy_id_cscd_desc {
+    uint8_t desc_type_code;		/* Descriptor type code.	[0] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t				/*				[1] */
+	device_type	: 5,		/* Device type (from Inquiry).	(b0:4) */
+	obsolete_b1_b5	: 1,		/* Obsolete.		   	(b5)   */
+	lu_id_type	: 2;		/* LU ID Type (ignored).	(b6:7) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t				/*				[1] */
+	lu_id_type	: 2,		/* LU ID Type (ignored).	(b6:7) */
+	obsolete_b1_b5	: 1,		/* Obsolete.		   	(b5)   */
+	device_type	: 5;		/* Device type (from Inquiry).	(b0:4) */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+    uint8_t relative_init_port_id[2];	/* Relative initiator port ID.	[2-3] */
+    /* CSCD Descriptor Parameters */
+    uint8_t codeset;			/* Code set.			[4] */
+    uint8_t designator_type;		/* Designator type (VPD 0x83)	[5] */
+    uint8_t reserved_byte6;		/* Reserved.			[6] */
+    uint8_t designator_length;		/* Designator length.		[7] */
+    uint8_t designator[16];		/* Desigator (VPD page 0x83).	[8] */
+    uint8_t reserved_24_27[4];		/* Reserved.			[9-12] */
+    xcopy_type_spec_params_t type_spec_params; /* Type specific parameters. */
+} xcopy_id_cscd_desc_t;
+
+/* CSCD Identification Descriptor Type Code Definitions. */
+typedef struct xcopy_id_cscd_ident_desc {
+    uint8_t desc_type_code;		/* Descriptor type code.	[0] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t				/*				[1] */
+	device_type	: 5,		/* Device type (from Inquiry).	(b0:4) */
+	obsolete_b1_b5	: 1,		/* Obsolete.		   	(b5)   */
+	lu_id_type	: 2;		/* LU ID Type (ignored).	(b6:7) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t				/*				[1] */
+	lu_id_type	: 2,		/* LU ID Type (ignored).	(b6:7) */
+	obsolete_b1_b5	: 1,		/* Obsolete.		   	(b5)   */
+	device_type	: 5;		/* Device type (from Inquiry).	(b0:4) */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+    uint8_t relative_init_port_id[2];	/* Relative initiator port ID.	[2-3] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t				/*				[4] */
+	codeset		: 4,		/* Device type (from Inquiry).	(b0:3) */
+	reserved_b4_4_7	: 4;		/* Reserved.		        (b4:7) */
+    bitfield_t				/*				[5] */
+	designator_type	: 4,		/* Designator type (VPD 0x83)	(b0:3) */
+        association	: 2,		/* Association (form VPD 0x83)  (b4:5) */
+        reserved_b5_6_7	: 2;		/* Reserved.			(b6:7) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t				/*				[4] */
+	reserved_b4_4_7	: 4,		/* Reserved.		        (b4:7) */
+	codeset		: 4;		/* Device type (from Inquiry).	(b0:3) */
+    bitfield_t				/*				[5] */
+	reserved_b5_6_7	: 2,		/* Reserved.			(b6:7) */
+	association	: 2,		/* Association (form VPD 0x83)  (b4:5) */
+	designator_type	: 4;		/* Designator type (VPD 0x83)	(b0:3) */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+    uint8_t reserved_byte6;		/* Reserved.			[6] */
+    uint8_t designator_length;		/* Designator length.		[7] */
+    uint8_t designator[20];		/* Desigator (VPD page 0x83).	[8-27] */
+    //uint8_t device_specific_params[4];/* Device specific parameters.	[28-31] */
+    xcopy_type_spec_params_t type_spec_params; /* Type specific parameters. */
+} xcopy_id_cscd_ident_desc_t;
+
+/*
+ * Segment Descriptor Definitions:
+ */
+#define XCOPY_DESC_TYPE_CODE_BLOCK_TO_BLOCK_SEG_DESC	0x02
+
+/*
+ * Block to Block Segment Descriptor:
+ */
+typedef struct xcopy_b2b_seg_desc {
+    uint8_t desc_type_code;		/* Descriptor type code.	[0] */
+    uint8_t reserved_byte1;		/* Reserved.			[1] */
+    uint8_t desc_length[2];		/* Descriptor length.		[2-3] */
+    uint8_t src_cscd_desc_idx[2];       /* Source descriptor index.	[4-5] */
+    uint8_t dst_cscd_desc_idx[2];	/* Destination descriptor index.[6-7] */
+    uint8_t reserved_bytes_8_9[2];	/* Reserved.			[8-9] */
+    uint8_t block_device_num_of_blocks[2]; /* Number of blocks.		[10-11] */
+    uint8_t src_block_device_lba[8];	/* Source device logical block.	[12-19] */
+    uint8_t dst_block_device_lba[8];	/* Destination logical block.	[20-27] */
+} xcopy_b2b_seg_desc_t;
+
+#define XCOPY_B2B_SEGMENT_LENGTH (sizeof(xcopy_b2b_seg_desc_t) - 4)
+
+/* ======================================================================== */
+
+/*
+ * Token Based Extended Copy Definitions: (aka ODX - Offload Data Transfer)
+ */
+
+typedef struct populate_token_cdb {
+    uint8_t opcode;			/* Operation code.		[0] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t				/*				[1] */
+	service_action		: 5,    /* Service action.	     (b0:4) */
+	reserved_byte1_b5_7	: 3;    /* Reserved.		     (b5:7) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t				/*				[1] */
+	reserved_byte1_b5_7	: 3,    /* Reserved.		     (b5:7) */
+	service_action		: 5;    /* Service action.	     (b0:4) */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+    uint8_t reserved_byte2_5[4];	/* Reserved.		      [2-5] */
+    uint8_t list_identifier[4];		/* List identifier.	      [6-9] */
+    uint8_t parameter_list_length[4];	/* List parameter length.   [10-13] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t				/*			       [15] */
+	group_number		: 5,    /* Group number.	     (b0:4) */
+	reserved_byte15_b5_7	: 3;    /* Reserved.		     (b5:7) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t				/*			       [15] */
+	reserved_byte15_b5_7	: 3,    /* Reserved.		     (b5:7) */
+	group_number		: 5;    /* Group number.	     (b0:4) */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+    uint8_t control;			/* Control.	               [15] */
+} populate_token_cdb_t;
+
+typedef struct populate_token_parameter_list {
+    uint8_t data_length[2];		/* Data length.		      [0-1] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t				/*				[2] */
+	immed			: 1,   	/* Immediate.		       (b0) */
+        rtv			: 1,	/* ROD type valid.	       (b1) */
+	reserved_byte2_b2_7	: 6;    /* Reserved.		     (b2:7) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t				/*				[2] */
+	reserved_byte2_b2_7	: 6,    /* Reserved.		     (b2:7) */
+        rtv			: 1,	/* ROD type valid.	       (b1) */
+	immed			: 1;   	/* Immediate.		       (b0) */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+    uint8_t reserved_byte3;		/* Reserved.			[3] */
+    uint8_t inactivity_timeout[4];	/* Inactivity timeout.	      [4-7] */
+    uint8_t rod_type[4];		/* ROD type.		     [8-11] */
+    uint8_t reserved_byte_12_13[2];	/* Reserved.		    [12-13] */
+    uint8_t range_descriptor_list_length[2]; /* Range desc length.  [14-15] */
+} populate_token_parameter_list_t;
+
+typedef struct range_descriptor {
+    uint8_t lba[8];			/* Starting logicl block.      [0-7] */
+    uint8_t length[4];			/* Number of blocks.	     [8-11] */
+    uint8_t reserved_byte_12_15[4];	/* Reserved.		    [12-15] */
+} range_descriptor_t;
+
+typedef struct write_using_token_cdb {
+    uint8_t opcode;			/* Operation code.		[0] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t				/*				[1] */
+	service_action		: 5,    /* Service action.	     (b0:4) */
+	reserved_byte1_b5_7	: 3;    /* Reserved.		     (b5:7) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t				/*				[1] */
+	reserved_byte1_b5_7	: 3,    /* Reserved.		     (b5:7) */
+	service_action		: 5;    /* Service action.	     (b0:4) */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+    uint8_t reserved_byte2_5[4];	/* Reserved.		      [2-5] */
+    uint8_t list_identifier[4];		/* List identifier.	      [6-9] */
+    uint8_t parameter_list_length[4];	/* List parameter length.   [10-13] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t				/*			       [15] */
+	group_number		: 5,    /* Group number.	     (b0:4) */
+	reserved_byte15_b5_7	: 3;    /* Reserved.		     (b5:7) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t				/*			       [15] */
+	reserved_byte15_b5_7	: 3,    /* Reserved.		     (b5:7) */
+	group_number		: 5;    /* Group number.	     (b0:4) */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+    uint8_t control;			/* Control.	               [15] */
+} write_using_token_cdb_t;
+
+typedef struct wut_parameter_list {
+    uint8_t data_length[2];		/* Data length.		      [0-1] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t				/*				[2] */
+	immed			: 1,   	/* Immediate.		       (b0) */
+        del_tkn			: 1,	/* Delete token.	       (b1) */
+	reserved_byte2_b2_7	: 6;    /* Reserved.		     (b2:7) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t				/*				[2] */
+	reserved_byte2_b2_7	: 6,    /* Reserved.		     (b2:7) */
+        del_tkn			: 1,	/* Delete token.	       (b1) */
+	immed			: 1;   	/* Immediate.		       (b0) */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+    uint8_t reserved_byte3_7[5];	/* Reserved.		      [3-7] */
+    uint8_t offset_into_rod[8];		/* Offset into ROD.	     [8-15] */
+} wut_parameter_list_t;
+
+/* Note: This value is currently hard coded in WUT parameter list. */
+#define ROD_TOKEN_OFFSET	sizeof(wut_parameter_list_t)
+#define ROD_TOKEN_LENGTH	512 
+
+typedef struct wut_parameter_list_runt {
+    uint8_t reserved[6];			/*  [0-5]	*/
+    uint8_t range_descriptor_list_length[2];	/*  [6-7]	*/
+} wut_parameter_list_runt_t;
+
+#define WUT_PARAM_SIZE		sizeof(wut_parameter_list_t) +		\
+			    	ROD_TOKEN_LENGTH +			\
+			    	sizeof(wut_parameter_list_runt_t)
+
+/* A valid WUT parmater size includes a range descriptor. */
+#define WUT_VALID_PARAM_SIZE	SCSI_WUT_PARAM_SIZE +			\
+				sizeof(range_descriptor_t)
+
+#define WUT_MIN_PARAM_SIZE	sizeof(wut_parameter_list_t) +		\
+				sizeof(wut_parameter_list_runt_t) +	\
+				sizeof(range_descriptor_t)
+
+#define ZERO_ROD_TOKEN_TYPE	0xFFFF0001
+#define ZERO_ROD_TOKEN_LENGTH	0x1F8
+
+typedef struct rod_token {
+    uint8_t	type[4];
+    uint8_t	reserved[2];
+    uint8_t	length[2];
+} rod_token_t;
+
+#define RECEIVE_COPY_RESULTS_SVACT_OPERATING_PARAMETERS      	0x03
+#define RECEIVE_ROD_TOKEN_INFORMATION				0x07
+
+/* 
+ * Receive Copy Results Definitions: (used by token based copy - ODX method)
+ */
+typedef struct receive_copy_results_cdb {
+    uint8_t opcode;			/* Operation code.		[0] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t				/*				[1] */
+	service_action		: 5,    /* Service action.	     (b0:4) */
+	reserved_byte1_b5_7	: 3;    /* Reserved.		     (b5:7) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t				/*				[1] */
+	reserved_byte1_b5_7	: 3,    /* Reserved.		     (b5:7) */
+	service_action		: 5;    /* Service action.	     (b0:4) */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+    uint8_t list_identifier[4];		/* List identifier.	      [2-5] */
+    uint8_t reserved_byte_6_9[4];	/* Reserved.		      [6-9] */
+    uint8_t allocation_length[4];	/* Allocation length.       [10-13] */
+    uint8_t reserved_byte14;		/* Reserved.		       [14] */
+    uint8_t control;			/* Control.	               [15] */
+} receive_copy_results_cdb_t;
+
+typedef enum copy_status {
+    COPY_STATUS_UNINIT              = 0x00,
+    COPY_STATUS_SUCCESS             = 0x01,
+    COPY_STATUS_FAIL                = 0x02,
+    COPY_STATUS_SUCCESS_RESID       = 0x03,
+    COPY_STATUS_FOREGROUND          = 0x11,
+    COPY_STATUS_BACKGROUND          = 0x12,
+    COPY_STATUS_TERMINATED          = 0xE0,
+} copy_status_t;
+
+/*
+ * Receive ROD Token Information Parameter Data:
+ */
+typedef struct rrti_parameter_data {
+    uint8_t available_data[4];		/* Available data.	      [0-3] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t				/*				[4] */
+	response_to_service_action : 5, /* Response to service action(b0:4) */
+	reserved_byte4_b5_7	: 3;    /* Reserved.		     (b5:7) */
+    bitfield_t				/*				[5] */
+	copy_operation_status	: 5,    /* Service operation status. (b0:6) */
+	reserved_byte5_b7	: 3;    /* Reserved.		       (b7) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t				/*				[4] */
+	reserved_byte4_b5_7	: 3,    /* Reserved.		     (b5:7) */
+	response_to_service_action : 5; /* Response to service action(b0:4) */
+    bitfield_t				/*				[5] */
+	copy_operation_status	: 5,    /* Service operation status. (b0:6) */
+	reserved_byte5_b7	: 3;    /* Reserved.		       (b7) */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+    uint8_t operation_counter[2];	/* Operation counter.	      [6-7] */
+    uint8_t estimated_status_update_delay[4]; /* Status update delay.[8-11] */
+    uint8_t extended_copy_completion_status;  /* Completion status.    [12] */
+    uint8_t sense_data_field_length;	/* Sense data filed length.    [13] */
+    uint8_t sense_data_length;		/* Sense data length.	       [14] */
+    uint8_t transfer_count_units;	/* Transfer count units.       [15] */
+    uint8_t transfer_count[8];		/* Transfer count.	    [16-23] */
+    uint8_t segments_processed[2];	/* Segments processed.	    [24-25] */
+    uint8_t reserved_byte_26_31[6];	/* Reserved.		    [26-31] */
+} rrti_parameter_data_t;
+
+/*
+ * Receive ROD Token Response Service Actions.
+ */
+#define SCSI_RRTI_PT 	0x10
+#define SCSI_RRTI_WUT 	0x11
+
+typedef struct rod_token_parameter_data {
+    uint8_t rod_token_descriptors_length[4];	/* ROD token desc. length. [0-3] */
+    uint8_t restricted_byte_4_5[2];		/* Restricted.		   [4-5] */
+} rod_token_parameter_data_t;
+
+#define RRTI_PT_DATA_SIZE	sizeof(rrti_parameter_data_t) +	\
+				sizeof(rod_token_parameter_data_t) + \
+				ROD_TOKEN_LENGTH
 
 #if defined(__IBMC__)
 #  pragma options align=reset

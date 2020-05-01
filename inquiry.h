@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2018			    *
+ *			  COPYRIGHT (c) 2006 - 2020			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -22,6 +22,19 @@
  * THIS SOFTWARE.							    *
  *									    *
  ****************************************************************************/
+ /*
+ * File:	inquiry.h
+ * Date:	April 9, 1991
+ * Author:	Robin T. Miller
+ *
+ * Description:
+ *      SCSI Inquiry definitions.
+ *
+ * Modification History:
+ *
+ * December 18th, 2018 by Robin T. Miller
+ *      Increase the Inquiry allocation length, introduced in SPC-3.
+ */
 #if !defined(INQUIRY_INCLUDE)
 #define INQUIRY_INCLUDE 1
 
@@ -318,8 +331,7 @@ typedef struct inquiry_header {
 		inq_dtype	: 5;	/* Peripheral device type.	[0] */
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
 	uint8_t	inq_page_code;		/* The inquiry page code.	[1] */
-	uint8_t	inq_reserved_byte2;	/* Reserved.			[2] */
-	uint8_t	inq_page_length;	/* The page code length.	[3] */
+	uint8_t	inq_page_length[2];	/* The page code length.      [2-3] */
 					/* Variable length data follows.    */
 } inquiry_header_t;
 
@@ -453,6 +465,34 @@ typedef struct inquiry_network_service_page {
     uint8_t address_length[2];
     uint8_t address[1];
 } inquiry_network_service_page_t;
+
+/* 
+ * Block Limits Data Structure: 
+ */
+typedef struct inquiry_block_limits_page {
+    inquiry_header_t inquiry_header;
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t				/*				[4] */
+	wsnz			: 1,    /* Write same no zero.	       (b0) */
+	reserved_byte4_b1_7	: 7;    /* Reserved.		     (b1:7) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t				/*				[4] */
+	reserved_byte4_b1_7	: 7,    /* Reserved.		     (b1:7) */
+	wsnz			: 1;    /* Write same no zero.	       (b0) */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+    uint8_t max_caw_len;		/* Max compare & write length.	[5] */
+    uint8_t opt_xfer_len_granularity[2];/* Optimal transfer granularity.[6-7] */
+    uint8_t max_xfer_len[4];		/* Maximum transfer length.	[8-11] */
+    uint8_t opt_xfer_len[4];		/* Optimal transfer length.	[12-15] */
+    uint8_t max_prefetch_xfer_len[4];	/* Max prefetch xfer length.	[16-19] */
+    uint8_t max_unmap_lba_count[4];	/* Max unmap LBA count.		[20-23] */
+    uint8_t max_unmap_descriptor_count[4]; /* Max descriptor count.	[24-27] */
+    uint8_t optimal_unmap_granularity[4]; /* Optimal unmap granularity.	[28-31] */
+#define UGAVALID_BIT	0x80000000UL	/* Unmap granularity alignment valid. */
+    uint8_t unmap_granularity_alignment[4]; /* Max unmap granularity.	[32-35] */
+    uint8_t max_write_same_len[8];	/* Max write same length.	[36-43] */
+    uint8_t reserved_bytes44_63[20];	/* Reserved.			[44-63] */
+} inquiry_block_limits_page_t;
 
 #if defined(__IBMC__)
 #  pragma options align=reset

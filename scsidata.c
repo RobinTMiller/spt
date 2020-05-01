@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2018			    *
+ *			  COPYRIGHT (c) 2006 - 2019			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -1274,7 +1274,7 @@ DumpSenseData(scsi_generic_t *sgp, hbool_t recursive, scsi_sense_t *ssp)
 	    }
 	}
 	Printf(opaque, "\n");
-	//DumpXcopyData(sgp);
+	DumpXcopyData(sgp);
 #if 0
     } else if ( (recursive == False) &&
 		((sgp->cdb[0] == SOPC_EXTENDED_COPY && (sgp->cdb[1] == SCSI_XCOPY_POPULATE_TOKEN))) ) {
@@ -1557,6 +1557,363 @@ DumpCdbData(scsi_generic_t *sgp)
     }
     return;
 }
+
+/* ================================================================================== */
+
+void
+DumpXcopyData(scsi_generic_t *sgp)
+{
+    void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
+    xcopy_lid1_parameter_list_t *paramp;
+    //xcopy_id_cscd_desc_t *tgtdp;
+    xcopy_id_cscd_ident_desc_t *tgtdp;
+    xcopy_b2b_seg_desc_t *segdp;
+    xcopy_cdb_t *cdb = (xcopy_cdb_t *)sgp->cdb;
+    unsigned int target_list_length, segment_list_length;
+    uint32_t xcopy_length;
+    int num_targets, num_segments;
+    unsigned char *bp = (unsigned char *)sgp->data_buffer;
+    int target, segment;
+    
+    xcopy_length = (uint32_t)StoH(cdb->parameter_list_length);
+    if (!xcopy_length) return;
+    if (!sgp->data_buffer || !sgp->data_length) return;
+    
+    Printf(opaque, "Extended Copy Parameter Data: (destination device %s)\n", sgp->dsf);
+    Printf(opaque, "\n");
+    DumpFieldsOffset(opaque, (uint8_t *)sgp->data_buffer, xcopy_length);
+
+    paramp = (xcopy_lid1_parameter_list_t *)bp;
+    DumpParameterListDescriptor(sgp, paramp, (unsigned int)((unsigned char *)paramp - bp));
+
+    target_list_length = (uint32_t)StoH(paramp->cscd_desc_list_length);
+    if (!target_list_length) return;
+    num_targets = (target_list_length / sizeof(*tgtdp));
+    tgtdp = (xcopy_id_cscd_ident_desc_t *)(paramp + 1);
+    /* TODO: Support multiple descriptor types! */
+    //tgtdp = (xcopy_id_cscd_desc_t *)(paramp + 1);
+    for (target = 0; target < num_targets; target++, tgtdp++) {
+	DumpTargetDescriptor(sgp, tgtdp, target, (unsigned int)((unsigned char *)tgtdp - bp));
+    }
+    
+    segment_list_length = (uint32_t)StoH(paramp->seg_desc_list_length);
+    num_segments = (segment_list_length / sizeof(*segdp));
+    if (!num_segments) return;
+    segdp = (xcopy_b2b_seg_desc_t *)tgtdp;
+    for (segment = 0; segment < num_segments; segment++, segdp++) {
+	DumpSegmentDescriptor(sgp, segdp, segment, (unsigned int)((unsigned char *)segdp - bp));
+    }
+    return;
+}
+    
+void
+DumpParameterListDescriptor(scsi_generic_t *sgp, xcopy_lid1_parameter_list_t *paramp, unsigned offset)
+{
+    void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
+    Printf(opaque, "\n");
+    Printf(opaque, "Parameter List Descriptor: (offset: %u, length: %d)\n", offset, sizeof(*paramp));
+    Printf(opaque, "\n");
+    PrintHex(opaque, "List Identifier", paramp->list_identifier, PNL);
+    PrintNumeric(opaque, "Priority", paramp->priority,  PNL);
+    PrintNumeric(opaque, "No List Identifier (nlid)", paramp->nlid,  PNL);
+    PrintNumeric(opaque, "No Receive Copy Results (nrcr)", paramp->nrcr,  PNL);
+    PrintNumeric(opaque, "Sequential Striped (str)", paramp->str,  PNL);
+    PrintNumeric(opaque, "Reserved (bits 6:7)", paramp->reserved_6_7,  PNL);
+    PrintDecHex(opaque, "Target Descriptor List Length", (uint32_t)StoH(paramp->cscd_desc_list_length), PNL);
+    //PrintHex(opaque, "Reserved (bytes 4 thru 7)", (uint32_t)StoH(paramp->reserved_4_7), PNL);
+    PrintAscii(opaque, "Reserved (bytes 4 thru 7)", "", DNL);
+    PrintFields(opaque, (uint8_t *)paramp->reserved_4_7, sizeof(paramp->reserved_4_7));
+    PrintDecHex(opaque, "Segment Descriptor List Length", (uint32_t)StoH(paramp->seg_desc_list_length), PNL);
+    PrintDecHex(opaque, "Inline Data Length", (uint32_t)StoH(paramp->inline_data_length), PNL);
+    return;
+}
+
+void
+DumpTargetDescriptor(scsi_generic_t *sgp, xcopy_id_cscd_ident_desc_t *tgtdp, int target_number, unsigned offset)
+//DumpTargetDescriptor(scsi_generic_t *sgp, xcopy_id_cscd_desc_t *tgtdp, int target_number, unsigned offset)
+{
+    void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
+    char *buffer, *bp;
+    int i;
+    Printf(opaque, "\n");
+    Printf(opaque, "Target Descriptor %u: (offset: %u, length: %d)\n", target_number, offset, sizeof(*tgtdp));
+    Printf(opaque, "\n");
+    PrintHex(opaque, "Descriptor Type Code", tgtdp->desc_type_code, PNL);
+    PrintHex(opaque, "Device Type", tgtdp->device_type,  PNL);
+    PrintHex(opaque, "Relative Initiator Port ID", (uint32_t)StoH(tgtdp->relative_init_port_id), PNL);
+    PrintHex(opaque, "Code Set", tgtdp->codeset, PNL);
+    PrintHex(opaque, "Designator Type", tgtdp->designator_type, PNL);
+    PrintHex(opaque, "Reserved (byte 6)", tgtdp->reserved_byte6, PNL);
+    PrintDecHex(opaque, "Designator Length", tgtdp->designator_length, PNL);
+    buffer = bp = Malloc(opaque, sizeof(tgtdp->designator) * 4);
+    for (i = 0; i < (int)sizeof(tgtdp->designator); i++) {
+	bp += sprintf(bp, "%02x ", tgtdp->designator[i]);
+    }
+    PrintAscii(opaque, "Designator",  buffer, PNL);
+    free(buffer);
+    //PrintAscii(opaque, "Reserved (bytes 24 thru 27)", "", DNL);
+    //PrintFields(opaque, (uint8_t *)tgtdp->reserved_24_27, sizeof(tgtdp->reserved_24_27));
+    PrintDec(opaque, "Device Type Specific Length", sizeof(tgtdp->type_spec_params), PNL);
+    PrintHex(opaque, "byte1", tgtdp->type_spec_params.byte1, PNL);
+    PrintDecHex(opaque, "Disk Block Length", (uint32_t)StoH(tgtdp->type_spec_params.disk_block_length), PNL);
+    return;
+}
+
+void
+DumpSegmentDescriptor(scsi_generic_t *sgp, xcopy_b2b_seg_desc_t *segdp, int segment_number, unsigned offset)
+{
+    void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
+    uint16_t blocks;
+    uint64_t starting_lba;
+    int src_index, dst_index;
+    char *src_dsf = NULL, *dst_dsf = NULL;
+    scsi_device_t *sdp = opaque;
+    
+    src_index = (int)StoH(segdp->src_cscd_desc_idx);
+    dst_index = (int)StoH(segdp->dst_cscd_desc_idx);
+    if (sdp && (src_index < sdp->io_devices) ) {
+       src_dsf = sdp->io_params[src_index].sg.dsf;
+    }
+    if (sdp && (dst_index < sdp->io_devices) ) {
+       dst_dsf = sdp->io_params[dst_index].sg.dsf;
+    }
+    
+    Printf(opaque, "\n");
+    Printf(opaque, "Segment Descriptor %u: (offset: %u, length: %d)\n", segment_number, offset, sizeof(*segdp));
+    Printf(opaque, "\n");
+    PrintHex(opaque, "Descriptor Type Code", segdp->desc_type_code, PNL);
+    PrintHex(opaque, "Reserved Byte1",  segdp->reserved_byte1, PNL);
+    PrintDecHex(opaque, "Descriptor Length",  (uint32_t)StoH(segdp->desc_length), PNL);
+    PrintDecimal(opaque, "Source Descriptor Index", src_index, DNL);
+    if (src_dsf) {
+	Print(opaque, " (%s)\n", src_dsf);
+    } else {
+	Print(opaque, "\n");
+    }
+    PrintDecimal(opaque, "Destination Descriptor Index", dst_index, DNL);
+    if (dst_dsf) {
+	Print(opaque, " (%s)\n", dst_dsf);
+    } else {
+	Print(opaque, "\n");
+    }
+    PrintAscii(opaque, "Reserved (bytes 8 thru 9)", "", DNL);
+    PrintFields(opaque, (uint8_t *)segdp->reserved_bytes_8_9, sizeof(segdp->reserved_bytes_8_9));
+    blocks = (uint16_t)StoH(segdp->block_device_num_of_blocks);
+    PrintDecHex(opaque, "Number of Blocks", blocks, PNL);
+    starting_lba = StoH(segdp->src_block_device_lba);
+    PrintLongDecHex(opaque, "Source Block Device LBA", starting_lba, DNL);
+    Print(opaque, " (lba's " LUF " - " LUF ")\n", starting_lba, (starting_lba + blocks - 1));
+    starting_lba = StoH(segdp->dst_block_device_lba);
+    PrintLongDecHex(opaque, "Destination Block Device LBA", starting_lba, DNL);
+    Print(opaque, " (lba's " LUF " - " LUF ")\n", starting_lba, (starting_lba + blocks - 1));
+    return;
+}
+
+void
+DumpRangeDescriptor(scsi_generic_t *sgp, range_descriptor_t *rdp, int descriptor_number, unsigned offset)
+{
+    void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
+    uint32_t blocks;
+    uint64_t starting_lba;
+
+    Printf(opaque, "\n");
+    Printf(opaque, "Block Range Descriptor %u: (offset: %u, length: %d)\n", descriptor_number, offset, sizeof(*rdp));
+    Printf(opaque, "\n");
+    blocks = (uint16_t)StoH(rdp->length);
+    PrintDecHex(opaque, "Number of Blocks", blocks, PNL);
+    starting_lba = StoH(rdp->lba);
+    PrintLongDecHex(opaque, "Source Block Device LBA", starting_lba, DNL);
+    Print(opaque, " (lba's " LUF " - " LUF ")\n", starting_lba, (starting_lba + blocks - 1));
+    PrintAscii(opaque, "Reserved (bytes 12 thru 15)", "", DNL);
+    PrintFields(opaque, (uint8_t *)rdp->reserved_byte_12_15, sizeof(rdp->reserved_byte_12_15));
+    return;
+}
+
+void
+DumpPTData(scsi_generic_t *sgp)
+{
+    void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
+    scsi_device_t *sdp = opaque;
+    populate_token_parameter_list_t *ptp;
+    range_descriptor_t *rdp;
+    unsigned char *bp = (unsigned char *)sgp->data_buffer;
+    uint16_t range_descriptor_length;
+    int descriptor, num_descriptors;
+
+    if (bp == NULL) return;
+
+    ptp = (populate_token_parameter_list_t *)bp;
+    if (sgp->data_length < sizeof(populate_token_parameter_list_t)) return;
+    
+    Printf(opaque, "\n");
+    Printf(opaque, "Populate Token (PT) Parameter Data:\n");
+    Printf(opaque, "\n");
+    PrintDecimal(opaque, "Data Length", (uint16_t)StoH(ptp->data_length), PNL);
+    PrintDecimal(opaque, "Immediate (bit 0)", ptp->immed, PNL);
+    PrintDecimal(opaque, "ROD Type Valid (bit 1)", ptp->rtv, PNL);
+    PrintHex(opaque, "Reserved (byte 2, bits 2:7)", ptp->reserved_byte2_b2_7, PNL);
+    PrintHex(opaque, "Reserved (byte 3)", ptp->reserved_byte3, PNL);
+    PrintHex(opaque, "Inactivity Timeout", (uint32_t)StoH(ptp->inactivity_timeout), PNL);
+    PrintHex(opaque, "ROD Type", (uint32_t)StoH(ptp->rod_type), PNL);
+    PrintHex(opaque, "Reserved (bytes 12 thru 13)", (uint32_t)StoH(ptp->reserved_byte_12_13), PNL);
+    range_descriptor_length = (uint16_t)StoH(ptp->range_descriptor_list_length);
+    PrintDecimal(opaque, "Range Descriptor List Length", range_descriptor_length, PNL);
+
+    /* The block device range descriptors follows the parameter list. */
+
+    if (sgp->data_length < (sizeof(populate_token_parameter_list_t) + range_descriptor_length)) return;
+    num_descriptors = (range_descriptor_length / sizeof(range_descriptor_t));
+    rdp = (range_descriptor_t *)(bp + sizeof(populate_token_parameter_list_t));
+    
+    for (descriptor = 0; descriptor < num_descriptors; descriptor++, rdp++) {
+	DumpRangeDescriptor(sgp, rdp, descriptor, (unsigned int)((unsigned char *)rdp - bp));
+    }
+    return;
+}
+
+static struct RRTI_CopyStatusTable {
+    unsigned char copy_status;
+    char          *copy_status_msg;
+} rrti_CopyStatusTable[] = {
+    { COPY_STATUS_UNINIT,		"STATUS_UNINIT"		},	/* 0x00 */
+    { COPY_STATUS_SUCCESS,		"STATUS_SUCCESS"	},	/* 0x01 */
+    { COPY_STATUS_FAIL,			"STATUS_FAIL"		},	/* 0x02	*/
+    { COPY_STATUS_SUCCESS_RESID,	"STATUS_SUCCESS_RESID"	},	/* 0x03 */
+    { COPY_STATUS_FOREGROUND,		"STATUS_FOREGROUND"	},	/* 0x11 */
+    { COPY_STATUS_BACKGROUND,		"STATUS_BACKGROUND"	},	/* 0x12 */
+    { COPY_STATUS_TERMINATED,		"STATUS_TERMINATED"	}	/* 0xE0 */
+};
+static int rrti_CopyStatusEntrys = sizeof(rrti_CopyStatusTable) / sizeof(rrti_CopyStatusTable[0]);
+
+char *
+RRTICopyStatus(unsigned char copy_status)
+{
+    struct RRTI_CopyStatusTable *cst = rrti_CopyStatusTable;
+    int entrys;
+
+    for (entrys = 0; entrys < rrti_CopyStatusEntrys; cst++, entrys++) {
+	if (cst->copy_status == copy_status) {
+	    return (cst->copy_status_msg);
+	}
+    }
+    return ("???");
+}
+
+void
+DumpRRTIData(scsi_generic_t *sgp)
+{
+    void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
+    scsi_device_t *sdp = opaque;
+    rrti_parameter_data_t *rrtip;
+    unsigned char *bp = (unsigned char *)sgp->data_buffer;
+    char *copy_status_msg;
+
+    if (bp == NULL) return;
+    if (sgp->data_length < sizeof(rrti_parameter_data_t)) return;
+
+    rrtip = (rrti_parameter_data_t *)bp;
+    
+    Printf(opaque, "\n");
+    Printf(opaque, "Receive ROD Token Information (RRTI) Data:\n");
+    Printf(opaque, "\n");
+    PrintDecimal(opaque, "Available Data", (uint32_t)StoH(rrtip->available_data), PNL);
+    PrintHex(opaque, "Response to Service Action", rrtip->response_to_service_action, DNL);
+    switch (rrtip->response_to_service_action) {
+	case SCSI_RRTI_PT:
+	    Print(opaque, " (Populate Token)\n");
+	    break;
+	case SCSI_RRTI_WUT:
+	    Print(opaque, " (Write Using Token)\n");
+	    break;
+	default:
+	    Print(opaque, "\n");
+	    break;
+    }
+    PrintHex(opaque, "Copy Operation Status", rrtip->copy_operation_status, DNL);
+    copy_status_msg = RRTICopyStatus(rrtip->copy_operation_status);
+    Print(opaque, " (%s)\n", copy_status_msg);
+    PrintDecimal(opaque, "Operation Counter", (uint16_t)StoH(rrtip->operation_counter), PNL);
+    PrintDecimal(opaque, "Extimate Status Update Delay", (uint32_t)StoH(rrtip->estimated_status_update_delay), PNL);
+    PrintHex(opaque, "Extended Copy Completion Status", rrtip->extended_copy_completion_status, PNL);
+    PrintDecimal(opaque, "Sense Data Field Length", rrtip->sense_data_field_length, PNL);
+    PrintDecimal(opaque, "Sense Data Length", rrtip->sense_data_length, PNL);
+    PrintDecHex(opaque, "Transfer Count Units", rrtip->transfer_count_units,  PNL);
+    PrintLongDecHex(opaque, "Transfer Count", StoH(rrtip->transfer_count),  PNL);
+    PrintDecimal(opaque, "Segments Processed",  (uint16_t)StoH(rrtip->segments_processed), PNL);
+    //PrintLongHex(opaque, "Reserved (bytes 26 thru 31)", StoH(rrtip->reserved), PNL);
+    PrintAscii(opaque, "Reserved (bytes 26 thru 31)", "", DNL);
+    PrintFields(opaque, (uint8_t *)rrtip->reserved_byte_26_31, sizeof(rrtip->reserved_byte_26_31));
+    /*
+     * Display the sense data (if any).
+     */ 
+    if (rrtip->sense_data_length) {
+	scsi_sense_t *ssp;
+	PrintAscii(opaque, "Sense Data", "", DNL);
+	bp += sizeof(rrti_parameter_data_t);
+	PrintFields(opaque, (uint8_t *)bp, rrtip->sense_data_length);
+	ssp = (scsi_sense_t *)bp;
+	Printf(opaque, "\n");
+	Printf(opaque, "Copy Sense Data: (sense length %u bytes)\n", rrtip->sense_data_length);
+	Printf(opaque, "\n");
+	DumpSenseData(sgp, True, ssp);
+    }
+    return;
+}
+
+void
+DumpWUTData(scsi_generic_t *sgp)
+{
+    void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
+    scsi_device_t *sdp = opaque;
+    wut_parameter_list_t *wutp;
+    range_descriptor_t *rdp;
+    wut_parameter_list_runt_t *runtp;
+    unsigned char *bp = (unsigned char *)sgp->data_buffer;
+    uint16_t range_descriptor_length;
+    int descriptor, num_descriptors, range_descriptors_offset;
+
+    if (bp == NULL) return;
+    wutp = (wut_parameter_list_t *)bp;
+    if (sgp->data_length < sizeof(wut_parameter_list_t)) return;
+    
+    Printf(opaque, "\n");
+    Printf(opaque, "Write Using Token (WUT) Parameter Data:\n");
+    Printf(opaque, "\n");
+    PrintDecimal(opaque, "Data Length", (uint16_t)StoH(wutp->data_length), PNL);
+    PrintDecimal(opaque, "Immediate (bit 0)", wutp->immed, PNL);
+    PrintDecimal(opaque, "Delete Token (bit 1)", wutp->del_tkn, PNL);
+    PrintHex(opaque, "Reserved (byte 2, bits 2:7)", wutp->reserved_byte2_b2_7, PNL);
+    PrintAscii(opaque, "Reserved (bytes 3 thru 7)", "", DNL);
+    PrintFields(opaque, (uint8_t *)wutp->reserved_byte3_7, sizeof(wutp->reserved_byte3_7));
+    PrintLongDec(opaque, "Offset Into ROD", StoH(wutp->offset_into_rod), PNL);
+    
+    /* Next is the ROD token data (512 bytes). */
+    
+    if (sgp->data_length < (sizeof(wut_parameter_list_t) + ROD_TOKEN_LENGTH)) return;
+    PrintAscii(opaque, "ROD Token Data", "", DNL);
+    PrintHAFields(opaque, (bp + ROD_TOKEN_OFFSET), ROD_TOKEN_LENGTH);
+    
+    /* Next is the range descriptor list descriotor. */
+    runtp = (wut_parameter_list_runt_t *)(bp + ROD_TOKEN_OFFSET + ROD_TOKEN_LENGTH);
+    PrintAscii(opaque, "Reserved (bytes 528 thru 533)", "", DNL);
+    PrintFields(opaque, (uint8_t *)runtp->reserved, sizeof(runtp->reserved));
+    range_descriptor_length = (uint16_t)StoH(runtp->range_descriptor_list_length);
+    PrintDecimal(opaque, "Range Descriptor List Length", range_descriptor_length, PNL);
+
+    /* The block device range descriptors follows the parameter list. */
+
+    range_descriptors_offset = (ROD_TOKEN_OFFSET + ROD_TOKEN_LENGTH + sizeof(*runtp));
+    if (sgp->data_length < (unsigned)(range_descriptors_offset +  range_descriptor_length)) return;
+    num_descriptors = (range_descriptor_length / sizeof(range_descriptor_t));
+    rdp = (range_descriptor_t *)(bp + range_descriptors_offset);
+    
+    for (descriptor = 0; descriptor < num_descriptors; descriptor++, rdp++) {
+	DumpRangeDescriptor(sgp, rdp, descriptor, (unsigned int)((unsigned char *)rdp - bp));
+    }
+    return;
+}
+
+/* ================================================================================== */
 
 hbool_t
 isReadWriteRequest(scsi_generic_t *sgp)
