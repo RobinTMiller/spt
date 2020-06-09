@@ -1,0 +1,1 @@
+make -f ../Makefile VPATH=.. OS=aix CC=gcc LIBS="-lodm -lcfg" PORG="-O3 -maix64"

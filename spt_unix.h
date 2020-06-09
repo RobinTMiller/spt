@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2018			    *
+ *			  COPYRIGHT (c) 2006 - 2019			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -161,6 +161,11 @@ typedef off_t Offset_t;
 #define os_get_error()		errno
 #define os_get_error_msg(error)	strerror(error)
 #define os_free_error_msg(msg)	
+
+#if defined(_AIX) || defined(__hpux)
+/* Note: AIX 6.1 with gcc (GCC) 8.3.0 is missing this API! */
+#  define strcasestr    strstr          /* Note: This is NOT case-insensitive! Equiv API? */
+#endif /* defined(_AIX) || defined(__hpux) */
 
 #if !defined(SYSLOG)
 

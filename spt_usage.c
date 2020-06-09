@@ -281,9 +281,6 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\tshow devices dtypes=direct,enclosure vid=HGST\n");
     P (sdp, "\tshow edt devices=/dev/sdl,/dev/sdm\n");
     P (sdp, "\tshow edt exclude=/dev/sdl,/dev/sdm\n");
-#if defined(Nimble)
-    P (sdp, "\tshow devices show-fields='dtype,pid,vid,serial,fwver,swver,syncrep,paths'\n");
-#endif /* defined(Nimble) */
 
     P (sdp, "\n    Show Devices Format Control Strings:\n");
     P (sdp, "\t	           %%paths = The device paths.\n");
@@ -295,12 +292,6 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\t	          %%serial = The device serial number.\n");
     P (sdp, "\t	       %%device_id = The device identification. (or %%wwn)\n");
     P (sdp, "\t	     %%target_port = The device target port. (or %%tport)\n");
-#if defined(Nimble)
-
-    P (sdp, "\t	      %%sw_version = The array software version. (or %%swver)\n");
-    P (sdp, "\t	     %%target_type = The target type. (or %%ttype)\n");
-    P (sdp, "\t	%%sync_replication = The synchronous replication. (or %%syncrep)\n");
-#endif /* defined(Nimble) */
     P (sdp, "\n    Example:\n");
     P (sdp, "\tshow devices sfmt='Device Type: %%dtype, Paths: %%path'\n");
 
@@ -537,10 +528,15 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\t    %%date   = The date string.        %%et     = The elapsed time.\n");
     P (sdp, "\t    %%tod    = The time of day.        %%etod   = Elapsed time of day.\n");
     P (sdp, "\t    %%secs   = Seconds since start.    %%seq    = The sequence number.\n");
+    P (sdp, "\t    %%month  = The month of the year.  %%day    = The day of the month.\n");
+    P (sdp, "\t    %%year   = The four digit year.    %%hour   = The hour of the day.\n");
+    P (sdp, "\t    %%minutes= The minutes of hour.    %%seconds= The seconds of minute.\n");
     P (sdp, "\t    %%tmpdir = The temporary directory.\n");
     P (sdp, "\n");
-    P (sdp, "      Examples: log='spt_%%host-j%%jobt%%thread.log'\n");
-    P (sdp, "                logprefix='%%et %%prog (j:%%job t:%%thread): '\n");
+    P (sdp, "\t    String 'gtod' = \"%%tod (%%etod) %%prog (j:%%job t:%%thread): \"\n");
+    P (sdp, "\n");
+    P (sdp, "      Examples: log=spt_%%host-j%%jobt%%thread.log\n");
+    P (sdp, "                logprefix=\"%%seq %%ymd %%hms %%et %%prog (j:%%job t:%%thread): \"\n");
 
     P (sdp, "\n    Time Input:\n");
     P (sdp, "\t    d = days (%d seconds),      h = hours (%d seconds)\n",

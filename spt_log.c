@@ -286,6 +286,9 @@ log_sense_decode(void *arg)
     log_parameter_header_t *phdr = &log_page->log_phdr;
     int status = SUCCESS;
 
+    /* 
+     * Request Inquiry for Device Type and Vendor/Product ID's.
+     */
     if (iop->first_time) {
 	status = get_inquiry_information(sdp, iop, sgp);
 	if (status == FAILURE) return(status);

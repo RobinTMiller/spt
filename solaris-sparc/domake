@@ -1,0 +1,2 @@
+# Non-debug optimized version!
+make -f ../Makefile VPATH=.. OS=solaris CC=gcc

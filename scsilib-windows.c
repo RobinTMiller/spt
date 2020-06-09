@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2019			    *
+ *			  COPYRIGHT (c) 2006 - 2020			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -32,6 +32,10 @@
  *
  * Modification History:
  *
+ * May 28th, 2020 by Robin T. Miller
+ *      Add "The requested resource is in use." (ERROR_BUSY) as retriable
+ * error, since this is being returned during path failovers due to faults.
+ * 
  * June 19th, 2019 by Robin T. Miller
  *      Add os_find_scsi_devices() to lookup SCSI devices.
  * 
@@ -712,6 +716,20 @@ os_is_retriable(scsi_generic_t *sgp)
 	//
 	if (sgp->debug == True) {
 	    Printf(opaque, "DEBUG: ERROR_DEV_NOT_EXIST detected on %s...\n", sgp->cdb_name);
+	}
+	is_retriable = True;
+    } else if (sgp->os_error == ERROR_BUSY) {
+	//
+	// MessageId: ERROR_BUSY
+	//
+	// MessageText:
+	//
+	// The requested resource is in use.
+	//
+	// #define ERROR_BUSY                       170L    // dderror
+        //
+	if (sgp->debug == True) {
+	    Printf(opaque, "DEBUG: ERROR_BUSY detected on %s...\n", sgp->cdb_name);
 	}
 	is_retriable = True;
     } else if (sgp->os_error == ERROR_IO_DEVICE) {

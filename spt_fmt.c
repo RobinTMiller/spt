@@ -32,6 +32,10 @@
  *
  * Modification History:
  *
+ * May 15th, 2020 by Robin T. MIller
+ *      Add format strings for individual date and time fields for more
+ * flexible formatting and add support for date/time field separators.
+ * 
  * March 16th, 2018 by Robin T. Miller
  *      When unpacking data, allow index to be of any radix, thereby
  * allowing the default decimal along with 0x prefix for values.
@@ -876,6 +880,18 @@ get_total_operations(scsi_device_t *sdp, time_t *secs)
     return(total_operations);
 }
 
+/* This macro is specific to the next funtion only! */
+#define GetDateTime()				\
+    if (now == (time_t) 0) {			\
+	(void)time(&now);			\
+	if ( tmp && localtime_r(&now, tmp) ) {	\
+	    tmp->tm_year += 1900;		\
+	    tmp->tm_mon++;			\
+	} else {				\
+	    tmp = NULL;				\
+	}					\
+    }
+ 
 /*
  * FmtString() - Format a String Based on Control Strings.
  *
@@ -895,7 +911,15 @@ get_total_operations(scsi_device_t *sdp, time_t *secs)
  *	%host = The host name.
  * 	%job = The job ID.
  * 	%ymd = The year, month, day.
- * 	%hms = The hour, minute, second.
+ *      %hms = The hour, minute, second.
+ *      %year = The year.
+ *      %month = The month.
+ *      %daye = The day.
+ *      %hms = The hour, minute, second.
+ *      %hour = The hour.
+ *      %minute = The minute.
+ *      %second = The second.
+ *      %nos = The Nimble OS date/time.
  *	%secs = Seconds since start.
  * 	%seq = The sequence number.
  * 	%src = The source devices.
@@ -925,6 +949,9 @@ FmtString(scsi_device_t *sdp, char *format, hbool_t filepath_flag)
     char	*to = buffer;
     int		length = (int)strlen(format);
     int		ifs = DIRSEP;
+    struct tm	time_data;
+    struct tm	*tmp = &time_data;
+    time_t	now = 0;
 
     *to = '\0';
     while (length--) {
@@ -1038,35 +1065,97 @@ FmtString(scsi_device_t *sdp, char *format, hbool_t filepath_flag)
 		length -= 3;
 		from += 4;
 		continue;
+	    } else if (strncasecmp(key, "nos", 3) == 0) {
+		GetDateTime()
+		if (tmp) {
+		    /* Format: yyyy-mm-dd,hh:mm:ss */
+		    /* Example: 2020-05-11,14:55:01 */
+		    to += sprintf(to, "%04d-%02d-%02d,%02d:%02d:%02d",
+				  tmp->tm_year, tmp->tm_mon, tmp->tm_mday,
+				  tmp->tm_hour, tmp->tm_min, tmp->tm_sec);
+		}
+		length -= 3;
+		from += 4;
+		continue;
 	    } else if (strncasecmp(key, "ymd", 3) == 0) {
-		struct tm time_data;
-		struct tm *tmp = &time_data;
-		time_t now;
-		(void)time(&now);
-		if ( localtime_r(&now, tmp) ) {
-		    tmp->tm_year += 1900;
-		    tmp->tm_mon++;
+		GetDateTime()
+		if (tmp) {
+		    char *fs;
 		    /* Format: yyyymmdd */
-		    to += sprintf(to, "%04d%02d%02d",
-				  tmp->tm_year, tmp->tm_mon, tmp->tm_mday);
+		    if (fs = sdp->date_sep) {
+			to += sprintf(to, "%04d%s%02d%s%02d",
+				      tmp->tm_year, fs, tmp->tm_mon, fs, tmp->tm_mday);
+		    } else {
+			to += sprintf(to, "%04d%02d%02d",
+				      tmp->tm_year, tmp->tm_mon, tmp->tm_mday);
+		    }
+		}
+		length -= 3;
+		from += 4;
+		continue;
+	    } else if (strncasecmp(key, "year", 4) == 0) {
+		GetDateTime()
+		if (tmp) {
+		    to += sprintf(to, "%02d", tmp->tm_year);
+		}
+		length -= 4;
+		from += 5;
+		continue;
+	    } else if (strncasecmp(key, "month", 5) == 0) {
+		GetDateTime()
+		if (tmp) {
+		    to += sprintf(to, "%02d", tmp->tm_mon);
+		}
+		length -= 5;
+		from += 6;
+		continue;
+	    } else if (strncasecmp(key, "day", 3) == 0) {
+		GetDateTime()
+		if (tmp) {
+		    to += sprintf(to, "%02d", tmp->tm_mday);
 		}
 		length -= 3;
 		from += 4;
 		continue;
 	    } else if (strncasecmp(key, "hms", 3) == 0) {
-		struct tm time_data;
-		struct tm *tmp = &time_data;
-		time_t now;
-		(void)time(&now);
-		if ( localtime_r(&now, tmp) ) {
-		    tmp->tm_year += 1900;
-		    tmp->tm_mon++;
+		GetDateTime()
+		if (tmp) {
+        	    char *fs;
 		    /* Format: hhmmss */
-		    to += sprintf(to, "%02d%02d%02d",
-				  tmp->tm_hour, tmp->tm_min, tmp->tm_sec);
+		    if (fs = sdp->time_sep) {
+			to += sprintf(to, "%02d%s%02d%s%02d",
+				      tmp->tm_hour, fs, tmp->tm_min, fs, tmp->tm_sec);
+		    } else {
+			to += sprintf(to, "%02d%02d%02d",
+				      tmp->tm_hour, tmp->tm_min, tmp->tm_sec);
+		    }
 		}
 		length -= 3;
 		from += 4;
+		continue;
+	    } else if (strncasecmp(key, "hour", 4) == 0) {
+		GetDateTime()
+		if (tmp) {
+		    to += sprintf(to, "%02d", tmp->tm_hour);
+		}
+		length -= 4;
+		from += 5;
+		continue;
+	    } else if (strncasecmp(key, "minute", 6) == 0) {
+		GetDateTime()
+		if (tmp) {
+		    to += sprintf(to, "%02d", tmp->tm_min);
+		}
+		length -= 6;
+		from += 7;
+		continue;
+	    } else if (strncasecmp(key, "second", 6) == 0) {
+		GetDateTime()
+		if (tmp) {
+		    to += sprintf(to, "%02d", tmp->tm_sec);
+		}
+		length -= 6;
+		from += 7;
 		continue;
 	    } else if (strncasecmp(key, "level", 5) == 0) {
 		to += Sprintf(to, "%d", sdp->log_level);

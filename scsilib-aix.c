@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2018			    *
+ *			  COPYRIGHT (c) 2006 - 2020			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -32,6 +32,9 @@
  *
  * Modification History:
  *
+ * May 22nd, 2020 by Robin T. Miller
+ *      Updates to resolve 64-bit compilation warnings.
+ * 
  * August 26th, 2010 by Robin T. Miller
  * 	When opening device, on EROFS errno, try opening read-only.
  * 
@@ -892,7 +895,7 @@ GetLunInfo(scsi_generic_t *sgp, lun_info_t *lunip)
         sprintf(criteria, "name='%s' AND path_id=%u",
                 hdisk, sgp->scsi_addr.scsi_path);
         cupathp = odm_get_obj(CuPath_CLASS, criteria, &cupath, ODM_FIRST);
-        if ((int)cupathp == -1) {
+        if (cupathp == (struct CuPath *) -1) {
             return ( ReportOdmError(criteria) );
         } else if (cupathp == NULL) {
             Fprintf(opaque, "Didn't find path_id attribute for '%s'!\n", hdisk);
@@ -901,7 +904,7 @@ GetLunInfo(scsi_generic_t *sgp, lun_info_t *lunip)
         lunip->parent = strdup(cupathp->parent);  /* Caller must free! */
     } else {
         cudvp = odm_get_obj(CuDv_CLASS, criteria, &cudv, ODM_FIRST);
-        if ((int)cudvp == -1) {
+        if (cudvp == (struct CuDv *) -1) {
             return ( ReportOdmError(criteria) );
         } else if (cudvp == NULL) {
             Fprintf(opaque, "Didn't find criteria for '%s'!\n", hdisk);
@@ -969,7 +972,7 @@ GetFscsiInfo(scsi_generic_t *sgp, lun_info_t *lunip, char *hdisk)
     if (sgp->scsi_addr.scsi_path < 0) {
         sprintf(criteria, "name='%s' AND attribute='scsi_id'", hdisk);
         cuatp = odm_get_obj(CuAt_CLASS, criteria, &cuat, ODM_FIRST);
-        if ((int)cuatp == -1) {
+        if (cuatp == (struct CuAt *) -1) {
             return ( ReportOdmError(criteria) );
         } else if (cuatp == NULL) {
             Fprintf(opaque, "Didn't find scsi_id attribute for '%s'!\n", hdisk);
@@ -982,7 +985,7 @@ GetFscsiInfo(scsi_generic_t *sgp, lun_info_t *lunip, char *hdisk)
         sprintf(criteria, "name='%s' AND path_id=%u AND attribute='scsi_id'",
                 hdisk, sgp->scsi_addr.scsi_path);
         cupathatp = odm_get_obj(CuPathAt_CLASS, criteria, &cupathat, ODM_FIRST);
-        if ((int)cupathatp == -1) {
+        if (cupathatp == (struct CuPathAt *) -1) {
             return ( ReportOdmError(criteria) );
         } else if (cupathatp == NULL) {
             Fprintf(opaque, "Didn't find scsi_id or path_id attribute for '%s'!\n", hdisk);
@@ -993,7 +996,7 @@ GetFscsiInfo(scsi_generic_t *sgp, lun_info_t *lunip, char *hdisk)
 
     sprintf(criteria, "name='%s' AND attribute='lun_id'", hdisk);
     cuatp = odm_get_obj(CuAt_CLASS, criteria, &cuat, ODM_FIRST);
-    if ((int)cuatp == -1) {
+    if (cuatp == (struct CuAt *) -1) {
         return ( ReportOdmError(criteria) );
     } else if (cuatp == NULL) {
         Fprintf(opaque, "Didn't find lun_id attribute for '%s'!\n", hdisk);
@@ -1031,7 +1034,7 @@ GetIscsiInfo(scsi_generic_t *sgp, lun_info_t *lunip, char *hdisk)
 
     sprintf(criteria, "name='%s' AND attribute='target_name'", hdisk);
     cuatp = odm_get_obj(CuAt_CLASS, criteria, &cuat, ODM_FIRST);
-    if ((int)cuatp == -1) {
+    if (cuatp == (struct CuAt *) -1) {
         return ( ReportOdmError(criteria) );
     } else if (cuatp == NULL) {
         Fprintf(opaque, "Didn't find target_name attribute for '%s'!\n", hdisk);
@@ -1041,7 +1044,7 @@ GetIscsiInfo(scsi_generic_t *sgp, lun_info_t *lunip, char *hdisk)
 
     sprintf(criteria, "name='%s' AND attribute='host_addr'", hdisk);
     cuatp = odm_get_obj(CuAt_CLASS, criteria, &cuat, ODM_FIRST);
-    if ((int)cuatp == -1) {
+    if (cuatp == (struct CuAt *) -1) {
         return ( ReportOdmError(criteria) );
     } else if (cuatp == NULL) {
         Fprintf(opaque, "Didn't find host_addr attribute for '%s'!\n", hdisk);
@@ -1053,7 +1056,7 @@ GetIscsiInfo(scsi_generic_t *sgp, lun_info_t *lunip, char *hdisk)
 
     sprintf(criteria, "name='%s' AND attribute='port_num'", hdisk);
     cuatp = odm_get_obj(CuAt_CLASS, criteria, &cuat, ODM_FIRST);
-    if ((int)cuatp == -1) {
+    if (cuatp == (struct CuAt *) -1) {
         return ( ReportOdmError(criteria) );
     } else if (cuatp == NULL) {
         Fprintf(opaque, "Didn't find port_num attribute for '%s'!\n", hdisk);
@@ -1063,7 +1066,7 @@ GetIscsiInfo(scsi_generic_t *sgp, lun_info_t *lunip, char *hdisk)
 
     sprintf(criteria, "name='%s' AND attribute='lun_id'", hdisk);
     cuatp = odm_get_obj(CuAt_CLASS, criteria, &cuat, ODM_FIRST);
-    if ((int)cuatp == -1) {
+    if (cuatp == (struct CuAt *) -1) {
         return ( ReportOdmError(criteria) );
     } else if (cuatp == NULL) {
         Fprintf(opaque, "Didn't find lun_id attribute for '%s'!\n", hdisk);

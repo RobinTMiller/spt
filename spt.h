@@ -217,6 +217,8 @@ typedef enum thread_state {TS_NotQueued, TS_Queued} tstate_t;
 #define DEFAULT_FILE_POSTFIX	"j%jobt%thread"
 #define DEFAULT_JOBLOG_POSTFIX	"Job%job"
 
+#define DEFAULT_GTOD_LOG_PREFIX		"%tod (%etod) %prog (j:%job t:%thread): " 
+
 #if !defined(MAXHOSTNAMELEN)
 #   define MAXHOSTNAMELEN	256
 #endif
@@ -569,6 +571,8 @@ typedef struct scsi_device {
     char	dir_sep;		/* The directory separator.	*/
     char	*file_sep;		/* The inter-file separator.	*/
     char	*file_postfix;		/* The file name postfix.	*/
+    char        *date_sep;              /* The date field separator.    */
+    char        *time_sep;              /* The time field separator.    */
 
     /*
      * Pack and Unpack Information:

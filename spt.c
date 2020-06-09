@@ -32,6 +32,10 @@
  *
  * Modification History:
  * 
+ * May 15th, 2020 by Robin T. Miller
+ *      Add options for date and time field separator used when formatting
+ * the log prefix format strings (e.g. "%ymd", "%hms").
+ * 
  * April 26th, 2019 by Robin T. Miller
  *      Switch from strtok() to reentrant version strtok_r() to avoid issues
  * when multiple functions invoke this API and to be thread safe (libspt.so).
@@ -2922,6 +2926,16 @@ dloop:
 	    }
 	    continue;
 	}
+	if (match (&string, "datesep=")) {
+	    if (sdp->date_sep) free(sdp->date_sep);
+	    sdp->date_sep = strdup(string);
+	    continue;
+	}
+	if (match (&string, "timesep=")) {
+	    if (sdp->time_sep) free(sdp->time_sep);
+	    sdp->time_sep = strdup(string);
+	    continue;
+	}
 	if (match (&string, "dfmt=")) {
 	    if (match(&string, "byte")) {
 		sdp->data_format = BYTE_FMT;
@@ -3684,7 +3698,11 @@ dloop:
 	}
 	if (match (&string, "logprefix=")) {
 	    if (sdp->log_prefix) Free(sdp, sdp->log_prefix);
-	    sdp->log_prefix = strdup(string);
+	    if (match(&string, "gtod")) { /* Short hand! */
+		sdp->log_prefix = strdup(DEFAULT_GTOD_LOG_PREFIX);
+	    } else {
+		sdp->log_prefix = strdup(string);
+	    }
 	    continue;
 	}
 	if (match (&string, "lba=")) {
