@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2019			    *
+ *			  COPYRIGHT (c) 2006 - 2021			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -31,7 +31,17 @@
  *	Functions and tables to decode SCSI data.
  *
  * Modification History:
- *
+ * 
+ * December 12th, 2020 by Robin T. Miller
+ *      Added functions to decode segment and target descriptor types.
+ * 
+ * November 28th, 2020 by Robin T. Miller
+ *      Update XCOPY (LID1) descriptor to display List ID Usage.
+ * 
+ * November 16th, 2020 by Robin T. Miller
+ *      When dumping PopulateToken (PT) and Write Using Token (WUT) data,
+ * report the list identifier. We need the list ID to correlate errors.
+ * 
  * June 27th, 2018 by Robin T. Miller
  *      Added decoding of ATA Status Return descriptor.
  * 
@@ -39,7 +49,7 @@
  *      Added decoding of format in progress sense specific data.
  * 
  * October 19th, 2017 by Robin T. Miller
- *      Add additinal asc/ascq entries for asc 0x21 (0x4 thru 0x7 are new).
+ *      Add additional asc/ascq entries for asc 0x21 (0x4 thru 0x7 are new).
  * 
  * April 28th, 2014 by Robin T. Miller
  * 	Fix recursive call to DumpSenseData(), which requires the SCSI generic
@@ -101,7 +111,7 @@ parse_show_scsi_args(scsi_device_t *sdp, char **argv, int argc, int *arg_index)
 	    uint16_t ascq;
 	    uint8_t asc, asq;
 	    char *ascq_msg;
-	    ascq = (uint16_t)number(sdp, string, HEX_RADIX);
+	    ascq = (uint16_t)number(sdp, string, HEX_RADIX, &status, False);
 	    asc = (uint8_t)(ascq >> 8);
 	    asq = (uint8_t)ascq;
 	    ascq_msg = ScsiAscqMsg(asc, asq);
@@ -117,7 +127,7 @@ parse_show_scsi_args(scsi_device_t *sdp, char **argv, int argc, int *arg_index)
 	if ( match(&string, "key=") ) {
 	    char *skey_msg;
 	    uint8_t sense_key;
-	    sense_key = (uint8_t)number(sdp, string, HEX_RADIX);
+	    sense_key = (uint8_t)number(sdp, string, HEX_RADIX, &status, False);
 	    skey_msg = SenseKeyMsg(sense_key);
 	    Print(sdp, "Sense Key = %#x = %s\n", sense_key, skey_msg);
 	    continue;
@@ -125,7 +135,7 @@ parse_show_scsi_args(scsi_device_t *sdp, char **argv, int argc, int *arg_index)
 	if ( match(&string, "status=") ) {
 	    char *scsi_status_msg;
 	    uint8_t scsi_status;
-	    scsi_status = (uint32_t)number(sdp, string, HEX_RADIX);
+	    scsi_status = (uint32_t)number(sdp, string, HEX_RADIX, &status, False);
 	    scsi_status_msg = ScsiStatus(scsi_status);
 	    Print(sdp, "SCSI Status = %#x = %s\n", scsi_status, scsi_status_msg);
 	    continue;
@@ -1275,7 +1285,6 @@ DumpSenseData(scsi_generic_t *sgp, hbool_t recursive, scsi_sense_t *ssp)
 	}
 	Printf(opaque, "\n");
 	DumpXcopyData(sgp);
-#if 0
     } else if ( (recursive == False) &&
 		((sgp->cdb[0] == SOPC_EXTENDED_COPY && (sgp->cdb[1] == SCSI_XCOPY_POPULATE_TOKEN))) ) {
 	Printf(opaque, "\n");
@@ -1284,7 +1293,10 @@ DumpSenseData(scsi_generic_t *sgp, hbool_t recursive, scsi_sense_t *ssp)
 		((sgp->cdb[0] == SOPC_EXTENDED_COPY && (sgp->cdb[1] == SCSI_XCOPY_WRITE_USING_TOKEN))) ) {
 	Printf(opaque, "\n");
 	DumpWUTData(sgp);
-#endif /* 0 */
+    } else if ( (recursive == False) &&
+		((sgp->cdb[0] == SOPC_RECEIVE_ROD_TOKEN_INFO && (sgp->cdb[1] == RECEIVE_ROD_TOKEN_INFORMATION))) ) {
+	Printf(opaque, "\n");
+	DumpRRTIData(sgp);
     } else {
 	DumpCdbData(sgp);
     }
@@ -1614,9 +1626,8 @@ DumpParameterListDescriptor(scsi_generic_t *sgp, xcopy_lid1_parameter_list_t *pa
     Printf(opaque, "Parameter List Descriptor: (offset: %u, length: %d)\n", offset, sizeof(*paramp));
     Printf(opaque, "\n");
     PrintHex(opaque, "List Identifier", paramp->list_identifier, PNL);
-    PrintNumeric(opaque, "Priority", paramp->priority,  PNL);
-    PrintNumeric(opaque, "No List Identifier (nlid)", paramp->nlid,  PNL);
-    PrintNumeric(opaque, "No Receive Copy Results (nrcr)", paramp->nrcr,  PNL);
+    PrintNumeric(opaque, "Priority", paramp->priority, PNL);
+    PrintNumeric(opaque, "List ID Usage", paramp->listid_usage, PNL);
     PrintNumeric(opaque, "Sequential Striped (str)", paramp->str,  PNL);
     PrintNumeric(opaque, "Reserved (bits 6:7)", paramp->reserved_6_7,  PNL);
     PrintDecHex(opaque, "Target Descriptor List Length", (uint32_t)StoH(paramp->cscd_desc_list_length), PNL);
@@ -1646,15 +1657,15 @@ DumpTargetDescriptor(scsi_generic_t *sgp, xcopy_id_cscd_ident_desc_t *tgtdp, int
     PrintHex(opaque, "Reserved (byte 6)", tgtdp->reserved_byte6, PNL);
     PrintDecHex(opaque, "Designator Length", tgtdp->designator_length, PNL);
     buffer = bp = Malloc(opaque, sizeof(tgtdp->designator) * 4);
-    for (i = 0; i < (int)sizeof(tgtdp->designator); i++) {
+    for (i = 0; i < (int)tgtdp->designator_length; i++) {
 	bp += sprintf(bp, "%02x ", tgtdp->designator[i]);
     }
-    PrintAscii(opaque, "Designator",  buffer, PNL);
+    PrintAscii(opaque, "Designator", buffer, PNL);
     free(buffer);
     //PrintAscii(opaque, "Reserved (bytes 24 thru 27)", "", DNL);
     //PrintFields(opaque, (uint8_t *)tgtdp->reserved_24_27, sizeof(tgtdp->reserved_24_27));
     PrintDec(opaque, "Device Type Specific Length", sizeof(tgtdp->type_spec_params), PNL);
-    PrintHex(opaque, "byte1", tgtdp->type_spec_params.byte1, PNL);
+    PrintBoolean(opaque, False, "PAD", tgtdp->type_spec_params.pad, PNL);
     PrintDecHex(opaque, "Disk Block Length", (uint32_t)StoH(tgtdp->type_spec_params.disk_block_length), PNL);
     return;
 }
@@ -1682,7 +1693,8 @@ DumpSegmentDescriptor(scsi_generic_t *sgp, xcopy_b2b_seg_desc_t *segdp, int segm
     Printf(opaque, "Segment Descriptor %u: (offset: %u, length: %d)\n", segment_number, offset, sizeof(*segdp));
     Printf(opaque, "\n");
     PrintHex(opaque, "Descriptor Type Code", segdp->desc_type_code, PNL);
-    PrintHex(opaque, "Reserved Byte1",  segdp->reserved_byte1, PNL);
+    PrintBoolean(opaque, False, "CAT",  segdp->cat, PNL);
+    PrintBoolean(opaque, False, "Destination Count (DC)",  segdp->dc, PNL);
     PrintDecHex(opaque, "Descriptor Length",  (uint32_t)StoH(segdp->desc_length), PNL);
     PrintDecimal(opaque, "Source Descriptor Index", src_index, DNL);
     if (src_dsf) {
@@ -1719,7 +1731,7 @@ DumpRangeDescriptor(scsi_generic_t *sgp, range_descriptor_t *rdp, int descriptor
     Printf(opaque, "\n");
     Printf(opaque, "Block Range Descriptor %u: (offset: %u, length: %d)\n", descriptor_number, offset, sizeof(*rdp));
     Printf(opaque, "\n");
-    blocks = (uint16_t)StoH(rdp->length);
+    blocks = (uint32_t)StoH(rdp->length);
     PrintDecHex(opaque, "Number of Blocks", blocks, PNL);
     starting_lba = StoH(rdp->lba);
     PrintLongDecHex(opaque, "Source Block Device LBA", starting_lba, DNL);
@@ -1733,21 +1745,24 @@ void
 DumpPTData(scsi_generic_t *sgp)
 {
     void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
+    populate_token_cdb_t *cdb = (populate_token_cdb_t *)sgp->cdb;
     scsi_device_t *sdp = opaque;
     populate_token_parameter_list_t *ptp;
     range_descriptor_t *rdp;
     unsigned char *bp = (unsigned char *)sgp->data_buffer;
     uint16_t range_descriptor_length;
     int descriptor, num_descriptors;
+    unsigned int listid = (uint32_t)StoH(cdb->list_identifier);
 
     if (bp == NULL) return;
 
     ptp = (populate_token_parameter_list_t *)bp;
     if (sgp->data_length < sizeof(populate_token_parameter_list_t)) return;
-    
+
     Printf(opaque, "\n");
     Printf(opaque, "Populate Token (PT) Parameter Data:\n");
     Printf(opaque, "\n");
+    PrintDecHex(opaque, "List Identifier", listid, PNL);
     PrintDecimal(opaque, "Data Length", (uint16_t)StoH(ptp->data_length), PNL);
     PrintDecimal(opaque, "Immediate (bit 0)", ptp->immed, PNL);
     PrintDecimal(opaque, "ROD Type Valid (bit 1)", ptp->rtv, PNL);
@@ -1802,11 +1817,13 @@ RRTICopyStatus(unsigned char copy_status)
 void
 DumpRRTIData(scsi_generic_t *sgp)
 {
+    receive_copy_results_cdb_t *cdb = (receive_copy_results_cdb_t *)sgp->cdb;
     void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
     scsi_device_t *sdp = opaque;
     rrti_parameter_data_t *rrtip;
     unsigned char *bp = (unsigned char *)sgp->data_buffer;
     char *copy_status_msg;
+    unsigned int listid = (uint32_t)StoH(cdb->list_identifier);
 
     if (bp == NULL) return;
     if (sgp->data_length < sizeof(rrti_parameter_data_t)) return;
@@ -1816,6 +1833,7 @@ DumpRRTIData(scsi_generic_t *sgp)
     Printf(opaque, "\n");
     Printf(opaque, "Receive ROD Token Information (RRTI) Data:\n");
     Printf(opaque, "\n");
+    PrintDecHex(opaque, "List Identifier", listid, PNL);
     PrintDecimal(opaque, "Available Data", (uint32_t)StoH(rrtip->available_data), PNL);
     PrintHex(opaque, "Response to Service Action", rrtip->response_to_service_action, DNL);
     switch (rrtip->response_to_service_action) {
@@ -1833,7 +1851,7 @@ DumpRRTIData(scsi_generic_t *sgp)
     copy_status_msg = RRTICopyStatus(rrtip->copy_operation_status);
     Print(opaque, " (%s)\n", copy_status_msg);
     PrintDecimal(opaque, "Operation Counter", (uint16_t)StoH(rrtip->operation_counter), PNL);
-    PrintDecimal(opaque, "Extimate Status Update Delay", (uint32_t)StoH(rrtip->estimated_status_update_delay), PNL);
+    PrintDecimal(opaque, "Estimated Status Update Delay", (uint32_t)StoH(rrtip->estimated_status_update_delay), PNL);
     PrintHex(opaque, "Extended Copy Completion Status", rrtip->extended_copy_completion_status, PNL);
     PrintDecimal(opaque, "Sense Data Field Length", rrtip->sense_data_field_length, PNL);
     PrintDecimal(opaque, "Sense Data Length", rrtip->sense_data_length, PNL);
@@ -1864,6 +1882,7 @@ void
 DumpWUTData(scsi_generic_t *sgp)
 {
     void *opaque = (sgp->tsp) ? sgp->tsp->opaque : NULL;
+    write_using_token_cdb_t *cdb = (write_using_token_cdb_t *)sgp->cdb;
     scsi_device_t *sdp = opaque;
     wut_parameter_list_t *wutp;
     range_descriptor_t *rdp;
@@ -1871,6 +1890,7 @@ DumpWUTData(scsi_generic_t *sgp)
     unsigned char *bp = (unsigned char *)sgp->data_buffer;
     uint16_t range_descriptor_length;
     int descriptor, num_descriptors, range_descriptors_offset;
+    unsigned int listid = (uint32_t)StoH(cdb->list_identifier);
 
     if (bp == NULL) return;
     wutp = (wut_parameter_list_t *)bp;
@@ -1879,6 +1899,7 @@ DumpWUTData(scsi_generic_t *sgp)
     Printf(opaque, "\n");
     Printf(opaque, "Write Using Token (WUT) Parameter Data:\n");
     Printf(opaque, "\n");
+    PrintDecHex(opaque, "List Identifier", listid, PNL);
     PrintDecimal(opaque, "Data Length", (uint16_t)StoH(wutp->data_length), PNL);
     PrintDecimal(opaque, "Immediate (bit 0)", wutp->immed, PNL);
     PrintDecimal(opaque, "Delete Token (bit 1)", wutp->del_tkn, PNL);
@@ -2004,4 +2025,140 @@ GenerateSptCmd(scsi_generic_t *sgp)
     Printf(opaque, "# dsf=%s\n", (sgp->adsf) ? sgp->adsf : sgp->dsf);
     Printf(opaque, "%s", buffer);
     return;
+}
+
+/* ================================================================================== */
+/*
+ * Functions to Decode Segment and Target Descriptor Types:
+ */
+
+typedef struct segment_type_entry {
+    int	segment_descriptor_type;
+    char *segment_description;
+} segment_type_entry_t;
+
+segment_type_entry_t segment_type_table[] = {
+    { SEGMENT_DESC_TYPE_COPY_BLOCK_TO_STREAM,
+	"Copy from block device to stream device"	},
+    { SEGMENT_DESC_TYPE_COPY_STREAM_TO_BLOCK,
+	"Copy from stream device to block device"	},
+    { SEGMENT_DESC_TYPE_COPY_BLOCK_TO_BLOCK,
+	"Copy from block device to block device"	},
+    { SEGMENT_DESC_TYPE_COPY_STREAM_TO_STREAM,
+	"Copy from stream device to stream device"	},
+    { SEGMENT_DESC_TYPE_COPY_INLINE_DATA_TO_STREAM,
+	"Copy inline data to stream device"		},
+    { SEGMENT_DESC_TYPE_COPY_EMBEDDED_TO_STREAM,
+	"Copy embedded data to stream device"		},
+    { SEGMENT_DESC_TYPE_READ_STREAM_DISCARD,
+	"Read from stream device and discard"		},
+    { SEGMENT_DESC_TYPE_VERIFY_CSCD,
+	"Verify CSCD"					},
+    { SEGMENT_DESC_TYPE_COPY_BLOCK_OFFSET_TO_STREAM,
+	"Copy block device with offset to stream device" },
+    { SEGMENT_DESC_TYPE_COPY_STREAM_TO_BLOCK_OFFSET,
+	"Copy stream device to block device with offset" },
+    { SEGMENT_DESC_TYPE_COPY_BLOCK_OFFSET_TO_BLOCK_OFFSET,
+	"Copy block device with offset to block device with offset" },
+    { SEGMENT_DESC_TYPE_COPY_BLOCK_TO_STREAM_HOLD_COPY,
+	"Copy from block device to stream device and hold a copy of processed data for the application client" },
+    { SEGMENT_DESC_TYPE_COPY_STREAM_TO_BLOCK_HOLD_COPY,
+	"Copy from stream device to block device and hold a copy of processed data for the application client" },
+    { SEGMENT_DESC_TYPE_COPY_BLOCK_TO_BLOCK_HOLD_COPY,
+	"Copy from block device to block device and hold a copy of processed data for the application client" },
+    { SEGMENT_DESC_TYPE_COPY_STREAM_TO_STREAM_HOLD_COPY,
+	"Copy from stream device to stream device and hold a copy of processed data for the application client" },
+    { SEGMENT_DESC_TYPE_READ_STREAM_HOLD_COPY,
+	"Read from stream device and hold a copy of processed data for the application client." },
+    { SEGMENT_DESC_TYPE_WRITE_FM_TO_SEQUENTIAL,
+	"Write filemarks to sequential-access device"	},
+    { SEGMENT_DESC_TYPE_SPACE_RECORDS_ON_SEQUENTIAL,
+	"Space records or filemarks on sequential-access" },
+    { SEGMENT_DESC_TYPE_LOCATE_ON_SEQUENTIAL,
+	"Locate on sequential-access device"		},
+    { SEGMENT_DESC_TYPE_TAPE_IMAGE_COPY,
+	"Tape device image copy"			},
+    { SEGMENT_DESC_TYPE_REGISTER_PERSISTEMT_RESERVATION_KEY,
+	"Register persistent reservation key"		},
+    { SEGMENT_DESC_TYPE_THIRD_PARTY_PR_SOURCE_I_T_NEXUS,
+	"Third party persistent reservations source I_T nexus" },
+    { SEGMENT_DESC_TYPE_BLOCK_IMAGE_COPY,
+	"Block device image copy"			},
+    { SEGMENT_DESC_TYPE_POPULATE_ROD_FROM_BLOCK_RANGES,
+	"Populate ROD from one or more block ranges ROD" },
+    { SEGMENT_DESC_TYPE_POPULATE_ROD_FROM_ONE_BLOCK_RANGE,
+	"Populate ROD from one block range ROD"		}
+};
+static int segment_type_tableEntrys = sizeof(segment_type_table) / sizeof(segment_type_table[0]);
+
+char *
+FindSegmentTypeMsg(uint8_t segment_descriptor_type)
+{
+    segment_type_entry_t *stp = segment_type_table;
+    int entrys;
+
+    for (entrys = 0; entrys < segment_type_tableEntrys; stp++, entrys++) {
+	if (stp->segment_descriptor_type == segment_descriptor_type) {
+	    return (stp->segment_description);
+	}
+    }
+    if ( (segment_descriptor_type >= SEGMENT_DESC_TYPE_RESERVED_START) ||
+	 (segment_descriptor_type <= SEGMENT_DESC_TYPE_RESERVED_END) ) {
+	return("<reserved>");
+    } else {
+	return("<unknown>");
+    }
+}
+
+typedef struct target_type_entry {
+    int	target_descriptor_type;
+    char *target_description;
+} target_type_entry_t;
+
+target_type_entry_t target_type_table[] = {
+    { TARGET_CSCD_TYPE_CODE_FC_N_PORT_NAME,	"Fibre Channel N_Port_Name"	},
+    { TARGET_CSCD_TYPE_CODE_FC_N_PORT_ID,	"Fibre Channel N_Port_ID"	},
+    { TARGET_CSCD_TYPE_CODE_FC_N_PORT_ID_NAME,	"Fibre Channel N_Port_ID w/N_Port_Name checking" },
+    { TARGET_CSCD_TYPE_CODE_PARALLEL_INT_T_L,	"Parallel Interface T_L"	},
+    { TARGET_CSCD_TYPE_CODE_IDENTIFICATION,	"Identification Descriptor"	},
+    { TARGET_CSCD_TYPE_CODE_IPV4,		"IPv4"				},
+    { TARGET_CSCD_TYPE_CODE_ALIAS,		"Alias"				},
+    { TARGET_CSCD_TYPE_CODE_RDMA,		"RDMA"				},
+    { TARGET_CSCD_TYPE_CODE_IEEE_EUI_64,	"IEEE 1394 EUI-64"		},
+    { TARGET_CSCD_TYPE_CODE_SAS_SERIAL_SCSI,	"SAS Serial SCSI Protocol"	},
+    { TARGET_CSCD_TYPE_CODE_IPV6,		"IPv6 CSCD descriptor"		},
+    { TARGET_CSCD_TYPE_CODE_COPY_SERVICE,	"IP Copy Service"		},
+    { TARGET_CSCD_TYPE_CODE_ROD,		"ROD"				}
+};
+static int target_type_tableEntrys = sizeof(target_type_table) / sizeof(target_type_table[0]);
+
+char *
+FindTargetTypeMsg(uint8_t target_descriptor_type)
+{
+    target_type_entry_t *ttp = target_type_table;
+    int entrys;
+
+    for (entrys = 0; entrys < target_type_tableEntrys; ttp++, entrys++) {
+	if (ttp->target_descriptor_type == target_descriptor_type) {
+	    return (ttp->target_description);
+	}
+    }
+    if ( (target_descriptor_type >= TARGET_CSCD_TYPE_CODE_RESERVED_START) ||
+	 (target_descriptor_type <= TARGET_CSCD_TYPE_CODE_RESERVED_END) ) {
+	return("<reserved>");
+    } else {
+	return("<unknown>");
+    }
+}
+
+char *
+GetDescriptorTypeMsg(char **descriptor_type, uint8_t descriptor_type_code)
+{
+    if (descriptor_type_code < SEGMENT_DESC_TYPE_LAST_ENTRY) {
+	*descriptor_type = "Segment Descriptor";
+	return( FindSegmentTypeMsg(descriptor_type_code) );
+    } else {
+	*descriptor_type = "Target Descriptor";
+	return( FindTargetTypeMsg(descriptor_type_code) );
+    }
 }

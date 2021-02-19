@@ -2,7 +2,7 @@
 #define SCSI_OPCODES_H 1
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 1988 - 2020			    *
+ *			  COPYRIGHT (c) 1988 - 2021			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -35,7 +35,10 @@
  * were taken directly from the ANSI SCSI-2 Specification.		*
  *									*
  * Modification History:						*
- *									*
+ *                                                                      * 
+ * November 14th, 2020 by Robin T. Miller                               * 
+ *      Define maintenance-in service action codes.                     * 
+ *                                                                      * 
  * August 18th, 2007 by Robin T. Miller					*
  *	Rather dated file, but adding a few new opcodes.		*
  *									*
@@ -82,12 +85,9 @@ typedef struct scsi_opcodes {
 #define SCSI_MAX_BLOCKS16	0xFFFFFFFF	/* Max 16-byte blocks.	*/
 
 /*
- * Extended Copy and Token Based Copy Definitions: 
- * Note: Adjust as required for your storage array! 
- * TODO: Implement Receive Copy Result / Report Operating Parameters. 
- *   Receive copy results cmd: 84 03 00 00 00 00 00 00 00 00 00 00 02 08 00 00 
- * Then set the max length dynamically, since this differs per storage array! 
+ * Extended Copy (LID1) and Token Based Copy Definitions: 
  */
+/* Note: These are now set dynamically! These set default max values. */
 #if defined(Nimble)
 #  define XCOPY_MAX_BLOCKS_PER_SEGMENT 0x2000	/* Max blocks per segment. */
 #  define XCOPY_MAX_SEGMENT_LENGTH     8191	/* That's 4MB-b of blocks. */
@@ -97,30 +97,37 @@ typedef struct scsi_opcodes {
 #endif /* defined(Nimble) */
 
 #if defined(Nimble)
+/*
+ * Maxiumum ROD Token XCOPY (ODX) Operation size supported by Nimble (64MB).
+ */
+#  define NIMBLE_MAX_ODX_SIZE      (64 * 1024 * 1024)
 
-// NIMBLE_MAX_ODX_SIZE
-// Max ODX operation size supported by Nimble
-#define NIMBLE_MAX_ODX_SIZE   (64 * 1024 * 1024)
-
-// NIMBLE_MAX_XCOPY_SIZE
-// Max XCOPY operation size supported by Nimble
-#define NIMBLE_MAX_XCOPY_SIZE NIMBLE_MAX_ODX_SIZE
-#define XCOPY_PT_MAX_BLOCKS	131072		/* 64M / 512 byte blocks.  */
+/* 
+ * Maxiumum XCOPY (LID1) Operation size supported by Nimble (64MB).
+ */
+#  define NIMBLE_MAX_XCOPY_SIZE    NIMBLE_MAX_ODX_SIZE
+#  define XCOPY_PT_MAX_BLOCKS       131072	/* 64M / 512 byte blocks.  */
 
 #endif /* defined(Nimble) */
 
-/* Note: These may need tweaked for Nimble storage as well! */
 #if !defined(XCOPY_PT_MAX_BLOCKS)
 #  define XCOPY_PT_MAX_BLOCKS	     16384	/* Max blocks all desc.    */
 						/* That's 0x4000 or 8MB!   */
 #endif /* !defined(XCOPY_PT_MAX_BLOCKS) */
+
 #define XCOPY_PT_MAX_DESCRIPTORS     8		/* The max descriptors.    */
 #define XCOPY_PT_MAX_BLOCKS_PER_SEGMENT (XCOPY_PT_MAX_BLOCKS / XCOPY_PT_MAX_DESCRIPTORS)
 						/* Max blocks per segment. */
 
-/* This limit keeps us from timing out. Otherwise a longer timeout is required. */
-#define VERIFY_DATA_MAX_BLOCKS16	65536	/* 256Mb/4k per request.  */
-#define WRITE_SAME_MAX_BLOCKS16		65536	/* 256Mb/4k per request.  */
+#if defined(Nimble)
+#  define WRITE_SAME_MAX_BLOCKS16	2097152	/* 1GB per request.	  */
+#else /* !defined(Nimble) */
+/* Note: This limit keeps us from timing out, it's not the max. */ 
+#  define WRITE_SAME_MAX_BLOCKS16	65536	/* 32MB per request.	  */
+#endif /* defined(Nimble) */
+
+/* Note: This limit keeps us from timing out, it's not the max. */ 
+#define VERIFY_DATA_MAX_BLOCKS16	65536	/* 32MB per request.	  */
 
 /* Get LBA Status Definitions: */
 #define GLS_MAX_LBA	0xFFFFFFFFFFFFFFFFLL	/* Max Get LBA Status LBA. */
@@ -136,10 +143,26 @@ typedef struct scsi_opcodes {
  */
 #define UNMAP_MAX_LBA	0xFFFFFFFFFFFFFFFFLL	/* Max Unmap LBA.	    */
 
-/* Note: May need to revisit this! */
-#define UNMAP_MAX_BLOCKS	0x80000	/* 256MB - Max blocks per request.  */
-#define UNMAP_MAX_PER_RANGE	0x80000		/* Max blocks per range.    */
-#define UNMAP_MAX_RANGES	128		/* Max number of ranges.    */
+/* TODO: Set this dynamically from the Inquiry VPD Block Limits page! */
+#if defined(Nimble)
+/* 1073741824 bytes / 512 = 2097152 blocks or 1GB */
+#  define UNMAP_MAX_BLOCKS	0x200000  /* 1GB - Max blocks per request.  */
+#  define UNMAP_MAX_PER_RANGE	UNMAP_MAX_BLOCKS/* Max blocks per range.    */
+#  define UNMAP_MAX_RANGES	128		/* Max number of ranges.    */
+
+#elif defined(ThreePAR)
+
+#  define UNMAP_MAX_BLOCKS	0x10000   /* 1MB - Max blocks per request.  */
+#  define UNMAP_MAX_PER_RANGE	UNMAP_MAX_BLOCKS/* Max blocks per range.    */
+#  define UNMAP_MAX_RANGES	128		/* Max number of ranges.    */
+
+#else /* !defined(Nimble) */
+
+#  define UNMAP_MAX_BLOCKS	0x80000	  /* 8MB - Max blocks per request.  */
+#  define UNMAP_MAX_PER_RANGE	UNMAP_MAX_BLOCKS/* Max blocks per range.    */
+#  define UNMAP_MAX_RANGES	128		/* Max number of ranges.    */
+
+#endif /* defined(Nimble)*/
 
 /*
  * SCSI Operation Codes for All Devices.
@@ -166,6 +189,19 @@ typedef struct scsi_opcodes {
 #define SOPC_PERSISTENT_RESERVE_OUT		0x5F
 #define SOPC_REPORT_LUNS			0xA0
 #define SOPC_MAINTENANCE_IN			0xA3
+
+/*
+ * Maintenance-In Service Actions: 
+ */
+typedef enum {
+    SCSI_MAINT_IN_REPORT_DEVICE_IDENTIFIER       = 0x05,
+    SCSI_MAINT_IN_REPORT_STATES                  = 0x06,
+    SCSI_MAINT_IN_REPORT_SUPPORTED_CONFIGURATION = 0x08,
+    SCSI_MAINT_IN_REPORT_UNCONFIGURED_CAPACITY   = 0x09,
+    SCSI_MAINT_IN_REPORT_TARGET_GROUP            = 0x0A,
+    SCSI_MAINT_IN_REPORT_SUPPORTED_OPCODES       = 0x0C,
+    SCSI_MAINT_IN_REPORT_SUPPORTED_TASK_MGMT     = 0x0D
+} scsi_maintenance_in_service_action_t;
 
 /*
  * SCSI Operation Codes for Direct-Access Devices.
@@ -243,6 +279,7 @@ typedef enum {
 #define SOPC_COMPARE_AND_WRITE			0x89
 
 typedef enum {
+    SCSI_SERVICE_ACTION_RECEIVE_COPY_RESULTS    = 0x03,
     SCSI_SERVICE_ACTION_READ_CAPACITY_16        = 0x10,
     SCSI_SERVICE_ACTION_GET_LBA_STATUS          = 0x12,
 } scsi_service_action_t;

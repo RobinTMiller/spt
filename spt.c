@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2019			    *
+ *			  COPYRIGHT (c) 2006 - 2021			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -31,6 +31,31 @@
  *	This utility permits sending any SCSI command desired.
  *
  * Modification History:
+ * 
+ * January 29th, 2021 by Robin T. Miller
+ *      When creating log files, create the directory (as required).
+ * 
+ * January 12th, 2021 by Robin T. Miller
+ * 	Updated *number() functions to accept same args as dt.
+ *      Add (limited) job control funtionality. Limited meaning we do not
+ * support the full dt job controls, but rather wait for async jobs before
+ * exiting, and permit "wait" for job ID or job tag for use in scripts.
+ * 
+ * December 16th, 2020 by Robin T. Miller
+ *      Add JSON emit string for multiple devices (e.g. XCOPY).
+ *      Add shorthand for: copyparams, getlbastatus, & writesame*
+ * 
+ * November 16th, 2020 by Robin T. Miller
+ *      Add parsing for shorthand commands: unmap, xcopy, wut or odx
+ * 
+ * November 14th, 2020 by Robin T. Miller
+ *      In cleanup_devices(), when we've cloned the device during an XCOPY
+ * to same LUN, don't free the SCSI information of the cloned device.
+ * 	Otherwise we'll abort thusly due to a double free():
+ *      *** Error in `spt': free(): invalid pointer: 0x0000000000d82670 ***
+ *
+ * August 7th, 2020 by Robin T. Miller
+ *      Add support for slice=value option, to operate on single slice.
  * 
  * May 15th, 2020 by Robin T. Miller
  *      Add options for date and time field separator used when formatting
@@ -168,12 +193,6 @@
 /* Note: The value above is too small on some OS's, esp. 64-bit machines! */
 #define THREAD_STACK_SIZE       MBYTE_SIZE      /* Same default as Windows! */
 
-typedef struct threads_info {
-    int		active_threads;	/* The number of active threads.	*/
-    scsi_device_t *sds;		/* Array of SCSI device structs.	*/
-    int		status;		/* Status from joined threads.		*/
-} threads_info_t;
-
 /*
  * Local Declarations:
  */
@@ -266,6 +285,8 @@ char *emit_status_default_json="{\n"
 "    \"Device Name\": \"%dsf\",\n"
 "    \"Block Length\": %device_size,\n"
 "    \"Capacity\": %capacity,\n"
+"    \"Starting LBA\": %starting,\n"
+"    \"Ending LBA\": %ending,\n"
 "    \"SCSI Name\": \"%scsi_name\",\n"
 "    \"SCSI CDB\": \"%cdb\",\n"
 "    \"Data Direction\": \"%dir\",\n"
@@ -330,6 +351,49 @@ char *emit_status_multiple="\n"
 "                Starting Time: %start_time\n"
 "                  Ending Time: %end_time\n";
 
+char *emit_status_multiple_json="{\n"
+"    \"Thread\": %thread,\n"
+"    \"Source Device\": \"%src\",\n"
+"    \"Source Block Length\": %device_size,\n"
+"    \"Source Capacity\": %capacity,\n"
+"    \"Source Starting LBA\": %starting,\n"
+"    \"Source Ending LBA\": %ending,\n"
+"    \"Destination Device\": \"%dst\",\n"
+"    \"Destination Block Length\": %device_size,\n"
+"    \"Destination Capacity\": %capacity,\n"
+"    \"Destination Starting LBA\": %starting,\n"
+"    \"Destination Ending LBA\": %ending,\n"
+"    \"SCSI Name\": \"%scsi_name\",\n"
+"    \"SCSI CDB\": \"%cdb\",\n"
+"    \"Data Direction\": \"%dir\",\n"
+"    \"Data Length\": %length,\n"
+"    \"Exit Status\": %status,\n"
+"    \"Exit Status Msg\": \"%status_msg\",\n"
+"    \"Host Status\": %host_status,\n"
+"    \"Host Status Msg\": \"%host_msg\",\n"
+"    \"Driver Status\": %driver_status,\n"
+"    \"Driver Status Msg\": \"%driver_msg\",\n"
+"    \"SCSI Status\": %scsi_status,\n"
+"    \"SCSI Status Msg\": \"%scsi_msg\",\n"
+"    \"Sense Code\": %sense_code,\n"
+"    \"Sense Code Msg\": \"%sense_msg\",\n"
+"    \"Sense Key\": %sense_key,\n"
+"    \"Sense Key Msg\": \"%skey_msg\",\n"
+"    \"asc\": \"%asc\",\n"
+"    \"asq\": \"%asq\",\n"
+"    \"ascq_Msg\": \"%ascq_msg\",\n"
+"    \"Bytes Transferred\": %xfer,\n"
+"    \"Residual\": %resid,\n"
+"    \"Iterations\": %iterations,\n"
+"    \"Total Bytes\": %total_bytes,\n"
+"    \"Total Blocks\": %total_blocks,\n"
+"    \"Total Operations\": %total_operations,\n"
+"    \"Sense Data\": \"%sense_data\",\n"
+"    \"Elapsed Time\": \"%elapsed_time\",\n"
+"    \"Starting Time\": \"%start_time\",\n"
+"    \"Ending Time\": \"%end_time\"\n"
+"}";
+
 /*
  * Forward References:
  */
@@ -340,8 +404,6 @@ int main(int argc, char **argv);
 int spt_main(int argc, char **argv, scsi_device_t *msdp);
 int main_loop(scsi_device_t *sdp);
 int create_detached_thread(scsi_device_t *sdp, void *(*func)(void *));
-void *a_job(void *arg);
-int wait_for_threads(threads_info_t *tip);
 void *a_cdb(void *arg);
 void *a_tmf(void *arg);
 int process_cdb_params(scsi_device_t *sdp);
@@ -360,6 +422,7 @@ static int expand_exp_data(scsi_device_t *sdp);
 hbool_t match(char **sptr, char *s);
 char *concatenate_args(scsi_device_t *sdp, int argc, char **argv, int arg_index);
 void show_expression(scsi_device_t *sdp, uint64_t value);
+int parse_job_args(scsi_device_t *sdp, char *string, job_id_t *job_id, char **job_tag, hbool_t errors);
 int sptGetCommandLine(scsi_device_t *sdp);
 int ExpandEnvironmentVariables(scsi_device_t *sdp, char *bufptr, size_t bufsiz);
 int MakeArgList(scsi_device_t *sdp, char **argv, char *s);
@@ -565,6 +628,10 @@ cleanup_devices(scsi_device_t *sdp, hbool_t master)
 	iop->deallocated_blocks	= 0;
 	iop->mapped_blocks	= 0;
 	iop->total_lba_blocks	= 0;
+	iop->max_segment_descriptors = 0;
+	iop->maximum_segment_length = 0;
+	iop->pt_max_range_descriptors = 0;
+	iop->pt_max_token_transfer_size = 0;
 	iop->max_unmap_lba_count= 0;
 	iop->max_write_same_len = 0;
 	sgp->cdb_name		= "SCSI_CDB";
@@ -578,9 +645,11 @@ cleanup_devices(scsi_device_t *sdp, hbool_t master)
 
 	/* Cloned means we don't need to release these resources. */
 	if (iop->cloned_device) {
+            /* Note: Be careful *not* to free data multiple times! */
 	    sgp->sense_data = NULL;
 	    sgp->data_buffer = NULL;
 	    iop->designator_id = NULL;
+            iop->sip = NULL;
 	    sgp->dsf = NULL;
 	    sgp->adsf = NULL;
 	}
@@ -637,6 +706,10 @@ cleanup_devices(scsi_device_t *sdp, hbool_t master)
 	    free(sdp->log_prefix);
 	    sdp->log_prefix = NULL;
 	}
+    }
+    if (sdp->job_tag) {
+	free(sdp->job_tag);
+	sdp->job_tag = NULL;
     }
     if (sdp->pin_buffer) {
 	free_palign(sdp, sdp->pin_buffer);
@@ -843,6 +916,9 @@ clone_devices(scsi_device_t *sdp, scsi_device_t *tsdp)
     }
     if (sdp->log_prefix) {
 	tsdp->log_prefix = strdup(sdp->log_prefix);
+    }
+    if (sdp->job_tag) {
+	tsdp->job_tag = strdup(sdp->job_tag);
     }
     if (sdp->shared_library) {
 	if (sdp->stderr_length) {
@@ -1248,7 +1324,7 @@ spt_main(int argc, char **argv, scsi_device_t *msdp)
     if (p = getenv(THREAD_STACK_ENV)) {
 	char *string = p;
 #if !defined(_WIN32)
-	desiredStackSize = number(sdp, string, ANY_RADIX);
+	desiredStackSize = number(sdp, string, ANY_RADIX, &status, False);
 #endif
     }
 
@@ -1273,6 +1349,7 @@ spt_main(int argc, char **argv, scsi_device_t *msdp)
     }
 
     (void)initialize_print_lock(sdp);
+    (void)initialize_jobs_data(sdp);
 
     return ( main_loop(sdp) );
 }
@@ -1283,14 +1360,13 @@ main_loop(scsi_device_t *sdp)
     io_params_t		*iop = &sdp->io_params[IO_INDEX_BASE];
     scsi_generic_t 	*sgp = &iop->sg;
     scsi_addr_t		*sap = &sgp->scsi_addr;
-    //pthread_attr_t	attr;
-    //pthread_attr_t	*attrp = &attr;
     threads_info_t	*tip;
     scsi_device_t 	*tsdp;
     scsi_device_t 	*sds;
     scsi_generic_t 	*tsgp;
     io_params_t		*tiop;
-    int         	thread, pstatus, status = SUCCESS;
+    int         	thread;
+    int			pstatus, status = SUCCESS;
 
     /*
      * Loop once or many times in pipe mode.
@@ -1474,11 +1550,21 @@ main_loop(scsi_device_t *sdp)
 		(void)HandleExit(sdp, FAILURE);
 		continue;
 	    }
-	    if (sdp->threads > 1) {
-		Wprintf(sdp, "The slices option (%u) overrides the threads (%d) specified!\n",
-		       sdp->slices, sdp->threads);
+	    if (sdp->slice_number > sdp->slices) {
+		Eprintf(sdp, "Please specify a slice (%d) <= max slices (%d)\n",
+			sdp->slice_number, sdp->slices);
+		(void)HandleExit(sdp, FAILURE);
+		continue;
 	    }
-	    sdp->threads = sdp->slices;
+	    if (sdp->slice_number) {
+        	sdp->threads = 1;
+	    } else {
+		if (sdp->threads > 1) {
+		    Wprintf(sdp, "The slices option (%u) overrides the threads (%d) specified!\n",
+			    sdp->slices, sdp->threads);
+		}
+		sdp->threads = sdp->slices;
+	    }
 	}
 
 	/*
@@ -1486,6 +1572,8 @@ main_loop(scsi_device_t *sdp)
 	 */
 	sdp->threads_active = 0;
 	sdp->job_id = jobid++;	/* Note: Temporary, until full job control! */
+	/* Here we allocate an array of device structures to index. */
+	/* Note: dt allocates an array of pointers for cloned devices. */
 	sds = (scsi_device_t *)Malloc(sdp, (sizeof(*sdp) * sdp->threads) );
 
 	for (thread = 0; (thread < sdp->threads); thread++) {
@@ -1509,7 +1597,11 @@ main_loop(scsi_device_t *sdp)
 	    tsdp->thread_number = (thread + 1);
 
 	    if (sdp->slices) {
-		initialize_slice(sdp, tsdp);
+		if (sdp->slice_number) {
+		    initialize_slice(sdp, tsdp, sdp->slice_number);
+		} else {
+		    initialize_slice(sdp, tsdp, tsdp->thread_number);
+		}
 	    }
 
 	    pstatus = pthread_create( &tsdp->thread_id, tjattrp, sdp->thread_func, tsdp );
@@ -1531,27 +1623,27 @@ main_loop(scsi_device_t *sdp)
 		break;
 	    }
 	    sdp->threads_active++;
-	    tsdp->thread_state = TS_Queued;
+	    tsdp->thread_state = TS_RUNNING;
 
 	} /* End of setting up for and creating threads! */
 
 	tip = Malloc(sdp, sizeof(threads_info_t));
-	tip->active_threads = sdp->threads_active;
-	tip->sds = sds;
+	tip->ti_threads = sdp->threads_active;
+	tip->ti_sds = sds;
 
 	/*
 	 * All commands are executed by thread(s).
 	 */
 	if (sdp->async) {
-	    pstatus = pthread_create( &sdp->thread_id, tdattrp, a_job, tip );
-	    if (pstatus != SUCCESS) {
-		errno = pstatus;
-		Perror (sdp, "pthread_create() failed");
+	    status = execute_job(sdp, tip);
+	    if (status != SUCCESS) {
 		return ( MyExit(sdp, FATAL_ERROR) );
 	    }
 	} else {
 	    int estatus;
 	    pstatus = wait_for_threads(tip);
+	    FreeMem(sdp, tip, sizeof(*tip));
+	    tip = NULL;
 	    /* Honor the users' error control! */
 	    estatus = DoErrorControl(sdp, pstatus);
 	    if (estatus == FAILURE) {
@@ -1576,7 +1668,27 @@ main_loop(scsi_device_t *sdp)
     }
     /* May already be closed, if not, let OS close things down! */
     (void)close_devices(sdp, IO_INDEX_BASE);
-    return( MyExit(sdp, status) );
+    /*
+     * Jobs may be active if run async (background) and not waited on!
+     */ 
+    if ( jobs_active(sdp) ) {
+	/* Wait for any outstanding jobs. */
+	int job_status = wait_for_jobs(sdp, 0, NULL);
+	if (job_status) {
+	    status = job_status;
+	}
+    }
+    /* Avoid any mystery of what our exit status is! (match dt) */
+    /* Note: We supress this for emit status to avoid breaking scripts. */
+    if ( ( (status != SUCCESS) || DebugFlag) && (sdp->emit_status == NULL) ) {
+	char *exit_msg = "Program is exiting with status %d...\n";
+        if (status) {
+            Fprintf(sdp, exit_msg, status);
+        } else {
+            Printf(sdp, exit_msg, status);
+        }
+    }
+    return (MyExit(sdp, status));
 }
 
 int
@@ -1595,64 +1707,6 @@ create_detached_thread(scsi_device_t *sdp, void *(*func)(void *))
 	tPerror(sdp, status, "pthread_create() failed");
     }
     return(status);
-}
-
-void *
-a_job(void *arg)
-{
-    threads_info_t *tip = arg;
-
-    tip->status = wait_for_threads(tip);
-    pthread_exit(tip);
-    return(NULL);
-}
-
-int
-wait_for_threads(threads_info_t *tip)
-{
-    scsi_device_t 	*sdp;
-    scsi_generic_t	*sgp;
-    io_params_t		*iop;
-    void		*thread_status = NULL;
-    int			i, pstatus, status = SUCCESS;
-
-    /*
-     * Now, wait for each thread to complete.
-     */
-    for (i = 0; (i < tip->active_threads); i++) {
-	sdp = &tip->sds[i];
-	iop = &sdp->io_params[IO_INDEX_BASE];
-	sgp = &iop->sg;
-	pstatus = pthread_join( sdp->thread_id, &thread_status );
-	if (pstatus != SUCCESS) {
-	    errno = pstatus;
-	    Perror(sdp, "pthread_join() failed");
-	    /* continue waiting for other threads */
-	} else {
-	    sdp->thread_state = TS_NotQueued;
-#if !defined(WIN32)
-            /* Note: Thread status is 0 (NULL) on Windows! */
-            if ( (thread_status == NULL) || (long)thread_status == -1 ) {
-		Fprintf(sdp, "Sanity check of thread status failed for device %s!\n", sgp->dsf);
-		Fprintf(sdp, "Thread status is NULL or -1, assuming cancelled, setting FAILURE status!\n");
-		status = FAILURE;   /* Assumed canceled, etc. */
-	    } else {
-		if (sdp != (scsi_device_t *)thread_status) {
-		    Fprintf(sdp, "Sanity check of thread status failed for device %s!\n", sgp->dsf);
-		    Fprintf(sdp, "Expected sdp = %p, Received: %p\n", sdp, thread_status);
-		    abort(); /* sanity */
-		}
-	    }
-#endif /* !defined(WIN32) */
-	    if (sdp->status == FAILURE) {
-		status = sdp->status;
-	    }
-	    cleanup_devices(sdp, False);
-	}
-    }
-    free(tip->sds);
-    free(tip);
-    return (status);
 }
 
 void *
@@ -2374,6 +2428,7 @@ parse_args(scsi_device_t *sdp, int argc, char **argv)
     io_params_t *siop = iop;
     scsi_generic_t *ssgp = sgp;
     char *p, *string;
+    int status = SUCCESS;
     int i;
 
     /*
@@ -2398,7 +2453,7 @@ parse_args(scsi_device_t *sdp, int argc, char **argv)
 	    str = strdup(string);
             token = strtok_r(str, sep, &saveptr);
             while (token != NULL) {
-		value = number(sdp, token, HEX_RADIX);
+		value = number(sdp, token, HEX_RADIX, &status, False);
 		if (value > 0xFF) {
 		    Eprintf(sdp, "CDB byte value %#x is too large!\n", value);
 		    Free(sdp, str);
@@ -2437,7 +2492,7 @@ parse_args(scsi_device_t *sdp, int argc, char **argv)
 	}
 	/* An option to help with negative testing! */
         if (match (&string, "cdbsize=")) {
-            sgp->cdb_size = number(sdp, string, ANY_RADIX);
+            sgp->cdb_size = number(sdp, string, ANY_RADIX, &status, False);
 	    if (sgp->cdb_size == 0) {
 		sgp->cdb_size = GetCdbLength(sgp->cdb[0]);
 	    }
@@ -2495,7 +2550,7 @@ parse_args(scsi_device_t *sdp, int argc, char **argv)
 	    continue;
 	}
         if ( match(&string, "len=") || match(&string, "length=") ) {
-            sgp->data_length = number(sdp, string, ANY_RADIX);
+            sgp->data_length = number(sdp, string, ANY_RADIX, &status, False);
             continue;
         }
         if (match (&string, "dir=")) {
@@ -2512,26 +2567,26 @@ parse_args(scsi_device_t *sdp, int argc, char **argv)
             continue;
         }
 	if (match (&string, "aborts=")) {
-	    sdp->abort_freq = number(sdp, string, ANY_RADIX);
+	    sdp->abort_freq = number(sdp, string, ANY_RADIX, &status, False);
 	    continue;
 	}
 	if (match (&string, "abort_timeout=")) {
-	    sdp->abort_timeout = number(sdp, string, ANY_RADIX);
+	    sdp->abort_timeout = number(sdp, string, ANY_RADIX, &status, False);
 	    continue;
 	}
 	if (match (&string, "dlimit=")) {
-	    sdp->dump_limit = number(sdp, string, ANY_RADIX);
+	    sdp->dump_limit = number(sdp, string, ANY_RADIX, &status, False);
 	    sgp->data_dump_limit = sdp->dump_limit;
 	    continue;
 	}
 	if (match (&string, "max=")) {
 	    iop->user_max = True;
-	    iop->max_size = number(sdp, string, ANY_RADIX);
+	    iop->max_size = number(sdp, string, ANY_RADIX, &status, False);
 	    continue;
 	}
 	if (match (&string, "min=")) {
 	    iop->user_min = True;
-	    iop->min_size = number(sdp, string, ANY_RADIX);
+	    iop->min_size = number(sdp, string, ANY_RADIX, &status, False);
 	    continue;
 	}
 	if (match (&string, "incr=")) {
@@ -2542,7 +2597,7 @@ parse_args(scsi_device_t *sdp, int argc, char **argv)
 		iop->incr_variable = True;
 	    } else {
 		iop->incr_variable = False;
-		iop->incr_size = number(sdp, string, ANY_RADIX);
+		iop->incr_size = number(sdp, string, ANY_RADIX, &status, False);
 	    }
 	    continue;
 	}
@@ -2555,7 +2610,11 @@ parse_args(scsi_device_t *sdp, int argc, char **argv)
 		    sdp->emit_status = strdup(emit_status_default);
 		}
 	    } else if (match (&string, "multi")) {
-		sdp->emit_status = strdup(emit_status_multiple);
+		if (sdp->output_format == JSON_FMT) {
+		    sdp->emit_status = strdup(emit_status_multiple_json);
+		} else {
+		    sdp->emit_status = strdup(emit_status_multiple);
+		}
 	    } else {
 		sdp->emit_status = strdup(string);
 	    }
@@ -2619,6 +2678,10 @@ eloop:
             }
             if (match(&string, "expandvars")) {
                 ExpandVars = True;
+                goto eloop;
+            }
+            if (match(&string, "jdebug")) {
+                sdp->jDebugFlag = True;
                 goto eloop;
             }
             if (match(&string, "mdebug")) {
@@ -2734,6 +2797,10 @@ eloop:
 		sdp->tci.wait_for_status = True;
 		goto eloop;
 	    }
+	    if (match(&string, "rrtiwut")) {
+		sdp->rrti_wut_flag = True;
+		goto eloop;
+	    }
 	    if (match(&string, "zerorod")) {
 		sdp->zero_rod_flag = True;
 		goto eloop;
@@ -2779,6 +2846,10 @@ dloop:
             }
             if (match(&string, "expandvars")) {
                 ExpandVars = False;
+                goto dloop;
+            }
+            if (match(&string, "jdebug")) {
+                sdp->jDebugFlag = False;
                 goto dloop;
             }
 	    if (match(&string, "mdebug")) {
@@ -2894,6 +2965,10 @@ dloop:
 		sdp->tci.wait_for_status = False;
 		goto dloop;
 	    }
+	    if (match(&string, "rrtiwut")) {
+		sdp->rrti_wut_flag = False;
+		goto dloop;
+	    }
 	    if (match(&string, "zerorod")) {
 		sdp->zero_rod_flag = False;
 		goto dloop;
@@ -2905,13 +2980,13 @@ dloop:
 	 * Special options to help seed IOT pattern with multiple passes.
 	 */
 	if (match (&string, "iotpass=")) {
-	    int iot_pass = number(sdp, string, ANY_RADIX);
+	    int iot_pass = number(sdp, string, ANY_RADIX, &status, False);
 	    sdp->iot_seed *= iot_pass;
 	    sdp->iot_pattern = True;
 	    continue;
 	}
 	if (match (&string, "iotseed=")) {
-	    sdp->iot_seed = (uint32_t)number(sdp, string, HEX_RADIX);
+	    sdp->iot_seed = (uint32_t)number(sdp, string, HEX_RADIX, &status, False);
 	    sdp->iot_pattern = True;
 	    continue;
 	}
@@ -3017,6 +3092,23 @@ dloop:
             }
             continue;
         }
+	/*
+	 * Start of Short Hand Commands: (ease of use, avoids specifying CDB's, etc)
+	 */
+	if ( match(&string, "copyparams") ) {
+	    if ( setup_receive_copy_results(sdp, sgp) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+	    continue;
+	}
+	if ( match(&string, "getlbastatus") ) {
+	    if ( setup_get_lba_status(sdp, sgp) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+	    continue;
+	}
 	if (match (&string, "inquiry")) {
 	    size_t data_length = sizeof(inquiry_t);
 	    uint8_t page = 0;
@@ -3099,18 +3191,117 @@ dloop:
 	    sdp->verbose = False;
             continue;
         }
+	if ( match(&string, "read10") ) {
+	    if ( setup_read10(sdp, sgp) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+	    continue;
+	}
+	if ( match(&string, "read16") ) {
+	    if ( setup_read16(sdp, sgp) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+	    continue;
+	}
+	if ( match(&string, "verify10") ) {
+	    if ( setup_verify10(sdp, sgp) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+	    continue;
+	}
+	if ( match(&string, "verify16") ) {
+	    if ( setup_verify16(sdp, sgp) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+	    continue;
+	}
+	if ( match(&string, "verify10") ) {
+	    if ( setup_verify10(sdp, sgp) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+	    continue;
+	}
+	if ( match(&string, "verify16") ) {
+	    if ( setup_verify16(sdp, sgp) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+	    continue;
+	}
+	if ( match(&string, "write10") ) {
+	    if ( setup_write10(sdp, sgp) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+	    continue;
+	}
+	if ( match(&string, "write16") ) {
+	    if ( setup_write16(sdp, sgp) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+	    continue;
+	}
+	if ( match(&string, "writesame10") ) {
+	    if ( setup_write_same10(sdp, sgp) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+	    continue;
+	}
+	if ( match(&string, "writesame16") ) {
+	    if ( setup_write_same16(sdp, sgp) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+	    continue;
+	}
+	if ( match(&string, "unmap") ) {
+	    if ( setup_unmap(sdp, sgp) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+	    continue;
+	}
+	if ( match(&string, "xcopy") ) {
+	    if ( setup_extended_copy(sdp, sgp) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+	    continue;
+	}
+	if ( match(&string, "wut") || match(&string, "odx") ) {
+	    if ( setup_write_using_token(sdp, sgp) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+	    sdp->verbose = False;
+	    continue;
+	}
+	if ( match(&string, "zerorod") ) {
+	    if ( setup_write_using_token(sdp, sgp) ) {
+		return( HandleExit(sdp, FAILURE) );
+	    }
+            sdp->zero_rod_flag = True;
+	    sdp->verbose = False;
+	    continue;
+	}
 	/* SES Parameters. */
 	if ( match(&string, "element=") || match(&string, "element_index=") ) {
-	    sdp->ses_element_index = (int)number(sdp, string, ANY_RADIX);
+	    sdp->ses_element_index = (int)number(sdp, string, ANY_RADIX, &status, False);
 	    sdp->ses_element_flag = True;
 	    continue;
 	}
 	if ( match(&string, "etcode=") || match(&string, "element_tcode=") ) {
-	    sdp->ses_element_type = (int)number(sdp, string, ANY_RADIX);
+	    sdp->ses_element_type = (int)number(sdp, string, ANY_RADIX, &status, False);
 	    continue;
 	}
 	if ( match(&string, "escode=") || match(&string, "element_scode=") ) {
-	    sdp->ses_element_status = (int)number(sdp, string, ANY_RADIX);
+	    sdp->ses_element_status = (int)number(sdp, string, ANY_RADIX, &status, False);
 	    continue;
 	}
 	if ( match(&string, "etype=") || match(&string, "element_type=") ) {
@@ -3196,12 +3387,12 @@ dloop:
 		    continue;
 		}
 	    }
-	    sdp->page_code = (uint8_t)number(sdp, string, HEX_RADIX);
+	    sdp->page_code = (uint8_t)number(sdp, string, HEX_RADIX, &status, False);
 	    sdp->verbose = False;
             continue;
         }
         if (match (&string, "path=")) {
-            sgp->scsi_addr.scsi_path = (int)number(sdp, string, ANY_RADIX);
+            sgp->scsi_addr.scsi_path = (int)number(sdp, string, ANY_RADIX, &status, False);
             continue;
         }
 	if (match (&string, "pattern=")) {
@@ -3211,7 +3402,7 @@ dloop:
 		sdp->iot_pattern = True;
 		sdp->verbose = False;
 	    } else {
-		sdp->pattern = number(sdp, string, HEX_RADIX);
+		sdp->pattern = number(sdp, string, HEX_RADIX, &status, False);
 	    }
 	    sdp->user_pattern = True;
 	    sdp->compare_data = True;
@@ -3247,7 +3438,7 @@ dloop:
 	    str = strdup(string);
 	    token = strtok_r(str, sep, &saveptr);
 	    while (token != NULL) {
-		value = number(sdp, token, HEX_RADIX);
+		value = number(sdp, token, HEX_RADIX, &status, False);
 		if (value > 0xFF) {
 		    Eprintf(sdp, "Parameter in byte value %#x is too large!\n", value);
 		    Free(sdp, str);
@@ -3275,7 +3466,7 @@ dloop:
 	    str = strdup(string);
             token = strtok_r(str, sep, &saveptr);
             while (token != NULL) {
-		value = number(sdp, token, HEX_RADIX);
+		value = number(sdp, token, HEX_RADIX, &status, False);
 		if (value > 0xFF) {
 		    Eprintf(sdp, "Parameter out byte value %#x is too large!\n", value);
 		    Free(sdp, str);
@@ -3355,7 +3546,7 @@ dloop:
 	    continue;
 	}
         if ( match(&string, "readlen=") || match(&string, "readlength=") ) {
-            sdp->scsi_read_length = number(sdp, string, ANY_RADIX);
+            sdp->scsi_read_length = number(sdp, string, ANY_RADIX, &status, False);
             continue;
 	}
 	if (match (&string, "writetype=")) {
@@ -3374,28 +3565,28 @@ dloop:
 	    continue;
 	}
 	if ( match(&string, "writelen=") || match(&string, "writelength=") ) {
-	    sdp->scsi_write_length = number(sdp, string, ANY_RADIX);
+	    sdp->scsi_write_length = number(sdp, string, ANY_RADIX, &status, False);
 	    continue;
 	}
 	if (match (&string, "ranges=")) {
-	    sdp->range_count = number(sdp, string, ANY_RADIX);
+	    sdp->range_count = number(sdp, string, ANY_RADIX, &status, False);
 	    siop->range_count = sdp->range_count; /* per device for token xcopy. */
 	    continue;
 	}
 	if ( match(&string, "repeat=") || match(&string, "passes=") ) {
-	    sdp->repeat_count = number(sdp, string, ANY_RADIX);
+	    sdp->repeat_count = number(sdp, string, ANY_RADIX, &status, False);
 	    continue;
 	}
 	if (match (&string, "recovery_delay=")) {
-	    sdp->recovery_delay = number(sdp, string, ANY_RADIX);
+	    sdp->recovery_delay = number(sdp, string, ANY_RADIX, &status, False);
 	    continue;
 	}
 	if (match (&string, "recovery_retries=")) {
-	    sdp->recovery_limit = number(sdp, string, ANY_RADIX);
+	    sdp->recovery_limit = number(sdp, string, ANY_RADIX, &status, False);
 	    continue;
 	}
 	if (match (&string, "retry=")) {
-	    sdp->retry_limit = number(sdp, string, ANY_RADIX);
+	    sdp->retry_limit = number(sdp, string, ANY_RADIX, &status, False);
 	    continue;
 	}
 	if (match (&string, "runtime=")) {
@@ -3412,7 +3603,7 @@ dloop:
 	    }
 	}
 	if (match (&string, "segments=")) {
-	    int segment_count = number(sdp, string, ANY_RADIX);
+	    int segment_count = number(sdp, string, ANY_RADIX, &status, False);
 	    if (!segment_count && !sdp->bypass) segment_count++;
 	    sdp->segment_count = segment_count;
 	    sdp->encode_flag = True;
@@ -3430,7 +3621,7 @@ dloop:
 		    return ( HandleExit(sdp, FATAL_ERROR) );
 		}
 	    } else {
-		sdp->tci.exp_scsi_status = number(sdp, string, HEX_RADIX);
+		sdp->tci.exp_scsi_status = number(sdp, string, HEX_RADIX, &status, False);
 	    }
 	    continue;
 	}
@@ -3449,7 +3640,7 @@ dloop:
 		    return ( HandleExit(sdp, FATAL_ERROR) );
 		}
 	    } else {
-		sdp->tci.exp_sense_key = number(sdp, string, HEX_RADIX);
+		sdp->tci.exp_sense_key = number(sdp, string, HEX_RADIX, &status, False);
 	    }
 	    continue;
 	}
@@ -3459,7 +3650,7 @@ dloop:
 	    if (sdp->tci.exp_scsi_status == SCSI_GOOD) {
 		sdp->tci.exp_scsi_status = SCSI_CHECK_CONDITION;
 	    }
-	    sdp->tci.exp_sense_asc = number(sdp, string, HEX_RADIX);
+	    sdp->tci.exp_sense_asc = number(sdp, string, HEX_RADIX, &status, False);
 	    continue;
 	}
 	if (match (&string, "asq=")) {
@@ -3468,17 +3659,17 @@ dloop:
 	    if (sdp->tci.exp_scsi_status == SCSI_GOOD) {
 		sdp->tci.exp_scsi_status = SCSI_CHECK_CONDITION;
 	    }
-	    sdp->tci.exp_sense_asq = number(sdp, string, HEX_RADIX);
+	    sdp->tci.exp_sense_asq = number(sdp, string, HEX_RADIX, &status, False);
 	    continue;
 	}
 	if (match (&string, "resid=")) {
 	    sdp->tci.check_resid = True;
-	    sdp->tci.exp_residual = number(sdp, string, ANY_RADIX);
+	    sdp->tci.exp_residual = number(sdp, string, ANY_RADIX, &status, False);
 	    continue;
 	}
 	if (match (&string, "transfer=")) {
 	    sdp->tci.check_xfer = True;
-	    sdp->tci.exp_transfer = number(sdp, string, ANY_RADIX);
+	    sdp->tci.exp_transfer = number(sdp, string, ANY_RADIX, &status, False);
 	    continue;
 	}
         if (match (&string, "sname=")) {
@@ -3492,15 +3683,20 @@ dloop:
 	    continue;
 	}
 	if (match (&string, "msleep=")) {
-	    sdp->msleep_value = number(sdp, string, ANY_RADIX);
+	    sdp->msleep_value = number(sdp, string, ANY_RADIX, &status, False);
 	    continue;
 	}
 	if (match (&string, "usleep=")) {
-	    sdp->usleep_value = number(sdp, string, ANY_RADIX);
+	    sdp->usleep_value = number(sdp, string, ANY_RADIX, &status, False);
 	    continue;
 	}
 	if (match (&string, "slices=")) {
-	    sdp->slices = number(sdp, string, ANY_RADIX);
+	    sdp->slices = number(sdp, string, ANY_RADIX, &status, False);
+	    sdp->encode_flag = True;
+	    continue;
+	}
+	if (match (&string, "slice=")) {
+	    sdp->slice_number = number(sdp, string, ANY_RADIX, &status, False);
 	    sdp->encode_flag = True;
 	    continue;
 	}
@@ -3532,7 +3728,7 @@ dloop:
             continue;
 	}
 	if (match (&string, "threads=")) {
-	    sdp->threads = number(sdp, string, ANY_RADIX);
+	    sdp->threads = number(sdp, string, ANY_RADIX, &status, False);
 	    continue;
 	}
         if (match (&string, "timeout=")) {
@@ -3541,11 +3737,15 @@ dloop:
         }
 	/* Options for token based xcopy. */
 	if (match (&string, "listid=")) {
-	    iop->list_identifier = number(sdp, string, ANY_RADIX);
+	    iop->list_identifier = number(sdp, string, ANY_RADIX, &status, False);
+	    continue;
+	}
+	if (match (&string, "slistid=")) {
+	    siop->list_identifier = number(sdp, string, ANY_RADIX, &status, False);
 	    continue;
 	}
 	if (match (&string, "rod_timeout=")) {
-	    sdp->rod_inactivity_timeout = number(sdp, string, ANY_RADIX);
+	    sdp->rod_inactivity_timeout = number(sdp, string, ANY_RADIX, &status, False);
 	    continue;
 	}
 	/* Options for pack and unpack. */
@@ -3638,7 +3838,7 @@ dloop:
 	    char *expr = concatenate_args(sdp, argc, argv, ++i);
 	    if (expr) {
 		uint64_t value;
-		value = large_number(sdp, expr, ANY_RADIX);
+		value = large_number(sdp, expr, ANY_RADIX, &status, False);
 		show_expression(sdp, value);
 		Free(sdp, expr);
 	    }
@@ -3670,13 +3870,13 @@ dloop:
 	 * I/O Options:
 	 */ 
 	if (match (&string, "blocks=")) {
-	    siop->cdb_blocks = large_number(sdp, string, ANY_RADIX);
+	    siop->cdb_blocks = large_number(sdp, string, ANY_RADIX, &status, False);
 	    sdp->encode_flag = True;
 	    sdp->verbose = False;
 	    continue;
 	}
 	if (match (&string, "bs=")) {
-	    uint64_t bytes = large_number(sdp, string, ANY_RADIX);
+	    uint64_t bytes = large_number(sdp, string, ANY_RADIX, &status, False);
 	    if (iop->device_size) {
 		siop->cdb_blocks = howmany(bytes, iop->device_size);
 	    }
@@ -3684,8 +3884,20 @@ dloop:
 	    sdp->verbose = False;
 	    continue;
 	}
+	if (match (&string, "capacity=")) {
+	    siop->user_capacity = large_number(sdp, string, ANY_RADIX, &status, False);
+	    continue;
+	}
+	if (match (&string, "capacityp=")) {
+	    siop->capacity_percentage = (int)number(sdp, string, ANY_RADIX, &status, False);
+            if (siop->capacity_percentage > 100) {
+                Eprintf(sdp, "The capacity percentage range is 0-100!\n");
+                return ( HandleExit(sdp, FAILURE) );
+            }
+	    continue;
+	}
 	if (match (&string, "limit=")) {
-	    siop->data_limit = large_number(sdp, string, ANY_RADIX);
+	    siop->data_limit = large_number(sdp, string, ANY_RADIX, &status, False);
 	    sdp->encode_flag = True;
 	    sdp->verbose = False;
 	    continue;
@@ -3706,30 +3918,30 @@ dloop:
 	    continue;
 	}
 	if (match (&string, "lba=")) {
-	    siop->starting_lba = large_number(sdp, string, ANY_RADIX);
+	    siop->starting_lba = large_number(sdp, string, ANY_RADIX, &status, False);
 	    siop->ending_lba = (siop->starting_lba + 1);
 	    sdp->encode_flag = True;
 	    continue;
 	}
 	if (match (&string, "maxbad=")) {
-	    sdp->max_bad_blocks = (uint32_t)number(sdp, string, ANY_RADIX);
+	    sdp->max_bad_blocks = (uint32_t)number(sdp, string, ANY_RADIX, &status, False);
             continue;
         }
 	if (match (&string, "step=")) {
-	    siop->step_value = large_number(sdp, string, ANY_RADIX);
+	    siop->step_value = large_number(sdp, string, ANY_RADIX, &status, False);
 	    sdp->encode_flag = True;
 	    sdp->verbose = False;
 	    continue;
 	}
 	if (match (&string, "starting=")) {
 	    siop->user_starting_lba = True;
-	    siop->starting_lba = large_number(sdp, string, ANY_RADIX);
+	    siop->starting_lba = large_number(sdp, string, ANY_RADIX, &status, False);
 	    sdp->encode_flag = True;
 	    sdp->verbose = False;
 	    continue;
 	}
 	if (match (&string, "ending=")) {
-	    siop->ending_lba = large_number(sdp, string, ANY_RADIX);
+	    siop->ending_lba = large_number(sdp, string, ANY_RADIX, &status, False);
 	    sdp->encode_flag = True;
 	    sdp->verbose = False;
 	    continue;
@@ -3742,6 +3954,58 @@ dloop:
 	    sdp->encode_flag = True;
 	    continue;
 	}
+	/*
+	 * Job Control Options:
+	 */
+	if (match (&string, "jobs")) {
+	    job_id_t job_id = 0;
+	    char *job_tag = NULL;
+	    hbool_t verbose = False;
+
+	    if (*string == ':') {
+		string++;
+		if (match (&string, "full")) {
+		    verbose = True;
+		}
+	    }
+	    if (*string != '\0') {
+		status = parse_job_args(sdp, string, &job_id, &job_tag, True);
+	    } else if (++i < argc) {
+		string = argv[i++];
+		status = parse_job_args(sdp, string, &job_id, &job_tag, True);
+		if (status == WARNING) --i;
+	    }
+	    if (status == FAILURE) {
+		return ( HandleExit(sdp, status) );
+	    }
+	    status = show_jobs(sdp, job_id, job_tag, verbose);
+	    return ( HandleExit(sdp, SUCCESS) );
+	}
+	if (match (&string, "tag=")) {
+	    if (sdp->job_tag) {
+		free(sdp->job_tag);
+	    }
+	    sdp->job_tag = strdup(string);
+	    continue;
+	}
+	if (match (&string, "wait")) {
+	    job_id_t job_id = 0;
+	    char *job_tag = NULL;
+	    
+	    status = SUCCESS;
+	    if (*string != '\0') {
+		status = parse_job_args(sdp, string, &job_id, &job_tag, True);
+	    } else if (++i < argc) {
+		string = argv[i++];
+		status = parse_job_args(sdp, string, &job_id, &job_tag, True);
+	    }
+	    if (status == FAILURE) {
+		return ( HandleExit(sdp, status) );
+	    }
+	    status = wait_for_jobs(sdp, job_id, job_tag);
+	    return ( HandleExit(sdp, status) );
+	}
+	/* End of jobs options. */
 	/* A simple way to set some environment variables for scripts! */
 	if ( match(&string, "$") && (p = strstr(string, "=")) ) {
 	    *p++ = '\0';
@@ -3791,6 +4055,7 @@ parse_exp_data(char *string, scsi_device_t *sdp)
     exp_data_t	*edp;
     char	*str, *strp, *token, *saveptr;
     int		i;
+    int		status = SUCCESS;
 
     if (sdp->exp_data_count == sdp->exp_data_entries) {
 	if (expand_exp_data(sdp) == FAILURE) return (FAILURE);
@@ -3807,7 +4072,7 @@ parse_exp_data(char *string, scsi_device_t *sdp)
 	/* Format: C[HAR]:index:string,string */
 	token = strtok_r(str, ":", &saveptr);
 	if (token == NULL) goto parse_error;
-	byte_index = number(sdp, token, sdp->exp_radix);
+	byte_index = number(sdp, token, sdp->exp_radix, &status, False);
 	token = strtok_r(NULL, ",", &saveptr);
 	if (token == NULL) goto parse_error;
 	while (token != NULL) {
@@ -3830,7 +4095,7 @@ parse_exp_data(char *string, scsi_device_t *sdp)
 	/* Format: B[YTE]:index:value,value... */
 	token = strtok_r(str, ":", &saveptr);
 	if (token == NULL) goto parse_error;
-	byte_index = number(sdp, token, sdp->exp_radix);
+	byte_index = number(sdp, token, sdp->exp_radix, &status, False);
 	token = strtok_r(NULL, ",", &saveptr);
 	if (token == NULL) goto parse_error;
 	while (token != NULL) {
@@ -3839,7 +4104,7 @@ parse_exp_data(char *string, scsi_device_t *sdp)
 		    goto error_return;
 		}
 	    }
-	    value = number(sdp, token, sdp->exp_radix);
+	    value = number(sdp, token, sdp->exp_radix, &status, False);
 	    if (value > 0xFF) {
 		Eprintf(sdp, "Byte value %u is too large!\n", (uint32_t)value);
 		goto error_return;
@@ -3855,11 +4120,11 @@ parse_exp_data(char *string, scsi_device_t *sdp)
 	/* Format: S[HORT]:index:value,value... */
 	token = strtok_r(str, ":", &saveptr);
 	if (token == NULL) goto parse_error;
-	byte_index = number(sdp, token, sdp->exp_radix);
+	byte_index = number(sdp, token, sdp->exp_radix, &status, False);
 	token = strtok_r(NULL, ",", &saveptr);
 	if (token == NULL) goto parse_error;
 	while (token != NULL) {
-	    value = number(sdp, token, sdp->exp_radix);
+	    value = number(sdp, token, sdp->exp_radix, &status, False);
 	    if (value > 0xFFFF) {
 		Eprintf(sdp, "Short value %u is too large!\n", (uint32_t)value);
 		goto error_return;
@@ -3882,11 +4147,11 @@ parse_exp_data(char *string, scsi_device_t *sdp)
 	/* Format: W[ORD]:index:value,value... */
 	token = strtok_r(str, ":", &saveptr);
 	if (token == NULL) goto parse_error;
-	byte_index = number(sdp, token, sdp->exp_radix);
+	byte_index = number(sdp, token, sdp->exp_radix, &status, False);
 	token = strtok_r(NULL, ",", &saveptr);
 	if (token == NULL) goto parse_error;
 	while (token != NULL) {
-	    value = number(sdp, token, sdp->exp_radix);
+	    value = number(sdp, token, sdp->exp_radix, &status, False);
 	    for (i = sizeof(uint32_t)-1; i >= 0; i--) {
 		if (sdp->exp_data_count == sdp->exp_data_entries) {
 		    if (expand_exp_data(sdp) == FAILURE) {
@@ -3905,11 +4170,11 @@ parse_exp_data(char *string, scsi_device_t *sdp)
 	/* Format: L[ONG]:index:value,value... */
 	token = strtok_r(str, ":", &saveptr);
 	if (token == NULL) goto parse_error;
-	byte_index = number(sdp, token, sdp->exp_radix);
+	byte_index = number(sdp, token, sdp->exp_radix, &status, False);
 	token = strtok_r(NULL, ",", &saveptr);
 	if (token == NULL) goto parse_error;
 	while (token != NULL) {
-	    value = large_number(sdp, token, sdp->exp_radix);
+	    value = large_number(sdp, token, sdp->exp_radix, &status, False);
 	    for (i = sizeof(uint64_t)-1; i >= 0; i--) {
 		if (sdp->exp_data_count == sdp->exp_data_entries) {
 		    if (expand_exp_data(sdp) == FAILURE) {
@@ -4055,37 +4320,43 @@ show_expression(scsi_device_t *sdp, uint64_t value)
  * Inputs:
  *	str = The string to convert.
  *	base = The base for numeric conversions.
+ * 	status = Pointer to return parse status.
+ * 	report_error = Flag to control errors.
  *
  * Return Value:
  *      Returns converted number, exits on invalid numbers.
  */
 uint32_t
-number(scsi_device_t *sdp, char *str, int base)
+number(scsi_device_t *sdp, char *str, int base, int *status, hbool_t report_error)
 {
     char *eptr;
     uint32_t value;
 
+    *status = SUCCESS;
     value = CvtStrtoValue(str, &eptr, base);
-
     if (*eptr != '\0') {
         Eprintf(sdp, "Error parsing '%s', invalid character detected in number: '%c'\n",
 		str, *eptr);
+        *status = FAILURE;
+	/* Note: Remove this AFTER all callers check status for errors! */
 	return ( HandleExit(sdp, FATAL_ERROR) );
     }
     return(value);
 }
 
 uint64_t
-large_number(scsi_device_t *sdp, char *str, int base)
+large_number(scsi_device_t *sdp, char *str, int base, int *status, hbool_t report_error)
 {
     char *eptr;
     uint64_t value;
 
+    *status = SUCCESS;
     value = CvtStrtoLarge(str, &eptr, base);
-
     if (*eptr != '\0') {
         Eprintf(sdp, "Error parsing '%s', invalid character detected in number: '%c'\n",
 		str, *eptr);
+        *status = FAILURE;
+	/* Note: Remove this AFTER all callers check status for errors! */
 	return ( HandleExit(sdp, FATAL_ERROR) );
     }
     return(value);
@@ -4749,6 +5020,7 @@ do_logfile_open(scsi_device_t *sdp)
 {
     int status = SUCCESS;
     char *mode = "w";
+    char *dir, *ptr;
     FILE *fp;
 
     if ( strchr(sdp->log_file, '%') ) {
@@ -4758,6 +5030,19 @@ do_logfile_open(scsi_device_t *sdp)
 	    sdp->log_file = path;
 	}
     }
+    /* Create the log directory, as required. */
+    /* Note: Need to create OS dirname(), none on Windows! */
+    /* Quick and dirty (for now)! */
+    dir = strdup(sdp->log_file);
+    ptr = strrchr(dir, DIRSEP);
+    if (ptr) {
+	*ptr = '\0';
+	if (os_file_exists(dir) == False) {
+	    (void)os_create_directory(dir, DIR_CREATE_MODE);
+	}
+    }
+    Free(sdp, dir); dir = NULL;
+
     fp = fopen(sdp->log_file, mode);
     if (fp == NULL) {
 	Perror(sdp, "fopen() of %s failed", sdp->log_file);
@@ -4838,6 +5123,38 @@ make_options_string(scsi_device_t *sdp, int argc, char **argv, hbool_t quoting)
     return(options);
 }
 
+/*
+ * Common parsing for job arguments.
+ * 	job=value
+ * 	tag=string
+ * 	={tag|jid} - old format, deprecated!
+ */ 
+int
+parse_job_args(scsi_device_t *sdp, char *string, job_id_t *job_id, char **job_tag, hbool_t errors)
+{
+    int status = SUCCESS;
+
+    if (match (&string, "job=")) {
+	*job_id = number(sdp, string, ANY_RADIX, &status, errors);
+	if (status == FAILURE) return ( HandleExit(sdp, status) );
+    } else if (match (&string, "tag=")) {
+	*job_tag = string;
+    } else if (*string == '=') {
+	/* Old Format was cmd={job_id|job_tag} yea ugly, should go! */
+	string++;
+	if ( isalpha(*string) ) {
+	    *job_tag = string;
+	} else {
+	    *job_id = (int)number(sdp, string, ANY_RADIX, &status, errors);
+	    if (status == FAILURE) return ( HandleExit(sdp, status) );
+	}
+    } else {
+	Eprintf(sdp, "Unknown job argument '%s'!\n", string);
+	status = FAILURE;
+    }
+    return(status);
+}
+
 void
 save_cmdline(scsi_device_t *sdp)
 {
@@ -4875,7 +5192,7 @@ setup_thread_attributes(scsi_device_t *sdp, pthread_attr_t *tattrp, hbool_t join
 
     if (p = getenv(THREAD_STACK_ENV)) {
 	string = p;
-	desiredStackSize = number(sdp, string, ANY_RADIX);
+	desiredStackSize = number(sdp, string, ANY_RADIX, &status, False);
     }
 
     /* Remember: pthread API's return 0 for success; otherwise, an error number to indicate the error! */
@@ -4951,7 +5268,7 @@ init_pthread_attributes(scsi_device_t *sdp)
 
     if (p = getenv(THREAD_STACK_ENV)) {
 	string = p;
-	desiredStackSize = number(sdp, string, ANY_RADIX);
+	desiredStackSize = number(sdp, string, ANY_RADIX, &status, False);
     }
     ParentThreadId = pthread_self();
 
@@ -5073,7 +5390,7 @@ init_device_information(void)
 }
 
 /*
- * Note: These defaults get set for each command line. 
+ * Note: These defaults get set for each command line. (master device)
  *  
  * BEWARE: When running scripts, it's imperative that ALL options get 
  * reset to their original defaults! Therefore, when adding new options 
@@ -5111,6 +5428,8 @@ init_device_defaults(scsi_device_t *sdp)
     sdp->emit_all	= False;
     sdp->decode_flag	= False;
     sdp->encode_flag	= False;
+    sdp->job		= NULL;
+    sdp->job_id		= 0;
     sdp->onerr		= ONERR_STOP;
     sdp->sleep_value	= 0;
     sdp->msleep_value	= 0;
@@ -5119,6 +5438,7 @@ init_device_defaults(scsi_device_t *sdp)
     sdp->repeat_count	= RepeatCountDefault;
     sdp->retry_count	= 0;
     sdp->retry_limit	= RetryLimitDefault;
+    sdp->rrti_wut_flag	= False;
     sdp->zero_rod_flag	= False;
     sdp->runtime	= 0;
     sdp->din_file	= NULL;
@@ -5135,6 +5455,7 @@ init_device_defaults(scsi_device_t *sdp)
     sdp->pin_data	= False;
     sdp->pin_length	= 0;
     sdp->slices		= 0;
+    sdp->slice_number	= 0;
     sdp->threads	= ThreadsDefault;
     sdp->user_data	= False;
     sdp->user_pattern	= False;

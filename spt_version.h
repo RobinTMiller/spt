@@ -2,7 +2,7 @@
 #define SPT_VERSION_H	1
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 1988 - 2020			    *
+ *			  COPYRIGHT (c) 1988 - 2021			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -26,8 +26,8 @@
  ****************************************************************************/
 
 #define ToolAuthor	"Robin T. Miller"
-#define ToolDate	"May 28th, 2020"
-#define ToolRevision	"3.30"
+#define ToolDate	"February 8th, 2021"
+#define ToolRevision	"3.38"
 #define ToolVersion	"Date: "ToolDate", Version: "ToolRevision", Author: "ToolAuthor
 
 #endif /* !defined(SPT_VERSION_H) */

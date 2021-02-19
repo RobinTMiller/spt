@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2020			    *
+ *			  COPYRIGHT (c) 2006 - 2021			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -29,6 +29,19 @@
  *  
  * Modification History: 
  *
+ * November 23rd, 2020 by Robin T. Miller
+ *      Add decoding of Inquiry Logical Block Provisioning VPD Page 0xB2.
+ * 
+ * November 20th, 2020 by Robin T. Miller
+ *      Add decoding of Inquiry Block Limits VPD Page 0xB0.
+ * 
+ * November 17th, 2020 by Robin T. Miller
+ *      Add decoding of Inquiry Third Party Copy VPD Page 0x8F.
+ * 
+ * September 8th, 2020 by Robin T. Miller
+ *      Update GetDeviceTypeCode() to initialize return status to SUCCESS.
+ *      This SNAFU caused intermittent failures by the caller with no error!
+ * 
  * March 2nd, 2019 by Robin T. Miller
  *      Display Inquiry Device ID Relative Target Port in hex, rather than decimal.
  * 
@@ -83,6 +96,23 @@ int inquiry_device_identification_decode(scsi_device_t *sdp, io_params_t *iop,
 					 scsi_generic_t *sgp, inquiry_header_t *ihdr);
 char *inquiry_device_identification_to_json(scsi_device_t *sdp, io_params_t *iop,
 					    scsi_generic_t *sgp, inquiry_header_t *ihdr, char *page_name);
+
+/* Page 0x8F */
+int inquiry_third_party_copy_decode(scsi_device_t *sdp, io_params_t *iop,
+				    scsi_generic_t *sgp, inquiry_header_t *ihdr);
+char *inquiry_third_party_copy_to_json(scsi_device_t *sdp, io_params_t *iop,
+				       scsi_generic_t *sgp, inquiry_header_t *ihdr, char *page_name);
+/* Page 0xB0 */
+int inquiry_block_limits_decode(scsi_device_t *sdp, io_params_t *iop,
+				scsi_generic_t *sgp, inquiry_header_t *ihdr);
+char *inquiry_block_limits_to_json(scsi_device_t *sdp, io_params_t *iop,
+				   scsi_generic_t *sgp, inquiry_header_t *ihdr, char *page_name);
+
+/* Page 0xB1 */
+int inquiry_logical_block_provisioning_decode(scsi_device_t *sdp, io_params_t *iop,
+					      scsi_generic_t *sgp, inquiry_header_t *ihdr);
+char *inquiry_logical_block_provisioning_to_json(scsi_device_t *sdp, io_params_t *iop,
+						 scsi_generic_t *sgp, inquiry_header_t *ihdr, char *page_name);
 
 char *GetDeviceType(uint8_t device_type, hbool_t full_name);
 char *GetPeripheralQualifier(inquiry_t *inquiry, hbool_t fullname);
@@ -245,6 +275,12 @@ inquiry_decode(void *arg)
 	status = inquiry_serial_number_decode(sdp, iop, sgp, ihdr);		/* Page 0x80 */
     } else if (page_code == INQ_DEVICE_PAGE) {
 	status = inquiry_device_identification_decode(sdp, iop, sgp, ihdr);	/* Page 0x83 */
+    } else if (page_code == INQ_THIRD_PARTY_COPY) {
+	status = inquiry_third_party_copy_decode(sdp, iop, sgp, ihdr);		/* Page 0x8F */
+    } else if (page_code == INQ_BLOCK_LIMITS_PAGE) {
+	status = inquiry_block_limits_decode(sdp, iop, sgp, ihdr);		/* Page 0xB0 */
+    } else if (page_code == INQ_LOGICAL_BLOCK_PROVISIONING_PAGE) {
+	status = inquiry_logical_block_provisioning_decode(sdp, iop, sgp, ihdr);/* Page 0xB1 */
     } else {
 	sdp->verbose = True;
     }
@@ -1274,6 +1310,616 @@ finish:
     return(json_string);
 }
 
+void
+PrintDesignatorInformation(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp)
+{
+    char *buffer, *bp;
+    uint8_t *dp = NULL;
+    char *identifier_description = NULL;
+    int i;
+
+    if (iop->designator_type < ident_entries) {
+	identifier_description = ident_types[iop->designator_type];
+    } else {
+	identifier_description = "Reserved Identifier";
+    }
+    buffer = bp = Malloc(sdp, (iop->designator_length * 4));
+    /* Format the designator, usually 16 bytes. */
+    for (i = 0, dp = iop->designator_id; (i < iop->designator_length); i++) {
+	bp += sprintf(bp, "%02x ", *dp++);
+    }
+    --bp; *bp = '\0';
+    Printf(sdp, "         Device: %s\n", sgp->dsf);
+    Printf(sdp, "  Designator ID: %s (%d bytes)\n", buffer, iop->designator_length);
+    Printf(sdp, "Designator Type: %u (%s)\n", iop->designator_type, identifier_description);
+    free(buffer);
+    return;
+}
+
+/* ============================================================================================== */
+
+int
+inquiry_third_party_copy_decode(scsi_device_t *sdp, io_params_t *iop,
+				scsi_generic_t *sgp, inquiry_header_t *ihdr)
+{
+    inquiry_page_t *inquiry_page = (inquiry_page_t *)ihdr;
+    inquiry_third_party_copy_page_t *tpcp = NULL;
+    inquiry_third_party_descriptor_t *tpdp = NULL;
+    uint8_t device_type = iop->sip->si_inquiry->inq_dtype;
+    uint8_t page_code = ihdr->inq_page_code;
+    int page_length = (int)StoH(ihdr->inq_page_length);
+    char *page_name = get_inquiry_page_name(device_type, page_code, iop->vendor_id);
+    char *textp = NULL;
+    uint8_t *ucp = NULL;
+    int length = 0;
+    int offset = 0;
+    int status = SUCCESS;
+    uint16_t desc_length, desc_type;
+    uint64_t value64 = 0;
+
+    /*
+     * Acquire the device size for decoding blocks to bytes.
+     */
+    if ( !iop->device_size || !iop->device_capacity) {
+	status = GetCapacity(sdp, iop);
+	if (status != SUCCESS) return(status);
+    }
+
+    if (sdp->output_format == JSON_FMT) {
+	char *json_string = NULL;
+	json_string = inquiry_third_party_copy_to_json(sdp, iop, sgp, ihdr, page_name);
+	if (json_string) {
+	    PrintLines(sdp, json_string);
+	    Printnl(sdp);
+	    json_free_serialized_string(json_string);
+	}
+	return(status);
+    }
+    offset = PrintInquiryPageHeader(sdp, offset, ihdr, iop->vendor_id);
+
+    if (sdp->DebugFlag) {
+	Printf(sdp, "\n");
+	ucp = (uint8_t *)ihdr + sizeof(*ihdr);
+	length = page_length;
+	offset = PrintHexDebug(sdp, offset, ucp, length);
+    }
+
+    /*
+     * Data Format: 
+     * <third party descriptor> 
+     * <third party parameters> 
+     *  	...
+     * We only expect one descriptor of ROD Limits Type. 
+     * Revisit as required, we're starting with just one!
+     */
+    tpdp = (inquiry_third_party_descriptor_t *)inquiry_page->inquiry_page_data;
+    tpcp = (inquiry_third_party_copy_page_t *)(tpdp + 1);
+
+    desc_type = (uint16_t)StoH(tpdp->tpc_descriptor_type);
+    desc_length = (uint16_t)StoH(tpdp->tpc_descriptor_length);
+    /* TODO: Eventually, add a table to decode descriptor types. */
+    if (desc_type == TPC_BLOCK_DEVICE_ROD_LIMITS_TYPE) {
+        textp = "Block Device ROD Limits";
+    }
+    PrintHex(sdp, "Third Party Descriptor Type", desc_type, DNL);
+    if (textp) {
+	Print(sdp, " (%s)\n", textp);
+    } else {
+	Print(sdp, "\n");
+    }
+    PrintDecimal(sdp, "Third Party Descriptor Length", desc_length, PNL);
+
+    /* We only support Block Device ROD Limits descriptor type today. */
+
+    if (desc_type != TPC_BLOCK_DEVICE_ROD_LIMITS_TYPE) {
+	Printf(sdp, "Unsupported descriptor type, decoing needs updated!\n");
+	return(status);
+    }
+
+    value64 = StoH(tpcp->vendor_specific);
+    if (value64 || sdp->DebugFlag) {
+	PrintLongHex(sdp, "Vendor Specific (bytes 4-9)", value64, PNL);
+    }
+    PrintDecimal(sdp, "Maximum Range Descriptors", (uint32_t)StoH(tpcp->max_range_descriptors), PNL);
+    PrintDecimal(sdp, "Maximum Inactivity Timeout", (uint32_t)StoH(tpcp->max_inactivity_timeout), PNL);
+    PrintDecimal(sdp, "Default Inactivity Timeout", (uint32_t)StoH(tpcp->default_inactivity_timeout), PNL);
+    value64 = StoH(tpcp->max_token_transfer_size);
+    PrintLongDec(sdp, "Maximum Token Transfer Size", value64, (value64) ? DNL : PNL);
+    if (value64) {
+	Print(sdp, " blocks ("LUF" bytes)\n", (value64 * iop->device_size));
+    }
+    value64 = StoH(tpcp->optimal_transfer_count);
+    PrintLongDec(sdp, "Optimal Transfer Count", value64, (value64) ? DNL : PNL);
+    if (value64) {
+	Print(sdp, " blocks ("LUF" bytes)\n", (value64 * iop->device_size));
+    }
+    Printf(sdp, "\n");
+    return(status);
+}
+
+char *
+inquiry_third_party_copy_to_json(scsi_device_t *sdp, io_params_t *iop,
+				 scsi_generic_t *sgp, inquiry_header_t *ihdr, char *page_name)
+{
+    inquiry_page_t *inquiry_page = (inquiry_page_t *)ihdr;
+    inquiry_third_party_copy_page_t *tpcp = NULL;
+    inquiry_third_party_descriptor_t *tpdp = NULL;
+    JSON_Value	*root_value;
+    JSON_Object *root_object;
+    JSON_Value  *value;
+    JSON_Object *object;
+    JSON_Status json_status;
+    char *json_string = NULL;
+    int page_length = (int)StoH(ihdr->inq_page_length);
+    char text[STRING_BUFFER_SIZE];
+    char *textp = NULL;
+    uint8_t *ucp = NULL;
+    int length = 0;
+    int offset = 0;
+    uint16_t desc_length, desc_type;
+
+    root_value  = json_value_init_object();
+    if (root_value == NULL) return(NULL);
+    root_object = json_value_get_object(root_value);
+
+    value  = json_value_init_object();
+    if (value == NULL) {
+	json_value_free(root_value);
+	return(NULL);
+    }
+    json_status = json_object_dotset_value(root_object, page_name, value);
+    object = json_value_get_object(value);
+
+    ucp = (uint8_t *)ihdr;
+    length = page_length + sizeof(*ihdr);
+    json_status = json_object_set_number(object, "Length", (double)length);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Offset", (double)offset);
+    if (json_status != JSONSuccess) goto finish;
+    offset = FormatHexBytes(text, offset, ucp, length);
+    json_status = json_object_set_string(object, "Bytes", text);
+    if (json_status != JSONSuccess) goto finish;
+
+    json_status = PrintInquiryPageHeaderJson(sdp, object, ihdr);
+    if (json_status != JSONSuccess) goto finish;
+
+    tpdp = (inquiry_third_party_descriptor_t *)inquiry_page->inquiry_page_data;
+    tpcp = (inquiry_third_party_copy_page_t *)(tpdp + 1);
+
+    desc_type = (uint16_t)StoH(tpdp->tpc_descriptor_type);
+    desc_length = (uint16_t)StoH(tpdp->tpc_descriptor_length);
+    if (desc_type == TPC_BLOCK_DEVICE_ROD_LIMITS_TYPE) {
+        textp = "Block Device ROD Limits";
+    }
+
+    json_status = json_object_set_number(object, "Third Party Descriptor Type", (double)desc_type);
+    if (json_status != JSONSuccess) goto finish;
+    if (textp) {
+	json_status = json_object_set_string(object, "Third Party Type Description", textp);
+	if (json_status != JSONSuccess) goto finish;
+    }
+    json_status = json_object_set_number(object, "Third Party Descriptor Length", (double)desc_length);
+    if (json_status != JSONSuccess) goto finish;
+
+    /* We only support one third party descriptor type today! */
+
+    if (desc_type != TPC_BLOCK_DEVICE_ROD_LIMITS_TYPE) {
+	goto finish;
+    }
+
+    ucp = (uint8_t *)&tpcp->vendor_specific;
+    length = sizeof(tpcp->vendor_specific);
+    offset = FormatHexBytes(text, offset, ucp, length);
+    json_status = json_object_set_string(object, "Vendor Specific", text);
+    if (json_status != JSONSuccess) goto finish;
+
+    json_status = json_object_set_number(object, "Maximum Range Descriptors", (double)StoH(tpcp->max_range_descriptors));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Maximum Inactivity Timeout", (double)StoH(tpcp->max_inactivity_timeout));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Default Inactivity Timeout", (double)StoH(tpcp->default_inactivity_timeout));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Maximum Token Transfer Size", (double)StoH(tpcp->max_token_transfer_size));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Optimal Transfer Count", (double)StoH(tpcp->optimal_transfer_count));
+
+finish:
+    (void)json_object_set_number(object, "JSON Status", (double)json_status);
+    if (sdp->json_pretty) {
+	json_string = json_serialize_to_string_pretty(root_value);
+    } else {
+	json_string = json_serialize_to_string(root_value);
+    }
+    json_value_free(root_value);
+    return(json_string);
+}
+
+/* ============================================================================================== */
+
+int
+inquiry_block_limits_decode(scsi_device_t *sdp, io_params_t *iop,
+			    scsi_generic_t *sgp, inquiry_header_t *ihdr)
+{
+    inquiry_page_t *inquiry_page = (inquiry_page_t *)ihdr;
+    inquiry_block_limits_page_t *blp = NULL;;
+    uint8_t device_type = iop->sip->si_inquiry->inq_dtype;
+    uint8_t page_code = ihdr->inq_page_code;
+    int page_length = (int)StoH(ihdr->inq_page_length);
+    char *page_name = get_inquiry_page_name(device_type, page_code, iop->vendor_id);
+    uint8_t *ucp = NULL;
+    int length = 0;
+    int offset = 0;
+    hbool_t bool_value;
+    uint32_t value32 = 0;
+    uint64_t value64 = 0;
+    int status = SUCCESS;
+
+    /*
+     * Acquire the device size for decoding blocks to bytes.
+     */
+    if ( !iop->device_size || !iop->device_capacity) {
+	status = GetCapacity(sdp, iop);
+	if (status != SUCCESS) return(status);
+    }
+
+    if (sdp->output_format == JSON_FMT) {
+	char *json_string = NULL;
+	json_string = inquiry_block_limits_to_json(sdp, iop, sgp, ihdr, page_name);
+	if (json_string) {
+	    PrintLines(sdp, json_string);
+	    Printnl(sdp);
+	    json_free_serialized_string(json_string);
+	}
+	return(status);
+    }
+    offset = PrintInquiryPageHeader(sdp, offset, ihdr, iop->vendor_id);
+
+    if (sdp->DebugFlag) {
+	Printf(sdp, "\n");
+	ucp = (uint8_t *)ihdr + sizeof(*ihdr);
+	length = page_length;
+	offset = PrintHexDebug(sdp, offset, ucp, length);
+    }
+
+    blp = (inquiry_block_limits_page_t *)inquiry_page->inquiry_page_data;
+
+    PrintBoolean(sdp, False, "Write Same No Zero", blp->wsnz, PNL);
+    if (blp->reserved_byte4_b1_7 || sdp->DebugFlag) {
+        PrintHex(sdp, "Reserved (byte 4, bits 1:7)", blp->reserved_byte4_b1_7, PNL);
+    }
+    PrintDecimal(sdp, "Maximum Compare and Write Length", blp->max_caw_len, DNL);
+    Print(sdp, " block%s\n", (blp->max_caw_len > 1) ? "s" : "");
+    PrintDecimal(sdp, "Optimal Transfer Length Granularity", (uint16_t)StoH(blp->opt_xfer_len_granularity), DNL);
+    Print(sdp, " blocks\n");
+    PrintDecimal(sdp, "Maximum Transfer Length", (uint32_t)StoH(blp->max_xfer_len), DNL);
+    Print(sdp, " blocks\n");
+    PrintDecimal(sdp, "Optimal Transfer Length", (uint32_t)StoH(blp->opt_xfer_len), DNL);
+    Print(sdp, " blocks\n");
+    PrintDecimal(sdp, "Maximum Prefetch Transfer Length", (uint32_t)StoH(blp->max_prefetch_xfer_len), DNL);
+    Print(sdp, " blocks\n");
+    value32 = (uint32_t)StoH(blp->max_unmap_lba_count);
+    PrintDecimal(sdp, "Maximum Unmap LBA Count", value32, DNL);
+    if (value32) {
+	Print(sdp, " blocks (%u bytes)\n", (value32 * iop->device_size));
+    } else {
+	Print(sdp, "\n");
+    }
+    PrintDecimal(sdp, "Maximum Unmap Descriptor Count", (uint32_t)StoH(blp->max_unmap_descriptor_count), PNL);
+    value32 = (uint32_t)StoH(blp->optimal_unmap_granularity);
+    PrintDecimal(sdp, "Optimal Unmap Granularity", value32, DNL);
+    Print(sdp, " blocks\n");
+    value32 = (uint32_t)StoH(blp->unmap_granularity_alignment);
+    bool_value = (value32 & UGAVALID_BIT) ? True : False;
+    PrintBoolean(sdp, False, "Unmap Granularity Alignment Valid", bool_value, PNL);
+    value32 &= ~UGAVALID_BIT;
+    PrintDecimal(sdp, "Unmap Granularity Alignment", value32, PNL);
+    value64 = StoH(blp->max_unmap_lba_count);
+    PrintLongDec(sdp, "Maximum Write Same Length", value64, DNL);
+    if (value64) {
+	Print(sdp, " blocks ("LUF" bytes)\n", (value64 * iop->device_size));
+    } else {
+	Print(sdp, "\n");
+    }
+    PrintDecimal(sdp, "Maximum Atomic Transfer Length", (uint32_t)StoH(blp->max_atomic_xfer_len), PNL);
+    PrintDecimal(sdp, "Atomic Alignment", (uint32_t)StoH(blp->atomic_alignment), PNL);
+    PrintDecimal(sdp, "Atomic Transfer Length Granularity", (uint32_t)StoH(blp->atomic_xfer_len_granulatity), PNL);
+    PrintDecimal(sdp, "Maximum Atomic Transfer Boundary", (uint32_t)StoH(blp->max_atomic_len_boundary), PNL);
+    PrintDecimal(sdp, "Maximum Atomic Boundary Size", (uint32_t)StoH(blp->max_atomic_boundary_size), PNL);
+    Printf(sdp, "\n");
+    return(status);
+}
+
+char *
+inquiry_block_limits_to_json(scsi_device_t *sdp, io_params_t *iop,
+			     scsi_generic_t *sgp, inquiry_header_t *ihdr, char *page_name)
+{
+    inquiry_page_t *inquiry_page = (inquiry_page_t *)ihdr;
+    inquiry_block_limits_page_t *blp = NULL;;
+    JSON_Value	*root_value;
+    JSON_Object *root_object;
+    JSON_Value  *value;
+    JSON_Object *object;
+    JSON_Status json_status;
+    char *json_string = NULL;
+    int page_length = (int)StoH(ihdr->inq_page_length);
+    char text[STRING_BUFFER_SIZE];
+    uint8_t *ucp = NULL;
+    int length = 0;
+    int offset = 0;
+    hbool_t bool_value;
+    uint32_t value32 = 0;
+
+    root_value  = json_value_init_object();
+    if (root_value == NULL) return(NULL);
+    root_object = json_value_get_object(root_value);
+
+    value  = json_value_init_object();
+    if (value == NULL) {
+	json_value_free(root_value);
+	return(NULL);
+    }
+    json_status = json_object_dotset_value(root_object, page_name, value);
+    object = json_value_get_object(value);
+
+    ucp = (uint8_t *)ihdr;
+    length = page_length + sizeof(*ihdr);
+    json_status = json_object_set_number(object, "Length", (double)length);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Offset", (double)offset);
+    if (json_status != JSONSuccess) goto finish;
+    offset = FormatHexBytes(text, offset, ucp, length);
+    json_status = json_object_set_string(object, "Bytes", text);
+    if (json_status != JSONSuccess) goto finish;
+
+    json_status = PrintInquiryPageHeaderJson(sdp, object, ihdr);
+    if (json_status != JSONSuccess) goto finish;
+
+    blp = (inquiry_block_limits_page_t *)inquiry_page->inquiry_page_data;
+
+    json_status = json_object_set_boolean(object, "Write Same No Zero", blp->wsnz);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Reserved (byte 4, bits 1:7)", (double)blp->reserved_byte4_b1_7);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Maximum Compare and Write Length", (double)blp->max_caw_len);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Optimal Transfer Length Granularity", (double)StoH(blp->opt_xfer_len_granularity));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Maximum Transfer Length", (double)StoH(blp->max_xfer_len));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Optimal Transfer Length", (double)StoH(blp->opt_xfer_len));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Maximum Prefetch Transfer Length", (double)StoH(blp->max_prefetch_xfer_len));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Maximum Unmap LBA Count", (double)StoH(blp->max_unmap_lba_count));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Maximum Unmap Descriptor Count", (double)StoH(blp->max_unmap_descriptor_count));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Optimal Unmap Granularity", (double)StoH(blp->optimal_unmap_granularity));
+    if (json_status != JSONSuccess) goto finish;
+    value32 = (uint32_t)StoH(blp->unmap_granularity_alignment);
+    bool_value = (value32 & UGAVALID_BIT) ? True : False;
+    json_status = json_object_set_boolean(object, "Unmap Granularity Alignment Valid", bool_value);
+    if (json_status != JSONSuccess) goto finish;
+    value32 &= ~UGAVALID_BIT;
+    json_status = json_object_set_number(object, "Unmap Granularity Alignment", (double)value32);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Maximum Write Same Length", (double)StoH(blp->max_write_same_len));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Maximum Atomic Transfer Length", (double)StoH(blp->max_atomic_xfer_len));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Atomic Alignment", (double)StoH(blp->atomic_alignment));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Atomic Transfer Length Granularity", (double)StoH(blp->atomic_xfer_len_granulatity));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Maximum Atomic Transfer Boundary", (double)StoH(blp->max_atomic_len_boundary));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Maximum Atomic Boundary Size", (double)StoH(blp->max_atomic_boundary_size));
+
+finish:
+    (void)json_object_set_number(object, "JSON Status", (double)json_status);
+    if (sdp->json_pretty) {
+	json_string = json_serialize_to_string_pretty(root_value);
+    } else {
+	json_string = json_serialize_to_string(root_value);
+    }
+    json_value_free(root_value);
+    return(json_string);
+}
+
+/* ============================================================================================== */
+
+int
+inquiry_logical_block_provisioning_decode(scsi_device_t *sdp, io_params_t *iop,
+					  scsi_generic_t *sgp, inquiry_header_t *ihdr)
+{
+    inquiry_page_t *inquiry_page = (inquiry_page_t *)ihdr;
+    inquiry_logical_block_provisioning_page_t *lbp = NULL;;
+    uint8_t device_type = iop->sip->si_inquiry->inq_dtype;
+    uint8_t page_code = ihdr->inq_page_code;
+    int page_length = (int)StoH(ihdr->inq_page_length);
+    char *page_name = get_inquiry_page_name(device_type, page_code, iop->vendor_id);
+    char *textp = NULL;
+    uint8_t *ucp = NULL;
+    int length = 0;
+    int offset = 0;
+    int status = SUCCESS;
+    uint32_t value32 = 0;
+
+    if (sdp->output_format == JSON_FMT) {
+	char *json_string = NULL;
+	json_string = inquiry_logical_block_provisioning_to_json(sdp, iop, sgp, ihdr, page_name);
+	if (json_string) {
+	    PrintLines(sdp, json_string);
+	    Printnl(sdp);
+	    json_free_serialized_string(json_string);
+	}
+	return(status);
+    }
+    offset = PrintInquiryPageHeader(sdp, offset, ihdr, iop->vendor_id);
+
+    if (sdp->DebugFlag) {
+	Printf(sdp, "\n");
+	ucp = (uint8_t *)ihdr + sizeof(*ihdr);
+	length = page_length;
+	offset = PrintHexDebug(sdp, offset, ucp, length);
+    }
+
+    lbp = (inquiry_logical_block_provisioning_page_t *)inquiry_page->inquiry_page_data;
+
+    PrintDecimal(sdp, "Threshold Exponent", lbp->threshold_exponent, PNL);
+    PrintBoolean(sdp, False, "Descriptor Present", lbp->dp, PNL);
+    PrintBoolean(sdp, False, "Anchor Supported", lbp->anc_sup, PNL);
+    switch (lbp->lbprz) {
+	case LBPRZ_UNMAPPED_VENDOR_SPECIFIC:
+            textp = "Unmapped LBAs is vendor specific";
+	    break;
+	case LBPRZ_UNMAPPED_INITIALIZED_PATTERN:
+            textp = "Unmapped LBAs set to provisioning initialization pattern";
+            break;
+	default:
+	    if (lbp->lbprz & LBPRZ_UNMAPPED_READ_AS_ZERO_MASK) {
+        	textp = "Unmapped LBAs read as zero";
+	    } else {
+        	textp = "<unknown>";
+	    }
+            break;
+    }
+    PrintDecimal(sdp, "Logical Block Read Zero", lbp->lbprz, DNL);
+    Print(sdp, " (%s)\n", textp);
+    PrintBoolean(sdp, False, "Write Same 10 Supported", lbp->lbpws10, PNL);
+    PrintBoolean(sdp, False, "Write Same 16 Supported", lbp->lbpws, PNL);
+    PrintBoolean(sdp, False, "Unmap Supported", lbp->lbpu, PNL);
+    switch (lbp->provisioning_type) {
+	case PROVISIONING_TYPE_NOT_REPORTED_OR_FULL:
+            textp = "Not reported or full";
+            break;
+	case PROVISIONING_TYPE_RESOURCE_PROVISIONED:
+            textp = "Resource provisioned";
+            break;
+	case PROVISIONING_TYPE_IS_THIN_PROVISIONED:
+            textp = "Thin provisioned";
+            break;
+	default:
+            textp = "<unknown>";
+            break;
+    }
+    PrintDecimal(sdp, "Provisioning Type", lbp->provisioning_type, DNL);
+    Print(sdp, " (%s)\n", textp);
+    PrintDecimal(sdp, "Minimum percentage", lbp->minimum_percentage, PNL);
+    PrintDecimal(sdp, "Threshold Percentage", lbp->threshold_percentage, PNL);
+    Printf(sdp, "\n");
+    return(status);
+}
+
+char *
+inquiry_logical_block_provisioning_to_json(scsi_device_t *sdp, io_params_t *iop,
+					   scsi_generic_t *sgp, inquiry_header_t *ihdr, char *page_name)
+{
+    inquiry_page_t *inquiry_page = (inquiry_page_t *)ihdr;
+    inquiry_logical_block_provisioning_page_t *lbp = NULL;;
+    JSON_Value	*root_value;
+    JSON_Object *root_object;
+    JSON_Value  *value;
+    JSON_Object *object;
+    JSON_Status json_status;
+    char *json_string = NULL;
+    int page_length = (int)StoH(ihdr->inq_page_length);
+    char text[STRING_BUFFER_SIZE];
+    char *textp = NULL;
+    uint8_t *ucp = NULL;
+    int length = 0;
+    int offset = 0;
+    uint32_t value32 = 0;
+
+    root_value  = json_value_init_object();
+    if (root_value == NULL) return(NULL);
+    root_object = json_value_get_object(root_value);
+
+    value  = json_value_init_object();
+    if (value == NULL) {
+	json_value_free(root_value);
+	return(NULL);
+    }
+    json_status = json_object_dotset_value(root_object, page_name, value);
+    object = json_value_get_object(value);
+
+    ucp = (uint8_t *)ihdr;
+    length = page_length + sizeof(*ihdr);
+    json_status = json_object_set_number(object, "Length", (double)length);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Offset", (double)offset);
+    if (json_status != JSONSuccess) goto finish;
+    offset = FormatHexBytes(text, offset, ucp, length);
+    json_status = json_object_set_string(object, "Bytes", text);
+    if (json_status != JSONSuccess) goto finish;
+
+    json_status = PrintInquiryPageHeaderJson(sdp, object, ihdr);
+    if (json_status != JSONSuccess) goto finish;
+
+    lbp = (inquiry_logical_block_provisioning_page_t *)inquiry_page->inquiry_page_data;
+
+    json_object_set_number(object, "Threshold Exponent", (double)lbp->threshold_exponent);
+    json_status = json_object_set_boolean(object, "Descriptor Present", lbp->dp);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_boolean(object, "Anchor Supported", lbp->anc_sup);
+    if (json_status != JSONSuccess) goto finish;
+    switch (lbp->lbprz) {
+	case LBPRZ_UNMAPPED_VENDOR_SPECIFIC:
+            textp = "Unmapped LBAs is vendor specific";
+	    break;
+	case LBPRZ_UNMAPPED_INITIALIZED_PATTERN:
+            textp = "Unmapped LBAs set to provisioning initialization pattern";
+            break;
+	default:
+	    if (lbp->lbprz & LBPRZ_UNMAPPED_READ_AS_ZERO_MASK) {
+        	textp = "Unmapped LBAs read as zero";
+	    } else {
+        	textp = "<unknown>";
+	    }
+            break;
+    }
+    json_object_set_number(object, "Logical Block Read Zero", (double)lbp->lbprz);
+    json_status = json_object_set_string(object, "Logical Block Read Zero Description", textp);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_boolean(object, "Write Same 10 Supported", lbp->lbpws10);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_boolean(object, "Write Same 16 Supported", lbp->lbpws);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_boolean(object, "Unmap Supported", lbp->lbpu);
+    if (json_status != JSONSuccess) goto finish;
+    switch (lbp->provisioning_type) {
+	case PROVISIONING_TYPE_NOT_REPORTED_OR_FULL:
+            textp = "Not reported or full";
+            break;
+	case PROVISIONING_TYPE_RESOURCE_PROVISIONED:
+            textp = "Resource provisioned";
+            break;
+	case PROVISIONING_TYPE_IS_THIN_PROVISIONED:
+            textp = "Thin provisioned";
+            break;
+	default:
+            textp = "<unknown>";
+            break;
+    }
+    json_object_set_number(object, "Provisioning Type", (double)lbp->provisioning_type);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_string(object, "Provisioning Type Description", textp);
+    if (json_status != JSONSuccess) goto finish;
+    json_object_set_number(object, "Minimum percentage", (double)lbp->minimum_percentage);
+    if (json_status != JSONSuccess) goto finish;
+    json_object_set_number(object, "Threshold Percentage", (double)lbp->threshold_percentage);
+
+finish:
+    (void)json_object_set_number(object, "JSON Status", (double)json_status);
+    if (sdp->json_pretty) {
+	json_string = json_serialize_to_string_pretty(root_value);
+    } else {
+	json_string = json_serialize_to_string(root_value);
+    }
+    json_value_free(root_value);
+    return(json_string);
+}
+
 /* ============================================================================================== */
 
 static struct device_types {
@@ -1329,6 +1975,7 @@ GetDeviceTypeCode(scsi_device_t *sdp, char *device_type, int *status)
     size_t length = strlen(device_type);
     int i;
 
+    *status = SUCCESS;
     if (length == 0) {
 	Printf(sdp, "\n");
 	Printf(sdp, "Device Type Codes/Names:\n");
@@ -1374,8 +2021,8 @@ typedef struct inquiry_page_entry {
 inquiry_page_entry_t inquiry_page_table[] = {
     { INQ_ALL_PAGES, 		ALL_DEVICE_TYPES,	VID_ALL,	"Supported",		"supported"		},
     { INQ_SERIAL_PAGE,		ALL_DEVICE_TYPES,	VID_ALL,	"Serial Number",	"serial"		},
-    { INQ_DEVICE_PAGE,		ALL_DEVICE_TYPES,	VID_ALL,	"Device Identification","deviceid"		},
     { INQ_IMPOPR_PAGE,		ALL_DEVICE_TYPES,	VID_ALL,	"Implemented Operating Definitions", "implemented" },
+    { INQ_DEVICE_PAGE,		ALL_DEVICE_TYPES,	VID_ALL,	"Device Identification","deviceid"		},
     { INQ_ASCOPR_PAGE,		ALL_DEVICE_TYPES,	VID_ALL,	"ASCII Operating Definitions", "ascii_operating" },
     { INQ_SOFT_INT_ID_PAGE,	ALL_DEVICE_TYPES,	VID_ALL,	"Software Interface Identification", "software_interface" },
     { INQ_MGMT_NET_ADDR_PAGE,	ALL_DEVICE_TYPES,	VID_ALL,	"Management Network Addresses", "mgmt_network"	},
@@ -1385,9 +2032,9 @@ inquiry_page_entry_t inquiry_page_table[] = {
     { INQ_ATA_INFO_PAGE,	ALL_DEVICE_TYPES,	VID_ALL,	"ATA Information",	"ata_information"	},
     { INQ_POWER_CONDITION,	ALL_DEVICE_TYPES,	VID_ALL,	"Power Condition",	"power_condition"	},
     { INQ_POWER_CONSUMPTION,	ALL_DEVICE_TYPES,	VID_ALL,	"Power Consumption",	"power_consumption"	},
+    { INQ_THIRD_PARTY_COPY,	ALL_DEVICE_TYPES,	VID_ALL,	"Third Party Copy",	"third_party_copy"	},
     { INQ_PROTO_LUN_INFO,	ALL_DEVICE_TYPES,	VID_ALL,	"Protocol Logical Unit Information", "protocol_lun_info" },
     { INQ_PROTO_PORT_INFO,	ALL_DEVICE_TYPES,	VID_ALL,	"Protocol Specific Port Information", "protocol_port_info" },
-    { INQ_THIRD_PARTY_COPY,	ALL_DEVICE_TYPES,	VID_ALL,	"Third Party Copy",	"third_party_copy"	},
     { INQ_BLOCK_LIMITS_PAGE,	ALL_DEVICE_TYPES,	VID_ALL,	"Block Limits",		"block_limits"		},
     { INQ_BLOCK_CHAR_VPD_PAGE,	ALL_DEVICE_TYPES,	VID_ALL,	"Block Device Characteristics VPD", "block_char_vpd" },
     { INQ_LOGICAL_BLOCK_PROVISIONING_PAGE, ALL_DEVICE_TYPES, VID_ALL,	"Logical Block Provisioning", "logical_block_prov" }

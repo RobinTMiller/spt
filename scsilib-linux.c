@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2020			    *
+ *			  COPYRIGHT (c) 2006 - 2021			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -31,6 +31,13 @@
  *  This module contains the OS SCSI specific functions for Linux.
  *
  * Modification History:
+ * 
+ * January 5th, 2021 by Robin T. Miller
+ *      Remove extra DecodeTargetPortIdentifier() in find_scsi_devices(),
+ * left over by accident, after refactoring code.
+ * 
+ * May 13th, 2020 by Robin T. Miller
+ *      Fix parameters for sending SG_SCSI_RESET_TARGET (device reset) ioctl().
  * 
  * July 8th, 2019 by Robin T. Miller
  *      Update find_scsi_devices() to close file descriptors in error paths.
@@ -487,7 +494,7 @@ os_reset_device(scsi_generic_t *sgp)
     int arg = SG_SCSI_RESET_TARGET;
     int error;
 
-    if ( (error = ioctl(sgp->fd, SG_SCSI_RESET_TARGET, &arg)) < 0) {
+    if ( (error = ioctl(sgp->fd, SG_SCSI_RESET, &arg)) < 0) {
 	sgp->os_error = errno;
 	if (sgp->errlog == True) {
 	    os_perror(opaque, "SCSI reset device (SG_SCSI_RESET_TARGET) failed on %s!", dsf);
@@ -1197,7 +1204,7 @@ static scsi_dir_path_t scsi_dir_paths[] = {
     {	DEV_PATH,		"sg",	"SCSI Device",	True	},
     {	DEV_PATH,		"dm",	"DMMP Device",	False	},
     {	DMMP_PATH_PREFIX,	NULL,	"DMMP Device",	True	},
-    {	NULL,		NULL		}
+    {	NULL,			NULL				}
 };
 
 char *
@@ -1578,11 +1585,6 @@ find_scsi_devices(scsi_generic_t *sgp, char *devpath, char *scsi_name, scsi_filt
 	    }
  
 	    /*
-	     * For SAS protocol, the target port is the drive SAS address.
-	     */
-	    target_port = DecodeTargetPortIdentifier(opaque, inquiry, inquiry_page);
-
-	    /*
 	     * Get the full firmware version string. 
 	     * Note: This provides 8 character string versus truncated Inquiry revision! 
 	     */
@@ -1793,7 +1795,9 @@ find_device_entry(scsi_generic_t *sgp, char *path, char *serial,
 		return( sdep );
 	    }
 	}
-	if (serial && sdep->sde_serial) {
+	/* Do not do lookup by serial number, if we have a device ID. */
+	/* Note: Some storage, like 3PAR, use same serial number across LUNs! */
+	if ( (device_id == NULL) && serial && sdep->sde_serial) {
 	    if (strcmp(sdep->sde_serial, serial) == 0) {
 		return( sdep );
 	    }

@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2019			    *
+ *			  COPYRIGHT (c) 2006 - 2021			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -194,16 +194,8 @@ extern void os_syslog(int priority, char *format, ...);
 #define os_set_timer_resolution(value)      True
 #define os_reset_timer_resolution(value)    True
 
-#if defined(INLINE_FUNCS)
-#define os_create_directory(dir_path, permissions) \
-			    mkdir(dir_path, permissions)
-
-#define os_remove_directory(dir_path) \
-			    rmdir(dir_path)
-#else /* !defined(INLINE_FUNCS) */
 extern int os_create_directory(char *dir_path, int permissions);
 extern int os_remove_directory(char *dir_path);
-#endif /* defined(INLINE_FUNCS) */
 
 extern int os_lock_file(HANDLE fd, Offset_t start, Offset_t length, int lock_type);
 extern int os_unlock_file(HANDLE fd, Offset_t start, Offset_t length);

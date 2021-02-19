@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2020			    *
+ *			  COPYRIGHT (c) 2006 - 2021			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -110,6 +110,8 @@ void Help(scsi_device_t *sdp)
 
     P (sdp, "\tcdb='hh hh ...'       The SCSI CDB to execute.\n");
     P (sdp, "\tcdbsize=value         The CDB size (overrides auto set).\n");
+    P (sdp, "\tcapacity=value        Set the device capacity in bytes.\n");
+    P (sdp, "\tcapacityp=value       Set capacity by percentage (range: 0-100).\n");
     P (sdp, "\tdir=direction         Data direction {none|read|write}.\n");
     P (sdp, "\tiomode=mode           Set I/O mode to: {copy, mirror, test, or verify}.\n");
     P (sdp, "\tlength=value          The data length to read or write.\n");
@@ -151,7 +153,17 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\tshowopcodes           Display the SCSI operation codes.\n");
     P (sdp, "\n    Note: din/dout file can be '-' for stdin/stdout.\n");
 
+    P (sdp, "\n    Job Start Options:\n");
+    P (sdp, "\ttag=string            Specify job tag when starting tests.\n");
+    P (sdp, "\n    Job Control Options: (partial, compared to dt)\n");
+    P (sdp, "\tjobs[:full][={jid|tag}] | [job=value] | [tag=string]\n");
+    P (sdp, "\t                      Show all jobs or specified job.\n");
+    P (sdp, "\twait[={jid|tag}] | [job=value] | [tag=string]\n");
+    P (sdp, "\t                      Wait for all jobs or specified job.\n");
+
     P (sdp, "\n    Shorthand Commands:\n");
+    P (sdp, "\tcopyparams            Show copy operating parameters.\n");
+    P (sdp, "\tgetlbastatus          Show mapped/deallocated blocks.\n");
     P (sdp, "\tinquiry {page=value}  Show Inquiry or specific page.\n");
     P (sdp, "\tlogsense {page=value} Show Log pages supported or page.\n");
     P (sdp, "\tzerolog {page=value}  Zero all Log pages or specific page.\n");
@@ -159,9 +171,23 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\treadcapacity16        Show disk capacity (16 byte CDB).\n");
     P (sdp, "\trequestsense          Show request sense information.\n");
     P (sdp, "\trtpg                  Report target port groups.\n");
+    P (sdp, "\tread10                Read media (10 byte CDB).\n");
+    P (sdp, "\tread16                Read media (16 byte CDB).\n");
+    P (sdp, "\twrite10               Write media (10 byte CDB).\n");
+    P (sdp, "\twrite16               Write media (16 byte CDB).\n");
+    P (sdp, "\tverify10              Verify media (10 byte CDB).\n");
+    P (sdp, "\tverify16              Verify media (16 byte CDB).\n");
+    P (sdp, "\twritesame10           Write same (10 byte CDB).\n");
+    P (sdp, "\twritesame16           Write same (16 byte CDB).\n");
+    P (sdp, "\tunmap                 Unmap blocks.\n");
+    P (sdp, "\txcopy                 Extended copy (VMware XCOPY).\n");
+    P (sdp, "\twut or odx            Block ROD token (Windows ODX).\n");
+    P (sdp, "\tzerorod               Zero ROD token (unmaps blocks).\n");
     P (sdp, "\n    Examples:\n");
-    P (sdp, "\t# spt inquiry page=ascii_info\n");
+    P (sdp, "\t# spt inquiry page=block_limits\n");
     P (sdp, "\t# spt logsense page=protocol\n");
+    P (sdp, "\t# spt src=${SRC} dst=${DST} xcopy emit=multi limit=1g\n");
+    P (sdp, "\t# spt src=${SRC} dst=${DST} wut ofmt=json emit=multi limit=1g\n");
     P (sdp, "\n");
     P (sdp, "    Note: Only a few Inquiry/Log pages are decoded today!\n");
 
@@ -226,6 +252,7 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\tptype=string          The pattern type (only 'iot' now).\n");
     P (sdp, "\tending=value          The ending logical block address.\n");
     P (sdp, "\tstarting=value        The starting logical block address.\n");
+    P (sdp, "\tslice=value           The specific slice to operate upon.\n");
     P (sdp, "\tslices=value          The slices to divide capacity between.\n");
     P (sdp, "\tstep=value            The bytes to step after each request.\n");
 
@@ -253,9 +280,10 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\treadlength=value      The SCSI read length (in bytes).\n");
     P (sdp, "\treadtype=string       The SCSI read type (read8, read10, read16).\n");
     P (sdp, "\twritetype=string      The SCSI write type (write8, write10, write16, writev16).\n");
-    P (sdp, "\tlistid=value          The list identifier.\n");
+    P (sdp, "\tlistid=value          The destination list identifier.\n");
+    P (sdp, "\tslistid=value         The source list identifier.\n");
     P (sdp, "\tranges=value          The block device range descriptors.\n");
-    //P (sdp, "\trod_timeout=value     The ROD inactivity timeout (in secs).\n");
+    P (sdp, "\trod_timeout=value     The ROD inactivity timeout (in secs).\n");
     //P (sdp, "\trod_token=file        The extended copy ROD token file.\n");
     P (sdp, "\tsegments=value        The number of extended copy segments.\n");
     P (sdp, "\n");
@@ -358,6 +386,10 @@ void Help(scsi_device_t *sdp)
                                 (sgp->debug) ? enabled_str : disabled_str);
     P (sdp, "\tDebug            The program debug flag.    (Default: %s)\n",
                                 (DebugFlag) ? enabled_str : disabled_str);
+    P (sdp, "\tjdebug           Job control debug.         (Default: %s)\n",
+                                (sdp->jDebugFlag) ? enabled_str : disabled_str);
+    P (sdp, "\tmdebug           Memory related debug.      (Default: %s)\n",
+                                (mDebugFlag) ? enabled_str : disabled_str);
     P (sdp, "\txdebug           The extended debug flag.   (Default: %s)\n", disabled_str);
     P (sdp, "\tdecode           Decode control flag.       (Default: %s)\n", disabled_str);
     P (sdp, "\temit_all         Emit status all cmds.      (Default: %s)\n", disabled_str);
@@ -403,8 +435,10 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\twarnings         Warnings control flag.     (Default: %s)\n",
 			 	(sdp->warnings_flag) ? enabled_str : disabled_str);
     P (sdp, "\twait             Wait for SCSI status.      (Default: %s)\n", disabled_str);
-//  P (sdp, "\tzerorod          Zero ROD token flag.       (Default: %s)\n",
-//				(sdp->zero_rod_flag) ? enabled_str : disabled_str);
+    P (sdp, "\trrti_wut         RRTI after WUT flag.       (Default: %s)\n",
+				(sdp->rrti_wut_flag) ? enabled_str : disabled_str);
+    P (sdp, "\tzerorod          Zero ROD token flag.       (Default: %s)\n",
+				(sdp->zero_rod_flag) ? enabled_str : disabled_str);
 
     P (sdp, "\n    Operation Types:\n");
     P (sdp, "\tabort_task_set   Abort task set (ats).\n");
@@ -453,6 +487,7 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\t              %%cdb = The SCSI CDB bytes.\n");
     P (sdp, "\t              %%dir = The data direction.\n");
     P (sdp, "\t           %%length = The data length.\n");
+    P (sdp, "\t           %%device = The base device name.\n");
 #if defined(__linux__)
     P (sdp, "\t             %%adsf = The alternate special file.\n");
 #endif
@@ -694,10 +729,12 @@ void Help(scsi_device_t *sdp)
     P (sdp, "\t# spt cdb=42 starting=0 ranges=64 min=8 max=128 incr=8\n");
     P (sdp, "    Get LBA Status: (reports mapped/deallocated blocks)\n");
     P (sdp, "\t# spt cdb='9e 12' starting=0\n");
-    P (sdp, "    Extended Copy Operation: (non-token based, used by VMware)\n");
+    P (sdp, "    Extended Copy Operation: (non-token LID1 xcopy, used by VMware)\n");
     P (sdp, "\t# spt cdb=83 src=${SRC} starting=0 dst=${DST} starting=0 enable=compare,recovery,sense\n");
-    P (sdp, "    Extended Copy Operation: (token based, used by Microsoft, aka ODX)\n");
+    P (sdp, "    Extended Copy Operation: (ROD token xcopy, used by Microsoft, aka ODX)\n");
     P (sdp, "\t# spt cdb='83 11' src=${SRC} starting=0 dst=${DST} starting=0 enable=compare,recovery,sense\n");
+    P (sdp, "    Extended Copy Operation: (ROD Token, same disk)\n");
+    P (sdp, "\t# spt cdb='83 11' dsf=${DST} starting=0 enable=Debug,recovery,sense emit=default\n");
     P (sdp, "    Zero ROD Token: (10 slices, all blocks, space allocation needs enabled)\n");
     P (sdp, "\t# spt cdb='83 11' dsf=${DST} starting=0 enable=zerorod slices=10 enable=recovery,sense\n");
     P (sdp, "    Copy/Verify Source to Destination Device: (uses read/write operations)\n");

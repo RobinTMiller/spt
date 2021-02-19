@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2020			    *
+ *			  COPYRIGHT (c) 2006 - 2021			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -48,9 +48,6 @@
  * May 9th, 2010 by Robin T. Miller
  * 	Initial creation, moving defintions here from spt.c
  */
-#if defined(AIX)
-# include "aix_workaround.h"
-#endif /* defined(AIX) */
 
 /* I've seen inline, __inline, and __inline__ used! */
 #define INLINE		static __inline
@@ -89,12 +86,9 @@
 #include "inquiry.h"
 #include "scsi_opcodes.h"
 #include "scsi_ses.h"
-#if defined(_WIN32)
-#  include "spt_win.h"
-#else /* !defined(_WIN32) */
-#  include "spt_unix.h"
+#if !defined(_WIN32)
 #  include <pthread.h>
-#endif /* defined(_WIN32) */
+#endif /* !defined(_WIN32) */
 
 /* Note: spt_win.h or spt_unix.h included in include.h! */
 #include "include.h"
@@ -209,8 +203,6 @@ typedef enum onerr_control {
     ONERR_STOP				/* Stop execution on errors.    */
 } onerr_control_t;
 
-typedef enum thread_state {TS_NotQueued, TS_Queued} tstate_t;
-
 /* Separator between file name and file postfix. */
 #define DEFAULT_FILE_SEP	"-"
 /* Note: Used for a directory postfix and file postfix. */
@@ -223,12 +215,10 @@ typedef enum thread_state {TS_NotQueued, TS_Queued} tstate_t;
 #   define MAXHOSTNAMELEN	256
 #endif
 
-#if 0
 typedef enum job_state {JS_STOPPED, JS_RUNNING, JS_FINISHED, JS_PAUSED, JS_TERMINATING} jstate_t;
 typedef enum thread_state {TS_STOPPED, TS_STARTING, TS_RUNNING, TS_FINISHED, TS_JOINED, TS_PAUSED, TS_TERMINATING} tstate_t;
 typedef volatile jstate_t vjstate_t;
 typedef volatile tstate_t vtstate_t;
-#endif /* 0 */
 
 /*
  * Vendor Identification:
@@ -343,6 +333,8 @@ typedef struct {
     hbool_t	cloned_device;		/* The primary device is cloned.*/
     hbool_t	disable_length_check;	/* Disable length check flag.	*/
     int		scale_count;		/* Scale max CDB blocks value.	*/
+    uint64_t	user_capacity;		/* The user specified capacity.	*/
+    int		capacity_percentage;	/* The capacity percentage.	*/
     uint64_t	cdb_blocks;		/* The blocks per CDB.		*/
     uint64_t	device_capacity;	/* The device capacity.		*/
     uint32_t	device_size;		/* The device size (block size) */
@@ -382,9 +374,10 @@ typedef struct {
     uint64_t	saved_cdb_blocks;	/* The original blocks/cdb.	*/
     uint64_t	saved_starting_lba;	/* The starting logical block.	*/
     uint64_t	saved_ending_lba;	/* The ending logical block.	*/
-    uint32_t	saved_list_identifier;	/* The list identifier.		*/
+    uint32_t	saved_list_identifier;	/* The dest list identifier.	*/
     
     /* Slice Information: */
+    uint32_t    slice;                  /* The slice number.            */
     uint64_t	slice_lba;		/* Slice logical block number.	*/
     uint64_t	slice_length;		/* The length of each slice.	*/
     uint64_t	slice_resid;		/* The residual slice blocks.	*/
@@ -399,7 +392,15 @@ typedef struct {
     uint64_t	mapped_blocks;		/* The mapped blocks (data).	*/
     uint64_t	total_lba_blocks;	/* Total LBA blocks processed.	*/
 
-    /* Get Block Limits Parameters: */
+    /* Receive Copy Operating Parameters: (only what we use today) */
+    uint16_t	max_segment_descriptors;/* Max segment desc count.	*/
+    uint32_t	maximum_segment_length;	/* Maximum segment length.	*/
+
+    /* Inquiry Third Party Copy (Populate Token) Parameters: */
+    uint16_t	pt_max_range_descriptors; /* Max PT range descriptors.	*/
+    uint64_t	pt_max_token_transfer_size;/* Max PT token xfer size.	*/
+
+    /* Inquiry Block Limits Parameters: */
     uint32_t	max_unmap_lba_count;	/* The maximum unmap lba count.	*/
     uint32_t	optimal_unmap_granularity; /* Optimal unmap granularity.*/
     uint64_t	max_write_same_len;	/* The maximum write same len.	*/
@@ -453,6 +454,7 @@ typedef struct scsi_device {
     hbool_t	bypass;			/* Bypass sanity checks.	*/
     hbool_t	debug_flag;		/* Enable debug output flag.	*/
     hbool_t	DebugFlag;		/* The program debug flag.	*/
+    hbool_t	jDebugFlag; 		/* Job control debug flag.      */
     hbool_t	tDebugFlag;		/* Timer (alarm) debug flag.	*/
     hbool_t	xDebugFlag;		/* Extra program debug flag.	*/
     int		status;			/* The SCSI IOCTL status.	*/
@@ -607,6 +609,7 @@ typedef struct scsi_device {
      */ 
     char	*rod_token_file;	/* Extended copy token file.	*/
     hbool_t	rod_token_valid;	/* The ROD token is valid.	*/
+    hbool_t     rrti_wut_flag;          /* RRTI after WUT control flag. */
     hbool_t	zero_rod_flag;		/* Zero ROD token control flag.	*/
     uint8_t	*rod_token_data;	/* Copy of ROD token data.	*/
     uint32_t	rod_token_size;		/* Size of ROD token data.	*/
@@ -634,7 +637,7 @@ typedef struct scsi_device {
      */ 
     int		io_devices;		/* The number of IO devices.	*/
     hbool_t	io_same_lun;		/* Multiple devices, same LUN.	*/
-    hbool_t	io_multiple_sources;	/* Muletiple source devices.	*/
+    hbool_t	io_multiple_sources;	/* Multiple source devices.	*/
     io_params_t	io_params[MAX_DEVICES];	/* The I/O parameters.		*/
 
     /*
@@ -674,37 +677,26 @@ typedef struct scsi_device {
     int         emit_status_remaining;  /* The emit bytes remaining.    */
 } scsi_device_t;
 
-#if 0
 typedef struct threads_info {
     int		ti_threads;	/* The number of active threads.	*/
     int		ti_finished;	/* The number of finished threads.	*/
-    scsi_device_t **ti_sds;	/* Array of device info pointers.	*/
+    scsi_device_t *ti_sds;	/* Array of SCSI device structs.	*/
     int		ti_status;	/* Status from joined threads.		*/
 } threads_info_t;
+
+typedef uint32_t job_id_t;      /* In case we wish to change later. */
+
+/* Note: This is a subset of what dt uses for job control! */
 
 typedef struct job_info {
     struct job_info *ji_flink;	/* Forward link to next entry.  */
     struct job_info *ji_blink;	/* Backward link to prev entry. */
-    pthread_mutex_t ji_job_lock;/* Per job lock.		*/
     job_id_t	ji_job_id;	/* The job identifier.		*/
     vjstate_t	ji_job_state;	/* The job state.		*/
     int		ji_job_status;	/* The job status.		*/
     char	*ji_job_tag;	/* The users job tag.		*/
-    char	*ji_job_logfile;/* The job log file name.	*/
-    FILE	*ji_job_logfp;	/* The job log file pointer.	*/
-    time_t	ji_job_start;	/* The job start time.		*/
-    time_t	ji_job_end;	/* The job end time.		*/
-    pthread_mutex_t ji_print_lock;/* The job print lock.	*/
+    FILE	*ji_job_logfp;	/* Not implemented. */
     threads_info_t *ji_tinfo;	/* The thread(s) information.	*/
-    void        *ji_opaque;     /* Test specific opaque data.   */
-} job_info_t;
-#endif /* 0 */
-
-/* Note: Temporary definition to compile until job control is added! */
-typedef struct job_info {
-    int		ji_job_id;
-    char	*ji_job_tag;
-    FILE	*ji_job_logfp;
 } job_info_t;
 
 extern FILE *efp, *ofp;
@@ -717,13 +709,15 @@ extern clock_t hertz;
  */
 /* spt.c */
 extern char *OurName;
+extern pthread_attr_t *tdattrp, *tjattrp;
 extern hbool_t DebugFlag, InteractiveFlag, mDebugFlag, PipeModeFlag;
 extern volatile hbool_t CmdInterruptedFlag;
+extern void cleanup_devices(scsi_device_t *sdp, hbool_t master);
 /* Functions used for parsing. */
 extern int HandleExit(scsi_device_t *sdp, int status);
 extern hbool_t match(char **sptr, char *s);
-extern uint32_t number(scsi_device_t *sdp, char *str, int base);
-extern uint64_t large_number(scsi_device_t *sdp, char *str, int base);
+extern uint32_t number(scsi_device_t *sdp, char *str, int base, int *status, hbool_t report_error);
+extern uint64_t large_number(scsi_device_t *sdp, char *str, int base, int *status, hbool_t report_error);
 extern time_t mstime_value(scsi_device_t *sdp, char *str);
 extern time_t time_value(scsi_device_t *sdp, char *str);
 
@@ -735,12 +729,26 @@ extern uint8_t find_inquiry_page_code(scsi_device_t *sdp, char *page_name, int *
 extern char *GetDeviceType(uint8_t device_type, hbool_t full_name);
 extern uint8_t GetDeviceTypeCode(scsi_device_t *sdp, char *device_type, int *status);
 extern char *GetVendorSerialNumber(scsi_device_t *sdp, inquiry_t *inquiry);
+extern void PrintDesignatorInformation(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp);
 
 /* scsi_opcodes.c */
+extern int setup_extended_copy(scsi_device_t *sdp, scsi_generic_t *sgp);
+extern int setup_get_lba_status(scsi_device_t *sdp, scsi_generic_t *sgp);
 extern int setup_rtpg(scsi_device_t *sdp, scsi_generic_t *sgp);
 extern int setup_read_capacity10(scsi_device_t *sdp, scsi_generic_t *sgp);
 extern int setup_read_capacity16(scsi_device_t *sdp, scsi_generic_t *sgp);
+extern int setup_receive_copy_results(scsi_device_t *sdp, scsi_generic_t *sgp);
 extern int setup_request_sense(scsi_device_t *sdp, scsi_generic_t *sgp);
+extern int setup_unmap(scsi_device_t *sdp, scsi_generic_t *sgp);
+extern int setup_read10(scsi_device_t *sdp, scsi_generic_t *sgp);
+extern int setup_read16(scsi_device_t *sdp, scsi_generic_t *sgp);
+extern int setup_write10(scsi_device_t *sdp, scsi_generic_t *sgp);
+extern int setup_write16(scsi_device_t *sdp, scsi_generic_t *sgp);
+extern int setup_verify10(scsi_device_t *sdp, scsi_generic_t *sgp);
+extern int setup_verify16(scsi_device_t *sdp, scsi_generic_t *sgp);
+extern int setup_write_same10(scsi_device_t *sdp, scsi_generic_t *sgp);
+extern int setup_write_same16(scsi_device_t *sdp, scsi_generic_t *sgp);
+extern int setup_write_using_token(scsi_device_t *sdp, scsi_generic_t *sgp);
 extern void ShowScsiOpcodes(scsi_device_t *sdp, char *opstr);
 extern void init_swapped(      scsi_device_t   *sdp,
 			       void            *buffer,
@@ -755,6 +763,22 @@ extern char *FmtUnpackString(scsi_device_t *sdp, char *format, unsigned char *da
 #define FmtLogFile	FmtString
 #define FmtFilePath	FmtString
 #define FmtLogPrefix	FmtString
+
+/* spt_jobs.c */
+extern int initialize_jobs_data(scsi_device_t *sdp);
+extern int jobs_active(scsi_device_t *sdp);
+extern int execute_job(scsi_device_t *msdp, threads_info_t *tip);
+extern int show_jobs(scsi_device_t *sdp, job_id_t job_id, char *job_tag, hbool_t verbose);
+extern int show_job_by_id(scsi_device_t *sdp, job_id_t job_id);
+extern int show_job_by_tag(scsi_device_t *sdp, char *job_tag);
+extern int show_jobs_by_tag(scsi_device_t *sdp, char *job_tag);
+extern void show_job_info(scsi_device_t *sdp, job_info_t *job, hbool_t show_threads_flag);
+extern void show_threads_info(scsi_device_t *msdp, threads_info_t *tip);
+extern int wait_for_jobs(scsi_device_t *sdp, job_id_t job_id, char *job_tag);
+extern int wait_for_job_by_id(scsi_device_t *sdp, job_id_t job_id);
+extern int wait_for_job_by_tag(scsi_device_t *sdp, char *job_tag);
+extern int wait_for_jobs_by_tag(scsi_device_t *sdp, char *job_tag);
+extern int wait_for_threads(threads_info_t *tip);
 
 /* spt_mem.c */
 extern void report_nomem(scsi_device_t *sdp, size_t bytes);
@@ -814,7 +838,7 @@ extern int GetCapacity(scsi_device_t *sdp, io_params_t *iop);
 extern int initialize_multiple_devices(scsi_device_t *sdp);
 extern int sanity_check_src_dst_devices(scsi_device_t *sdp);
 extern int initialize_slices(scsi_device_t *sdp);
-extern void initialize_slice(scsi_device_t *sdp, scsi_device_t *tsdp);
+extern void initialize_slice(scsi_device_t *sdp, scsi_device_t *tsdp, uint32_t slice);
 
 /* spt_print.c */
 #include "spt_print.h"

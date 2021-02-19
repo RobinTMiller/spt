@@ -34,6 +34,9 @@
  *
  * Modification History:
  * 
+ * November 28th, 2020 by Robin T. Miller
+ *      Update XCOPY (LID1) with List ID Usage and definitions.
+ * 
  * January 5th, 2019 by Robin T. Miller
  *      Adding Get LBA Status, Unmap, and Report LUNs definitions.
  * 
@@ -1791,26 +1794,59 @@ typedef struct get_lba_status_cdb {
     uint8_t service_action;		/* Service action.		[1] */
     uint8_t start_lba[8];		/* Starting logicial block.   [2-9] */
     uint8_t allocation_length[4];	/* Allocation length.	    [10-13] */
-    uint8_t reserved_byte14;		/* Reserved.		       [14] */
+    uint8_t report_type;		/* Report type (SBC-4).	       [14] */
     uint8_t control;			/* Control.		       [15] */
 } get_lba_status_cdb_t;
 
+/* TODO: Define report type defintions. */
+
 typedef struct get_lba_status_param_data {
     uint8_t parameter_data_length[4];	/* Parameter data length.     [0-3] */
-    uint8_t reserved_bytes4_7[4];	/* Reserved.		      [4-7] */
+    uint8_t reserved_bytes4_6[3];	/* Reserved.		      [4-6] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t				/* SBC-4			[7] */
+        rtp			: 1,	/* Report type processed.      (b0) */
+        completion_condition	: 3,    /* Completion condition.      (1:3) */
+        reserved_bye7_b4_7	: 4;	/* Reserved.		      (4:4) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t				/* SBC-4			[7] */
+        reserved_bye7_b4_7	: 4,	/* Reserved.		      (4:4) */
+        completion_condition	: 3,    /* Completion condition.      (1:3) */
+        rtp			: 1;	/* Report type processed.      (b0) */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
 } get_lba_status_param_data_t;
 
+/*
+ * We'll request this many LBA Status Descriptors to optimize.
+ * Note: I can't remember why I defined this particular value. 
+ * TODO: Maybe change this to be variable sized via an option? 
+ */
 #define MAX_LBA_STATUS_DESC     650
 
 typedef struct lba_status_descriptor {
     uint8_t start_lba[8];		/* Starting logical block.	[0-7] */
-    uint8_t extent_length[4];		/* Extent length.	       [8-12] */
-    uint8_t provisioning_status;	/* Provisioning status.	         [13] */
-    uint8_t reserved_bytes14_16[3];	/* Reserved.		      [14-16] */
+    uint8_t extent_length[4];		/* Extent length.	       [8-11] */
+
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t				/*				 [12] */
+	provisioning_status	: 4,	/* Provisioning status.	       (b0:4) */
+        reserved_byte12_b4_7	: 4;	/* Reserved.		       (b4:4) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t				/*				 [12] */
+        reserved_byte12_b4_7	: 4,	/* Reserved.		       (b4:4) */
+	provisioning_status	: 4;	/* Provisioning status.	       (b0:4) */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+    uint8_t additional_status;		/* Additional status (SBC-4).	 [13] */
+    uint8_t reserved_bytes14_15[2];	/* Reserved.		      [14-15] */
 } lba_status_descriptor_t;
 
-#define SCSI_PROV_STATUS_MAPPED 0x0
-#define SCSI_PROV_STATUS_HOLE	0x1
+/*
+ * Provisioning Status Definitions:
+ */
+#define SCSI_PROV_STATUS_MAPPED		0x0	/* LBA extent is mapped.      */
+#define SCSI_PROV_STATUS_HOLE		0x1	/* LBA extent is deallocated. */
+#define SCSI_PROV_STATUS_ANCHORED	0x2	/* LBA extent is anchored.    */
+/* Note: Please update with SBC-4 status when time permits or is required! */
 
 /* ======================================================================== */
 /* Report LUN Definitions: */
@@ -1820,11 +1856,11 @@ typedef struct lba_status_descriptor {
 #define SCSI_LogicalUnitAddressing		0x2
 #define SCSI_ExtendedLogicalUnitAddressing	0x3
 
-#define SCSIT_REPORT_ALL_LUNS   0x0
-#define SCSIT_REPORT_WELL_KNOWN_LUNS 0x1
-#define SCSIT_REPORT_2          0x2
-#define SCSIT_REPORT_INDEPENDENT_LUS 0xFE
-#define SCSIT_REPORT_BOUND_VVOLS 0xFF
+#define SCSIT_REPORT_ALL_LUNS  			0x0
+#define SCSIT_REPORT_WELL_KNOWN_LUNS		0x1
+#define SCSIT_REPORT_2          		0x2
+#define SCSIT_REPORT_INDEPENDENT_LUS		0xFE
+#define SCSIT_REPORT_BOUND_VVOLS		0xFF
 
 typedef struct report_luns_cdb {
     uint8_t opcode;
@@ -2024,6 +2060,19 @@ typedef struct xcopy_cdb {
 } xcopy_cdb_t;
 
 /*
+ * Priority Definitions:
+ */
+#define XCOPY_HIGHEST_PRIORITY  0
+#define XCOPY_DEFAULT_PRIORITY  1
+
+/*
+ * List Identifier Usage Definitions:
+ */
+#define XCOPY_LISTID_HOLD	0
+#define XCOPY_LISTID_DISCARD	2
+#define XCOPY_LISTID_DISABLE	3
+
+/*
  * Extended Copy LID1 Parameters:
  */
 typedef struct xcopy_lid1_parameter_list {
@@ -2031,16 +2080,14 @@ typedef struct xcopy_lid1_parameter_list {
 #if defined(_BITFIELDS_LOW_TO_HIGH_)
     bitfield_t				/*				[1] */
 	priority        : 3,		/* Priority.		  	(b0:2) */
-	nlid            : 1,		/* No List Identifier.	   	(b3)   */
-	nrcr		: 1,		/* No Receive Copy Results	(b4)   */
+	listid_usage    : 2,		/* List ID Usage. 	  	(b3:4) */
 	str		: 1,		/* Sequential Striped.		(b5)   */
 	reserved_6_7    : 2;		/* Reserved bits.		(b6:7) */
 #elif defined(_BITFIELDS_HIGH_TO_LOW_)
     bitfield_t				/*				[1] */
 	reserved_6_7    : 2,		/* Reserved bits.		(b6:7) */
 	str		: 1,		/* Sequential Striped.		(b5)   */
-	nrcr	    	: 1,		/* No Receive Copy Results	(b4)   */
-	nlid            : 1,		/* No List Identifier.	   	(b3)   */
+	listid_usage    : 2,		/* List ID Usage.	   	(b3:4) */
 	priority        : 3;		/* Priority.		  	(b0:2) */
 #else
 #       error "bitfield ordering is NOT defined!"
@@ -2052,32 +2099,46 @@ typedef struct xcopy_lid1_parameter_list {
     //uint8_t desc_data[0];		/* CSCD and segment descriptors. */
 } xcopy_lid1_parameter_list_t;
 
+/* 
+ * Device type specific target descriptor parameters for block device types.
+ */
 typedef struct xcopy_type_spec_params {
-    uint8_t byte1;
-    uint8_t disk_block_length[3];
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t				/*				[28] */
+        reserved_byte28_0_1	: 2,	/* Reserved.		      (b0:1) */
+        pad			: 1,	/* Used with CAT bit.		(b2) */
+        reserved_byte28_3_7	: 5;	/* Reserved.		      (b3:7) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t				/*				[28] */
+        reserved_byte28_3_7	: 5,	/* Reserved.		      (b3:7) */
+	pad			: 1,	/* Used with CAT bit.		(b2) */
+        reserved_byte28_0_1	: 2;	/* Reserved.		      (b0:1) */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+    uint8_t disk_block_length[3];	/* Disk block length.	     [29-30] */
 } xcopy_type_spec_params_t;
 
 /* 
- * CSCD Type Codes Descriptors:
+ * Target CSCD Descriptor Type Codes: (Note: Copy Source or Copy Destination = CSCD)
  */
-#define XCOPY_CSCD_TYPE_CODE_FC_N_PORT_NAME	0xE0	/* Fibre Channel N_Port_Name.	*/
-#define XCOPY_CSCD_TYPE_CODE_FC_N_PORT_ID	0xE1	/* Fibre Channel N_Port_ID.	*/
-#define XCOPY_CSCD_TYPE_CODE_FC_N_PORT_ID_NAME	0xE2	/* Fibre Channel N_Port_ID w/N_Port_Name checking. */
-#define XCOPY_CSCD_TYPE_CODE_PARALLEL_INT_T_L	0xE3	/* Parallel Interface T_L.	*/
-#define XCOPY_CSCD_TYPE_CODE_IDENTIFICATION	0xE4	/* Identification Descriptor.	*/
-#define XCOPY_CSCD_TYPE_CODE_IPV4		0xE5	/* IPv4.			*/
-#define XCOPY_CSCD_TYPE_CODE_ALIAS		0xE6	/* Alias.			*/
-#define XCOPY_CSCD_TYPE_CODE_RDMA		0xE7	/* RDMA.			*/
-#define XCOPY_CSCD_TYPE_CODE_IEEE_EUI_64	0xE8	/* IEEE 1394 EUI-64.		*/
-#define XCOPY_CSCD_TYPE_CODE_SAS_SERIAL_SCSI	0xE9	/* SAS Serial SCSI Protocol.	*/
-#define XCOPY_CSCD_TYPE_CODE_IPV6		0xEA	/* IPv6 CSCD descriptor.	*/
-#define XCOPY_CSCD_TYPE_CODE_COPY_SERVICE	0xEB	/* IP Copy Service.		*/
-// 0xEC to FDh Reserved for CSCD descriptors
-// 0xFE ROD CSCD descriptor
+#define TARGET_CSCD_TYPE_CODE_FC_N_PORT_NAME	0xE0	/* Fibre Channel N_Port_Name.	*/
+#define TARGET_CSCD_TYPE_CODE_FC_N_PORT_ID	0xE1	/* Fibre Channel N_Port_ID.	*/
+#define TARGET_CSCD_TYPE_CODE_FC_N_PORT_ID_NAME	0xE2	/* Fibre Channel N_Port_ID w/N_Port_Name checking. */
+#define TARGET_CSCD_TYPE_CODE_PARALLEL_INT_T_L	0xE3	/* Parallel Interface T_L.	*/
+#define TARGET_CSCD_TYPE_CODE_IDENTIFICATION	0xE4	/* Identification Descriptor.	*/
+#define TARGET_CSCD_TYPE_CODE_IPV4		0xE5	/* IPv4.			*/
+#define TARGET_CSCD_TYPE_CODE_ALIAS		0xE6	/* Alias.			*/
+#define TARGET_CSCD_TYPE_CODE_RDMA		0xE7	/* RDMA.			*/
+#define TARGET_CSCD_TYPE_CODE_IEEE_EUI_64	0xE8	/* IEEE 1394 EUI-64.		*/
+#define TARGET_CSCD_TYPE_CODE_SAS_SERIAL_SCSI	0xE9	/* SAS Serial SCSI Protocol.	*/
+#define TARGET_CSCD_TYPE_CODE_IPV6		0xEA	/* IPv6 CSCD descriptor.	*/
+#define TARGET_CSCD_TYPE_CODE_COPY_SERVICE	0xEB	/* IP Copy Service.		*/
+#define TARGET_CSCD_TYPE_CODE_RESERVED_START	0xEC
+#define TARGET_CSCD_TYPE_CODE_RESERVED_END	0xFD
+#define TARGET_CSCD_TYPE_CODE_ROD		0xFE	/* ROD */
 
 #define XCOPY_ASSOCIATION_SHIFT		6
 
-/* CSCD Descriptor Type Codes Definitions. (NAA?) */
+/* CSCD Descriptor Type Code (NAA) Descriptor: (SPC-3, not currently used!) */
 typedef struct xcopy_id_cscd_desc {
     uint8_t desc_type_code;		/* Descriptor type code.	[0] */
 #if defined(_BITFIELDS_LOW_TO_HIGH_)
@@ -2097,12 +2158,12 @@ typedef struct xcopy_id_cscd_desc {
     uint8_t designator_type;		/* Designator type (VPD 0x83)	[5] */
     uint8_t reserved_byte6;		/* Reserved.			[6] */
     uint8_t designator_length;		/* Designator length.		[7] */
-    uint8_t designator[16];		/* Desigator (VPD page 0x83).	[8] */
-    uint8_t reserved_24_27[4];		/* Reserved.			[9-12] */
+    uint8_t designator[16];		/* Desigator (VPD page 0x83).	[8-n] */
+    uint8_t reserved_24_27[4];		/* Reserved. (SPC-3)		[9-12] */
     xcopy_type_spec_params_t type_spec_params; /* Type specific parameters. */
 } xcopy_id_cscd_desc_t;
 
-/* CSCD Identification Descriptor Type Code Definitions. */
+/* CSCD Identification Descriptor Type Code (0xE4) Descriptor: (SPC-4) */
 typedef struct xcopy_id_cscd_ident_desc {
     uint8_t desc_type_code;		/* Descriptor type code.	[0] */
 #if defined(_BITFIELDS_LOW_TO_HIGH_)
@@ -2142,16 +2203,53 @@ typedef struct xcopy_id_cscd_ident_desc {
 } xcopy_id_cscd_ident_desc_t;
 
 /*
- * Segment Descriptor Definitions:
+ * Segment Descriptor Type Definitions: (SPC4r27a)
  */
-#define XCOPY_DESC_TYPE_CODE_BLOCK_TO_BLOCK_SEG_DESC	0x02
+#define SEGMENT_DESC_TYPE_COPY_BLOCK_TO_STREAM	0x00	/* Copy from block device to stream device */
+#define SEGMENT_DESC_TYPE_COPY_STREAM_TO_BLOCK	0x01	/* Copy from stream device to block device */
+#define SEGMENT_DESC_TYPE_COPY_BLOCK_TO_BLOCK		0x02	/* Copy from block device to block device */
+#define SEGMENT_DESC_TYPE_COPY_STREAM_TO_STREAM	0x03	/* Copy from stream device to stream device */
+#define SEGMENT_DESC_TYPE_COPY_INLINE_DATA_TO_STREAM	0x04	/* Copy inline data to stream device */
+#define SEGMENT_DESC_TYPE_COPY_EMBEDDED_TO_STREAM	0x05	/* Copy embedded data to stream device */
+#define SEGMENT_DESC_TYPE_READ_STREAM_DISCARD		0x06	/* Read from stream device and discard 	*/
+#define SEGMENT_DESC_TYPE_VERIFY_CSCD			0x07	/* Verify CSCD */
+#define SEGMENT_DESC_TYPE_COPY_BLOCK_OFFSET_TO_STREAM 0x08	/* Copy block device with offset to stream device. */
+#define SEGMENT_DESC_TYPE_COPY_STREAM_TO_BLOCK_OFFSET 0x09	/* Copy stream device to block device with offset. */
+#define SEGMENT_DESC_TYPE_COPY_BLOCK_OFFSET_TO_BLOCK_OFFSET 0x0A /* Copy block device with offset to block device with offset. */
+#define SEGMENT_DESC_TYPE_COPY_BLOCK_TO_STREAM_HOLD_COPY 0x0B /* Copy from block device to stream device and hold a copy of processed data for the application client */
+#define SEGMENT_DESC_TYPE_COPY_STREAM_TO_BLOCK_HOLD_COPY 0x0C /* Copy from stream device to block device and hold a copy of processed data for the application client */
+#define SEGMENT_DESC_TYPE_COPY_BLOCK_TO_BLOCK_HOLD_COPY 0x0D /* Copy from block device to block device and hold a copy of processed data for the application client */
+#define SEGMENT_DESC_TYPE_COPY_STREAM_TO_STREAM_HOLD_COPY 0x0E /* Copy from stream device to stream device and hold a copy of processed data for the application client */
+#define SEGMENT_DESC_TYPE_READ_STREAM_HOLD_COPY	0x0F	/* Read from stream device and hold a copy of processed data for the application client. */
+#define SEGMENT_DESC_TYPE_WRITE_FM_TO_SEQUENTIAL	0x10	/* Write filemarks to sequential-access device */
+#define SEGMENT_DESC_TYPE_SPACE_RECORDS_ON_SEQUENTIAL	0x11	/* Space records or filemarks on sequential-access */
+#define SEGMENT_DESC_TYPE_LOCATE_ON_SEQUENTIAL	0x12	/* Locate on sequential-access device */
+#define SEGMENT_DESC_TYPE_TAPE_IMAGE_COPY		0x13	/* Tape device image copy  */
+#define SEGMENT_DESC_TYPE_REGISTER_PERSISTEMT_RESERVATION_KEY	0x14 /* Register persistent reservation key */
+#define SEGMENT_DESC_TYPE_THIRD_PARTY_PR_SOURCE_I_T_NEXUS 0x15 /* Third party persistent reservations source I_T nexus */
+#define SEGMENT_DESC_TYPE_BLOCK_IMAGE_COPY		0x16	/* Block device image copy */
+#define SEGMENT_DESC_TYPE_RESERVED_START		0x17
+#define SEGMENT_DESC_TYPE_RESERVED_END		0xBD
+#define SEGMENT_DESC_TYPE_POPULATE_ROD_FROM_BLOCK_RANGES 0xBE	/* Populate ROD from one or more block ranges ROD */
+#define SEGMENT_DESC_TYPE_POPULATE_ROD_FROM_ONE_BLOCK_RANGE 0xBF /* Populate ROD from one block range ROD */
+#define SEGMENT_DESC_TYPE_LAST_ENTRY			0xBF	/* Last entry, for sanity checks. */
 
 /*
  * Block to Block Segment Descriptor:
  */
 typedef struct xcopy_b2b_seg_desc {
     uint8_t desc_type_code;		/* Descriptor type code.	[0] */
-    uint8_t reserved_byte1;		/* Reserved.			[1] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t				/*				[1] */
+        cat			: 1,	/* Copy action (CAT).		(b0) */
+        dc			: 1,	/* Destination count (DC).	(b1) */
+        reserved_byte1_b2_7	: 6;	/* Reserved.		      (b2:6) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t				/*				[1] */
+        reserved_byte1_b2_7	: 6,	/* Reserved.		      (b2:6) */
+        dc			: 1,	/* Destination count (DC).	(b1) */
+        cat			: 1;	/* Copy action (CAT).		(b0) */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
     uint8_t desc_length[2];		/* Descriptor length.		[2-3] */
     uint8_t src_cscd_desc_idx[2];       /* Source descriptor index.	[4-5] */
     uint8_t dst_cscd_desc_idx[2];	/* Destination descriptor index.[6-7] */
@@ -2216,10 +2314,12 @@ typedef struct populate_token_parameter_list {
 } populate_token_parameter_list_t;
 
 typedef struct range_descriptor {
-    uint8_t lba[8];			/* Starting logicl block.      [0-7] */
+    uint8_t lba[8];			/* Starting logicl block.     [0-7] */
     uint8_t length[4];			/* Number of blocks.	     [8-11] */
     uint8_t reserved_byte_12_15[4];	/* Reserved.		    [12-15] */
 } range_descriptor_t;
+
+/* ============================================================================================== */
 
 typedef struct write_using_token_cdb {
     uint8_t opcode;			/* Operation code.		[0] */
@@ -2289,16 +2389,18 @@ typedef struct wut_parameter_list_runt {
 #define ZERO_ROD_TOKEN_LENGTH	0x1F8
 
 typedef struct rod_token {
-    uint8_t	type[4];
-    uint8_t	reserved[2];
-    uint8_t	length[2];
+    uint8_t	token_type[4];		/* ROD token type.	      [0-3] */
+    uint8_t	reserved[2];		/* Reserved.		      [4-5] */
+    uint8_t	token_length[2];	/* The token length.	      [6-7] */
 } rod_token_t;
+
+/* ============================================================================================== */
 
 #define RECEIVE_COPY_RESULTS_SVACT_OPERATING_PARAMETERS      	0x03
 #define RECEIVE_ROD_TOKEN_INFORMATION				0x07
 
 /* 
- * Receive Copy Results Definitions: (used by token based copy - ODX method)
+ * Receive Copy Results Definitions:
  */
 typedef struct receive_copy_results_cdb {
     uint8_t opcode;			/* Operation code.		[0] */
@@ -2373,6 +2475,47 @@ typedef struct rod_token_parameter_data {
 #define RRTI_PT_DATA_SIZE	sizeof(rrti_parameter_data_t) +	\
 				sizeof(rod_token_parameter_data_t) + \
 				ROD_TOKEN_LENGTH
+
+/* ============================================================================================== */
+
+#define IMP_DESC_LIST_LEN		10	/* For allocation below, this varies. */
+
+/*
+ * Receive Copy Operating Parameters:
+ */
+typedef struct receive_copy_operating_parameters {
+    uint8_t available_data[4];			/* Available data.		  [0-3] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t					/*				    [4] */
+        snlid			: 1,		/* Supports no list ID.		   (b0) */
+        reserved_byte4_b1_7	: 7;		/* Reserved.			 (b1:7) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t					/*				    [4] */
+        reserved_byte4_b1_7	: 7,		/* Reserved.			 (b1:7) */
+	snlid			: 1;		/* Supports no list ID.		   (b0) */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+    uint8_t reserved_bytes_5_7[3];		/* Reserved.			  [5-7] */
+    /* Start of actual information. */
+    uint8_t max_cscd_descriptor_count[2];	/* Maximum CSCD descriptor count. [8-9] */
+    uint8_t max_segment_descriptor_count[2];	/* Maximum segment desc count.	[10-11] */
+    uint8_t maximum_descriptor_list_length[4];	/* Maximum desc list length.	[12-15] */
+    uint8_t maximum_segment_length[4];		/* Maximum segment length.	[16-19] */
+    uint8_t maximum_inline_data_length[4];	/* Maximum inline data length.  [20-23] */
+    uint8_t held_data_limit[4];			/* Held data limit;		[24-27] */
+    uint8_t maximum_stream_transfer_size[4];	/* Maximum stream transfer size.[28-31] */
+    uint8_t reserved_bytes_32_33[2];		/* Reserved.			[32-33] */
+    uint8_t total_concurrent_copies[2];		/* Total concurrent copies.	[34-35] */
+    uint8_t maximum_concurrent_copies;		/* Maximum concurrent copies.	   [36] */
+    uint8_t data_segment_granularity;		/* Data segment granularity (log 2)[37] */
+    uint8_t inline_data_granularity;		/* Inline data granularity (log 2) [38] */
+    uint8_t held_data_granularity;		/* Held data granularity (log 2).  [39] */
+    uint8_t reserved_bytes_40_42[3];		/* Reserved.			[30-42] */
+    uint8_t implemented_desc_list_length;	/* Implemented desc list length.   [43] */
+    uint8_t implemented_desc_list[IMP_DESC_LIST_LEN];/* List of implemented desc types. */
+    						/* One byte for each desc type, ordered */
+} receive_copy_operating_parameters_t;
+
+/* ============================================================================================== */
 
 #if defined(__IBMC__)
 #  pragma options align=reset

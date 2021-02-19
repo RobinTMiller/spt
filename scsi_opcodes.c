@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2020			    *
+ *			  COPYRIGHT (c) 2006 - 2021			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -31,6 +31,45 @@
  *	Functions and tables to decode SCSI opcode data.
  *
  * Modification History:
+ * 
+ * January 27th, 2021 by Robin T. Miller
+ *      When creating ODX list ID, add the job ID for uniqueness across jobs.
+ * 
+ * January 26th, 2021 by Robin T. Miller
+ *      For Block ROD Token (ODX) style xcopy, ensure the CDB blocks value is
+ * the same for source/destination devices for proper copy LBA ranges.
+ * Note: The CDB blocks can be set by the user via bs= or blocks= options.
+ * 
+ * January 22nd, 2021 by Robin T. Miller
+ * 	Dynamically setup the maximum Write Same blocks value.
+ *      When setting up slices, retain original CDB blocks value.
+ *      Add setup functions for read*, write*, and verify* commands.
+ * 
+ * January 21st, 2021 by Robin T. Miller
+ *      Dynamically set the maximum xcopy segment length.
+ * 
+ * January 20th, 2021 by Robin T. Miller
+ *      Dynamically set the maximum blocks for token based xcopy.
+ * 
+ * December 12th, 2020 by Robin T. Miller
+ *      Added suppport for Receive Copy Operating Parameters.
+ * 
+ * December 8th, 2020 by Robin T. Miller
+ *      With xdebug, display designator ID for ROD Token XCOPY operations.
+ *      For XCOPY (LID1), set the priority (default is 1).
+ * 
+ * November 19th, 2020 by Robin T. Miller
+ *      Update Write Using Token (WUT) completion handling:
+ *      1) Always issue RRTI for SCSI Check Conditions (see notes).
+ *      2) Control RRTI on WUT success with new flag or "immed" bit.
+ * 
+ * November 16th, 2020 by Robin T. Miller
+ *      Add setup functions for shorthand cmds: unmap, xcopy, wut or odx
+ *      Avoid trying to write more blocks, than were populated, to avoid:
+ *      Write Using Token: (0xd, 0x4) - Copy target device data underrun
+ * 
+ * August 7th, 2020 by Robin T. Miller
+ *      Update initialize_slices() to support per slice setup.
  * 
  * April 23rd, 2019 by Robin T. Miller
  *      When allocating the initial data buffer, if writing and a pattern
@@ -69,8 +108,6 @@
  */ 
 uint64_t find_max_capacity(scsi_device_t *sdp);
 int initialize_devices(scsi_device_t *sdp);
-int initialize_slices(scsi_device_t *sdp);
-void initialize_slice(scsi_device_t *sdp, scsi_device_t *tsdp);
 int do_sanity_check_src_dst_devices(scsi_device_t *sdp, io_params_t *siop, io_params_t *iop);
 #if _BIG_ENDIAN_
 void init_swapped(	scsi_device_t	*sdp,
@@ -90,6 +127,7 @@ int process_end_of_data(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sg
 int random_rw6_encode(void *arg);
 int random_rw10_encode(void *arg);
 int random_rw16_encode(void *arg);
+int random_ws16_encode(void *arg);
 int random_caw16_encode(void *arg);
 int extended_copy_encode(void *arg);
 int receive_rod_token_decode(void *arg);
@@ -108,10 +146,14 @@ int request_sense_encode(void *arg);
 int request_sense_decode(void *arg);
 int rtpgs_encode(void *arg);
 int rtpgs_decode(void *arg);
+int receive_copy_results_encode(void *arg);
+int receive_copy_results_decode(void *arg);
 
 /*
  * JSON Functions:
  */
+char *receive_copy_results_decode_json(scsi_device_t *sdp, io_params_t *iop,
+				       receive_copy_operating_parameters_t *rcop, char *scsi_name);
 char *read_capacity10_decode_json(scsi_device_t *sdp, io_params_t *iop, ReadCapacity10_data_t *rcdp, char *scsi_name);
 char *read_capacity16_decode_json(scsi_device_t *sdp, io_params_t *iop, ReadCapacity16_data_t *rcdp, char *scsi_name);
 
@@ -119,7 +161,10 @@ char *read_capacity16_decode_json(scsi_device_t *sdp, io_params_t *iop, ReadCapa
 int wut_extended_copy_verify_data(scsi_device_t *sdp);
 void check_thin_provisioning(scsi_device_t *sdp, scsi_generic_t *sgp, io_params_t *iop);
 int get_block_provisioning(scsi_device_t *sdp, scsi_generic_t *sgp, io_params_t *iop);
+int get_copy_parameters(scsi_device_t *sdp, scsi_generic_t *sgp, io_params_t *iop, uint64_t max_blocks);
+int get_third_party_copy(scsi_device_t *sdp, scsi_generic_t *sgp, io_params_t *iop, uint64_t max_blocks);
 int get_unmap_block_limits(scsi_device_t *sdp, scsi_generic_t *sgp, io_params_t *iop, uint64_t max_blocks);
+int get_writesame_limits(scsi_device_t *sdp, scsi_generic_t *sgp, io_params_t *iop, uint64_t max_blocks);
 int cawWriteData(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp,
 		 uint64_t lba, uint32_t blocks, uint32_t bytes);
 int cawReadVerifyData(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp,
@@ -333,6 +378,7 @@ initialize_slices(scsi_device_t *sdp)
 {
     io_params_t *iop;
     scsi_generic_t *sgp;
+    hbool_t cdb_blocks;
     int device_index;
     int status;
 
@@ -349,8 +395,17 @@ initialize_slices(scsi_device_t *sdp)
 	    Fprintf(sdp, "Please specify a data length for this CDB!\n");
 	    return (FAILURE);
 	}
-
+	/* 
+	 * FYI: A side effect of setting limits is setting CDB blocks, which 
+	 * is undesirable when later setting defaults for xcopy, for example.
+	 * Therefore, we will restore the original CDB blocks if not set via 
+	 * blocks= or bs= options. Otherwise, we need to track via a flag.
+	 */
+	cdb_blocks = iop->cdb_blocks;
 	initialize_io_limits(sdp, iop, 0);
+	if (cdb_blocks == 0) {
+	    iop->cdb_blocks = cdb_blocks;	/* Reset to original value. */
+	}
 	if (iop->block_limit < sdp->slices) {
 	    ReportErrorInformation(sdp);
 	    Fprintf(sdp, "The block limit (" LUF ") is less than the number of slices (%u)!\n",
@@ -358,7 +413,6 @@ initialize_slices(scsi_device_t *sdp)
 	    return (FAILURE);
 	}
 	iop->slice_lba = iop->starting_lba;
-	sdp->slice_number = 0;
 	iop->slice_length = (iop->block_limit / sdp->slices);
 	iop->slice_resid = (iop->block_limit - (iop->slice_length * sdp->slices));
     }
@@ -366,30 +420,28 @@ initialize_slices(scsi_device_t *sdp)
 }
 
 void
-initialize_slice(scsi_device_t *sdp, scsi_device_t *tsdp)
+initialize_slice(scsi_device_t *sdp, scsi_device_t *tsdp, uint32_t slice)
 {
     io_params_t *iop, *tiop;
     scsi_generic_t *tsgp;
     int device_index;
 
-    sdp->slice_number++;
-    
     for (device_index = 0; (device_index < sdp->io_devices); device_index++) {
 
 	iop = &sdp->io_params[device_index];
 	tiop = &tsdp->io_params[device_index];
         tsgp = &iop->sg;
 
-	tiop->starting_lba = iop->slice_lba;
+        tiop->slice = slice;
+	tiop->starting_lba = (iop->slice_length * (slice - 1));
 	tiop->ending_lba = (tiop->starting_lba + iop->slice_length);
-	iop->slice_lba += iop->slice_length;
 	tiop->data_limit = 0;
-	if (sdp->slice_number == sdp->slices) {
+	if (slice == sdp->slices) {
 	    tiop->ending_lba += iop->slice_resid;
 	}
 	tiop->block_limit = (tiop->ending_lba - tiop->starting_lba);
 	/* Don't modify length for Write Same and Verify CDB's! */
-	if ( !iop->cdb_blocks &&
+	if ( (iop->cdb_blocks == 0) &&
 	     (tiop->block_limit * tiop->device_size) < tsgp->data_length) {
 	    tsgp->data_length = (uint32_t)(tiop->block_limit * tiop->device_size);
 	}
@@ -464,6 +516,20 @@ get_unmap_block_limits(scsi_device_t *sdp, scsi_generic_t *sgp, io_params_t *iop
 }
 
 /* ======================================================================== */
+
+int
+setup_unmap(scsi_device_t *sdp, scsi_generic_t *sgp)
+{
+    unmap_cdb_t *cdb = (unmap_cdb_t *)sgp->cdb;
+
+    memset(cdb, '\0', sizeof(*cdb));
+    cdb->opcode = SOPC_UNMAP;
+    /* Setup to execute a CDB operation. */
+    sdp->op_type = SCSI_CDB_OP;
+    sdp->encode_flag = True;
+    sgp->cdb_size = GetCdbLength(sgp->cdb[0]);
+    return (SUCCESS);
+}
 
 int
 random_unmap_encode(void *arg)
@@ -595,7 +661,7 @@ GetCapacity(scsi_device_t *sdp, io_params_t *iop)
     iop->lbprz_flag = False;
     iop->lbpmgmt_valid = False;
     /*
-     * 16byte CDB may fail on some disks, but 10-byte should succeed!
+     * 16-byte CDB may fail on some disks, but 10-byte should succeed!
      */ 
     status = ReadCapacity16(sgp->fd, sgp->dsf, sgp->debug, False,
 			    NULL, NULL, rcdp, sizeof(*rcdp), 0,
@@ -629,9 +695,30 @@ GetCapacity(scsi_device_t *sdp, io_params_t *iop)
 	    }
 	}
     }
-    if ( (status == SUCCESS) && sdp->DebugFlag) {
-	Printf(sdp, "Device: %s, Device Size: %u bytes, Capacity: " LUF " blocks (thread %d)\n",
-	        sgp->dsf, iop->device_size, iop->device_capacity, sdp->thread_number);
+    if (status == SUCCESS) {
+	if (sdp->DebugFlag) {
+	    Printf(sdp, "Device: %s, Device Size: %u bytes, Capacity: " LUF " blocks (thread %d)\n",
+		   sgp->dsf, iop->device_size, iop->device_capacity, sdp->thread_number);
+	}
+	if (iop->user_capacity) {
+	    /* Note: User specified capacity is in bytes to match dt! */
+	    uint64_t user_blocks = (iop->user_capacity / iop->device_size);
+	    if (user_blocks < iop->device_capacity) {
+		iop->device_capacity = user_blocks;
+		if (sdp->DebugFlag) {
+		    Printf(sdp, "Device: %s, User Capacity: " LUF " blocks (thread %d)\n",
+			   sgp->dsf, iop->device_capacity, sdp->thread_number);
+		}
+	    }
+	}
+	if (iop->capacity_percentage) {
+	    uint64_t capacity = (uint64_t)((double)iop->device_capacity * ((double)iop->capacity_percentage / 100.0));
+	    iop->device_capacity = capacity;
+	    if (sdp->DebugFlag) {
+		Printf(sdp, "Device: %s, Capacity Percentage %d%%: " LUF " blocks (thread %d)\n",
+		       sgp->dsf, iop->capacity_percentage, iop->device_capacity, sdp->thread_number);
+	    }
+	}
     }
     return (status);
 }
@@ -703,6 +790,8 @@ read_capacity10_decode(void *arg)
 	    PrintLines(sdp, json_string);
 	    Printnl(sdp);
 	    json_free_serialized_string(json_string);
+	} else {
+            status = FAILURE;
 	}
 	return(status);
     }
@@ -856,6 +945,8 @@ read_capacity16_decode(void *arg)
 	    PrintLines(sdp, json_string);
 	    Printnl(sdp);
 	    json_free_serialized_string(json_string);
+	} else {
+            status = FAILURE;
 	}
 	return(status);
     }
@@ -965,6 +1056,22 @@ finish:
 }
 
 /* ======================================================================== */
+
+int
+setup_get_lba_status(scsi_device_t *sdp, scsi_generic_t *sgp)
+{
+    get_lba_status_cdb_t *cdb = (get_lba_status_cdb_t *)sgp->cdb;
+
+    memset(cdb, '\0', sizeof(*cdb));
+    cdb->opcode = SOPC_SERVICE_ACTION_IN_16;
+    cdb->service_action = SCSI_SERVICE_ACTION_GET_LBA_STATUS;
+    /* Setup to execute a CDB operation. */
+    sdp->op_type = SCSI_CDB_OP;
+    sdp->decode_flag = True;
+    sdp->encode_flag = True;
+    sgp->cdb_size = GetCdbLength(sgp->cdb[0]);
+    return (SUCCESS);
+}
 
 int
 get_lba_status_encode(void *arg)
@@ -1208,7 +1315,7 @@ setup_rtpg(scsi_device_t *sdp, scsi_generic_t *sgp)
     cdb = (maintenance_in_cdb_t *)sgp->cdb;
     memset(cdb, '\0', sizeof(*cdb));
     cdb->opcode = SOPC_MAINTENANCE_IN;
-    cdb->service_action = 0x0A;			/* TODO: Define this! */
+    cdb->service_action = SCSI_MAINT_IN_REPORT_TARGET_GROUP;
     sgp->data_dir = scsi_data_read;
     sgp->data_length = data_length;
     sgp->data_buffer = malloc_palign(sdp, sgp->data_length, 0);
@@ -1673,6 +1780,8 @@ random_rw10_encode(void *arg)
     return (SUCCESS);
 }
 
+/* ======================================================================== */
+
 int
 random_rw16_encode(void *arg)
 {
@@ -1683,6 +1792,63 @@ random_rw16_encode(void *arg)
     uint64_t max_lba = SCSI_MAX_LBA16, max_blocks = SCSI_MAX_BLOCKS16;
     int status;
 
+    status = random_rw_process_cdb(sdp, iop, max_lba, max_blocks);
+    if (status != SUCCESS) return (status);
+
+    HtoS(cdb->lba, iop->current_lba);
+
+    if (iop->cdb_blocks) {
+	HtoS(cdb->length, iop->cdb_blocks);
+    } else {
+	HtoS(cdb->length, (sgp->data_length / iop->device_size));
+    }
+    return (SUCCESS);
+}
+
+int
+get_writesame_limits(scsi_device_t *sdp, scsi_generic_t *sgp, io_params_t *iop, uint64_t max_blocks)
+{
+    inquiry_block_limits_t block_limits;
+    inquiry_block_limits_t *blp = &block_limits;
+    int status;
+
+    status = GetBlockLimits(sgp->fd, sgp->dsf, sgp->debug, False, blp, sgp->tsp);
+    if (status == SUCCESS) {
+	iop->max_write_same_len = blp->max_write_same_len;
+    } else {
+	iop->max_write_same_len = (uint32_t)max_blocks;
+    }
+    /* Override the default blocks, if user did not specify. */
+    /* Note: The CDB blocks is already set from default w/slices! */
+    if ( (iop->cdb_blocks == 0) ||
+	 ( (sdp->bypass == False) && (iop->cdb_blocks > iop->max_write_same_len) ) ) {
+	iop->cdb_blocks = iop->max_write_same_len;
+    }
+    if ( (status == SUCCESS) && sdp->DebugFlag && (sdp->thread_number == 1) ) {
+	Printf(sdp, "Device: %s, Max Write Same Length: "LUF" blocks, CDB Blocks: " LUF " blocks\n",
+	       sgp->dsf, iop->max_write_same_len, iop->cdb_blocks);
+    }
+    return(status);
+}
+
+int
+random_ws16_encode(void *arg)
+{
+    scsi_device_t *sdp = arg;
+    io_params_t *iop = &sdp->io_params[IO_INDEX_BASE];
+    scsi_generic_t *sgp = &iop->sg;
+    DirectRW16_CDB_t *cdb = (DirectRW16_CDB_t *)sgp->cdb;
+    uint64_t max_lba = SCSI_MAX_LBA16, max_blocks = WRITE_SAME_MAX_BLOCKS16;
+    int status;
+
+    if (iop->first_time) {
+	if (iop->max_write_same_len == 0) {
+	    status = get_writesame_limits(sdp, sgp, iop, max_blocks);
+	}
+    }
+    if (iop->max_write_same_len) {
+	max_blocks = iop->max_write_same_len;
+    }
     status = random_rw_process_cdb(sdp, iop, max_lba, max_blocks);
     if (status != SUCCESS) return (status);
 
@@ -2031,6 +2197,57 @@ scsiWriteData(io_params_t *iop, scsi_io_type_t write_type, scsi_generic_t *sgp, 
     return(status);
 }
 
+/* ================================================================================== */
+
+int
+setup_extended_copy(scsi_device_t *sdp, scsi_generic_t *sgp)
+{
+    xcopy_cdb_t *cdb = (xcopy_cdb_t *)sgp->cdb;
+
+    memset(cdb, '\0', sizeof(*cdb));
+    cdb->opcode = SOPC_EXTENDED_COPY;
+    /* Setup to execute a CDB operation. */
+    sdp->op_type = SCSI_CDB_OP;
+    sdp->encode_flag = True;
+    sgp->cdb_size = GetCdbLength(sgp->cdb[0]);
+    return(SUCCESS);
+}
+
+int
+get_copy_parameters(scsi_device_t *sdp, scsi_generic_t *sgp, io_params_t *iop, uint64_t max_blocks)
+{
+    receive_copy_parameters_t copy_parameters;
+    receive_copy_parameters_t *rcp = &copy_parameters;
+    int status;
+
+    /* Set our defaults. */
+    iop->max_segment_descriptors = 1;
+    iop->maximum_segment_length = (uint32_t)max_blocks;
+
+    status = ReceiveCopyParameters(sgp->fd, sgp->dsf, sgp->debug, False, rcp, sgp->tsp);
+    if (status == SUCCESS) {
+	/* Apparently it's valid for these fields to be reported as zero! */
+	if (rcp->max_segment_descriptor_count) {
+	    iop->max_segment_descriptors = rcp->max_segment_descriptor_count;
+	}
+	if (rcp->maximum_segment_length) {
+	    /* Note: Converting byte lengtth to blocks! */
+	    iop->maximum_segment_length = (rcp->maximum_segment_length / iop->device_size);
+	}
+    }
+    /* Override the default blocks, if user did not specify. */
+    /* Note: The CDB blocks is already set from default w/slices! */
+    if ( (iop->cdb_blocks == 0) ||
+	 ( (sdp->bypass == False) && (iop->cdb_blocks > iop->maximum_segment_length) ) ) {
+	iop->cdb_blocks = iop->maximum_segment_length;
+    }
+    if ( (status == SUCCESS) && sdp->DebugFlag && (sdp->thread_number == 1) ) {
+	Printf(sdp, "Device: %s, Max Segment Length: "LUF" blocks, Max Segment Descriptors: %u, CDB Blocks: " LUF " blocks\n",
+	       sgp->dsf, iop->maximum_segment_length, iop->max_segment_descriptors, iop->cdb_blocks);
+    }
+    return(status);
+}
+
 /*
  * XCOPY Support Functions:
  */ 
@@ -2053,6 +2270,15 @@ extended_copy_init_devices(scsi_device_t *sdp)
 	iop = &sdp->io_params[device_index];
 	sgp = &iop->sg;
 
+	if (iop->maximum_segment_length == 0) {
+	    status = get_copy_parameters(sdp, sgp, iop, max_blocks);
+	    if (status == SUCCESS) {
+		max_blocks = iop->maximum_segment_length;
+	    }
+	} else {
+	    max_blocks = iop->maximum_segment_length;
+	}
+
 	if (!iop->designator_length && (sgp->fd != INVALID_HANDLE_VALUE) ) {
 	    status = GetXcopyDesignator(sgp->fd, sgp->dsf, sgp->debug, FALSE, NULL,
 					&iop->designator_id, &iop->designator_length,
@@ -2062,6 +2288,9 @@ extended_copy_init_devices(scsi_device_t *sdp)
 		Fprintf(sdp, "Unable to retrieve Inquiry Designator ID for device %s!\n",
 			sgp->dsf);
 		return (status);
+	    }
+	    if (sdp->xDebugFlag) {
+		PrintDesignatorInformation(sdp, iop, sgp);
 	    }
 	}
     }
@@ -2124,7 +2353,7 @@ extended_copy_handle_same_lun(scsi_device_t *sdp)
     /*
      * Special Handling for same LUN xcopy, but only if source parameters are omitted.
      */ 
-    if ( (sdp->io_devices == XCOPY_MIN_DEVS)		       &&
+    if ( (sdp->io_devices == XCOPY_MIN_DEVS)		     &&
 	 (siop->designator_length == iop->designator_length) &&
 	 (memcmp(siop->designator_id, iop->designator_id, iop->designator_length) == 0) ) {
 
@@ -2175,7 +2404,7 @@ extended_copy_setup_targets(scsi_device_t *sdp, void *bp)
 
 	iop = &sdp->io_params[device_index];
 
-	tgtdp->desc_type_code = XCOPY_CSCD_TYPE_CODE_IDENTIFICATION;
+	tgtdp->desc_type_code = TARGET_CSCD_TYPE_CODE_IDENTIFICATION;
 	tgtdp->device_type = DTYPE_DIRECT;
 	tgtdp->codeset = IID_CODE_SET_BINARY;
 	tgtdp->designator_type =  iop->designator_type;
@@ -2282,7 +2511,7 @@ extended_copy_setup_segments(scsi_device_t *sdp, void *bp)
 		continue;
 	    }
 	    segments_this_loop++;
-	    segdp->desc_type_code = XCOPY_DESC_TYPE_CODE_BLOCK_TO_BLOCK_SEG_DESC;
+	    segdp->desc_type_code = SEGMENT_DESC_TYPE_COPY_BLOCK_TO_BLOCK;
 	    HtoS(segdp->desc_length, XCOPY_B2B_SEGMENT_LENGTH);
 	    HtoS(segdp->src_cscd_desc_idx, src_target_index);
 	    HtoS(segdp->dst_cscd_desc_idx, IO_INDEX_DST);
@@ -2367,6 +2596,9 @@ extended_copy_complete_io(scsi_device_t *sdp)
 
     for (device_index = 0; (device_index < sdp->io_devices); device_index++) {
 	iop = &sdp->io_params[device_index];
+	if (iop->maximum_segment_length) {
+	    max_blocks = iop->maximum_segment_length;
+	}
 	if (iop->end_of_data == False) {
 	    int device_status;
 	    device_status = initialize_io_parameters(sdp, iop, max_lba, max_blocks);
@@ -2398,7 +2630,6 @@ extended_copy_verify_data(scsi_device_t *sdp)
     scsi_generic_t *ssgp;
     xcopy_lid1_parameter_list_t *paramp;
     xcopy_id_cscd_ident_desc_t *tgtdp;
-    //xcopy_id_cscd_desc_t *tgtdp;
     xcopy_b2b_seg_desc_t *segdp;
     xcopy_cdb_t *cdb = (xcopy_cdb_t *)sgp->cdb;
     unsigned int target_list_length, segment_list_length;
@@ -2432,7 +2663,6 @@ extended_copy_verify_data(scsi_device_t *sdp)
     }
     num_targets = (target_list_length / sizeof(*tgtdp));
     tgtdp = (xcopy_id_cscd_ident_desc_t *)(paramp + 1);
-    //tgtdp = (xcopy_id_cscd_desc_t *)(paramp + 1);
 
     segment_list_length = (uint32_t)StoH(paramp->seg_desc_list_length);
     num_segments = (segment_list_length / sizeof(*segdp));
@@ -2592,7 +2822,6 @@ extended_copy_encode(void *arg)
     xcopy_cdb_t *cdb = (xcopy_cdb_t *)sgp->cdb;
     xcopy_lid1_parameter_list_t *paramp;
     xcopy_id_cscd_ident_desc_t *tgtdp;
-    //xcopy_id_cscd_desc_t *tgtdp;
     xcopy_b2b_seg_desc_t *segdp;
     int number_targets, number_segments;
     uint32_t xcopy_length;
@@ -2641,17 +2870,16 @@ extended_copy_encode(void *arg)
     bp = sgp->data_buffer;
     paramp = (xcopy_lid1_parameter_list_t *)bp;
     tgtdp = (xcopy_id_cscd_ident_desc_t *)(paramp + 1);
-    //tgtdp = (xcopy_id_cscd_desc_t *)(paramp + 1);
 
     /*
      * Setup the Parameter List:
      */ 
-    paramp->nlid = 1;			/* No list identifier. */
-    paramp->nrcr = 1;			/* No report copy results. */
+    paramp->priority = XCOPY_DEFAULT_PRIORITY;
+    paramp->listid_usage = XCOPY_LISTID_DISABLE;
 
     /*
      * Setup the Target Descriptors:
-     */ 
+     */
     bp = extended_copy_setup_targets(sdp, tgtdp);
     number_targets = (int)( ((unsigned char *)bp - (unsigned char *)tgtdp) / sizeof(*tgtdp) );
 
@@ -2682,22 +2910,88 @@ extended_copy_encode(void *arg)
 /* ================================================================================== */
 
 int
+setup_write_using_token(scsi_device_t *sdp, scsi_generic_t *sgp)
+{
+    write_using_token_cdb_t *cdb = (write_using_token_cdb_t *)sgp->cdb;
+
+    memset(cdb, '\0', sizeof(*cdb));
+    cdb->opcode = SOPC_EXTENDED_COPY;
+    cdb->service_action = SCSI_XCOPY_WRITE_USING_TOKEN;
+    /* Setup to execute a CDB operation. */
+    sdp->op_type = SCSI_CDB_OP;
+    sdp->encode_flag = True;
+    sgp->cdb_size = GetCdbLength(sgp->cdb[0]);
+    return(SUCCESS);
+}
+
+int
+get_third_party_copy(scsi_device_t *sdp, scsi_generic_t *sgp, io_params_t *iop, uint64_t max_blocks)
+{
+    inquiry_third_party_copy_t third_party_copy;
+    inquiry_third_party_copy_t *tpcp = &third_party_copy;
+    int status;
+
+    /* Set our defaults. */
+    iop->pt_max_range_descriptors = 1;
+    iop->pt_max_token_transfer_size = max_blocks;
+
+    status = GetThirdPartyCopy(sgp->fd, sgp->dsf, sgp->debug, False, tpcp, sgp->tsp);
+    if (status == SUCCESS) {
+	/* Apparently it's valid for these fields to be reported as zero! */
+	if (tpcp->max_range_descriptors) {
+	    iop->pt_max_range_descriptors = tpcp->max_range_descriptors;
+	}
+	if (tpcp->max_token_transfer_size) {
+	    iop->pt_max_token_transfer_size = tpcp->max_token_transfer_size;
+	}
+    }
+    /* Override the default blocks, if user did not specify. */
+    /* Note: The CDB blocks is already set from default w/slices! */
+    if ( (iop->cdb_blocks == 0) ||
+	 ( (sdp->bypass == False) && (iop->cdb_blocks > iop->pt_max_token_transfer_size) ) ) {
+	iop->cdb_blocks = iop->pt_max_token_transfer_size;
+    }
+    if ( (status == SUCCESS) && sdp->DebugFlag && (sdp->thread_number == 1) ) {
+	Printf(sdp, "Device: %s, Max Token Transfer Size: "LUF" blocks, Max Range Descriptors: %u, CDB Blocks: " LUF " blocks\n",
+	       sgp->dsf, iop->pt_max_token_transfer_size, iop->pt_max_range_descriptors, iop->cdb_blocks);
+    }
+    return(status);
+}
+
+int
 populate_token_init_devices(scsi_device_t *sdp)
 {
     io_params_t *iop;
     scsi_generic_t *sgp;
+    uint64_t cdb_blocks = 0;
     uint64_t max_lba = SCSI_MAX_LBA16, max_blocks = XCOPY_PT_MAX_BLOCKS;
     int device_index;
     int status = SUCCESS;
 
     /*
-     * Still using NAA to detect the same LUN! (for intra-LUN testing)
+     * Note: The designator is not needed for ODX style xcopy, but we use it to 
+     * to detect same LUN! (for intra-LUN testing)
      */ 
     for (device_index = 0; (device_index < sdp->io_devices); device_index++) {
 
 	iop = &sdp->io_params[device_index];
 	sgp = &iop->sg;
 	sgp->restart_flag = True;
+
+	if (iop->pt_max_token_transfer_size == 0) {
+	    status = get_third_party_copy(sdp, sgp, iop, max_blocks);
+	    if (status == SUCCESS) {
+		max_blocks = iop->pt_max_token_transfer_size;
+	    }
+	} else {
+	    max_blocks = iop->pt_max_token_transfer_size;
+	}
+	/* Track the minimum CDB blocks to set for each device below. */
+	if (cdb_blocks == 0) {
+	    cdb_blocks = iop->cdb_blocks;
+	} else if (iop->cdb_blocks < cdb_blocks) {
+	    cdb_blocks = iop->cdb_blocks;
+	}
 
 	if (!iop->designator_length && (sgp->fd != INVALID_HANDLE_VALUE) ) {
 	    status = GetXcopyDesignator(sgp->fd, sgp->dsf, sgp->debug, FALSE, NULL,
@@ -2709,6 +3003,27 @@ populate_token_init_devices(scsi_device_t *sdp)
 			sgp->dsf);
 		return (status);
 	    }
+	    if (sdp->xDebugFlag) {
+		PrintDesignatorInformation(sdp, iop, sgp);
+	    }
+	}
+    }
+    /*
+     * For our ODX implementation to work properly, both the source and destination 
+     * CDB blocks MUST be the same. We populate with source device, but we execute 
+     * with destination device, so to keep the LBA's in the same range, we need to 
+     * ensure the CDB blocks are the same. Long standing bug, but the workaround is 
+     * to specify block size (bs=) or CDB blocks (blocks=) options for both devices. 
+     */
+    for (device_index = 0; (device_index < sdp->io_devices); device_index++) {
+	iop = &sdp->io_params[device_index];
+	/* Note: Consider adding bypass flag for negative testing! */
+	if (iop->cdb_blocks > cdb_blocks) {
+	    if ( sdp->DebugFlag && (sdp->thread_number == 1) ) {
+		Printf(sdp, "Device: %s, CDB Blocks changed from "LUF" blocks to "LUF" blocks\n",
+		       sgp->dsf, iop->cdb_blocks, cdb_blocks);
+	    }
+	    iop->cdb_blocks = cdb_blocks;
 	}
     }
 
@@ -2718,8 +3033,8 @@ populate_token_init_devices(scsi_device_t *sdp)
 	if (sdp->rod_token_data == NULL) return (FAILURE);
 	if (sdp->zero_rod_flag == True) {
 	   rod_token_t *token = (rod_token_t *) sdp->rod_token_data;
-	   HtoS(token->type, ZERO_ROD_TOKEN_TYPE);
-	   HtoS(token->length, ZERO_ROD_TOKEN_LENGTH);
+	   HtoS(token->token_type, ZERO_ROD_TOKEN_TYPE);
+	   HtoS(token->token_length, ZERO_ROD_TOKEN_LENGTH);
 	   sdp->rod_token_valid = True;
 	   if (sdp->compare_data == True) {
 	       Printf(sdp, "WARNING: Data verification is disabled with Zero ROD Token operations!\n");
@@ -2740,10 +3055,13 @@ populate_token_init_devices(scsi_device_t *sdp)
 	sgp = &iop->sg;
 
 	/*
-	 * Make a unique list identifer, if user did not specify one!
+	 * Make a unique list identifer, if the user did not specify one.
 	 */ 
-	if (!iop->list_identifier) {
-	    iop->list_identifier = ((sdp->thread_number << 24) + (rand() & 0xffffff));
+	if (iop->list_identifier == 0) {
+	    iop->list_identifier = ((sdp->job_id << 24) + (sdp->thread_number << 16) + (rand() & 0xffff));
+	} else if (sdp->slices > 1) {
+	    /* Add in thread number to create unique list identifier. */
+	    iop->list_identifier = ((sdp->job_id << 24) + (sdp->thread_number << 16) + (iop->list_identifier & 0xffff));
 	}
 
 	if ( !iop->device_size || !iop->device_capacity) {
@@ -2788,6 +3106,9 @@ write_using_token_complete_io(scsi_device_t *sdp)
 
     for (device_index = 0; (device_index < sdp->io_devices); device_index++) {
 	iop = &sdp->io_params[device_index];
+	if (iop->pt_max_token_transfer_size) {
+	    max_blocks = iop->pt_max_token_transfer_size;
+	}
 	if (iop->end_of_data == False) {
 	    int device_status;
 	    device_status = initialize_io_parameters(sdp, iop, max_lba, max_blocks);
@@ -2872,6 +3193,8 @@ populate_token_create(scsi_device_t *sdp)
     }
 
     if (sdp->xDebugFlag) {
+        /* Done below, but we need this for accurate debug output! */
+	HtoS(cdb->list_identifier, iop->list_identifier);
 	DumpPTData(sgp);
 	Printf(sdp, "\n");
     }
@@ -3028,7 +3351,7 @@ rrti_process_response(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp)
  * 	Populate Token (PT) from Source
  * 	Receive ROD Token Information (RRTI) for PT
  * 	Write Using Token (WUT) to Destination
- * 	RRTI for WUT
+ * 	RRTI for WUT (on error or via flag)
  * 	Optionally Read and Verify data.
  */ 
 int
@@ -3046,7 +3369,7 @@ write_using_token_encode(void *arg)
     range_descriptor_t *rdp;
     uint32_t data_length;
     uint32_t blocks, blocks_per_range, blocks_left, blocks_resid;
-    uint64_t lba;
+    uint64_t lba, cdb_blocks;
     int range, range_count;
     int status = SUCCESS;
     
@@ -3062,14 +3385,29 @@ write_using_token_encode(void *arg)
 	    extended_copy_handle_same_lun(sdp);
 	}
     } else {
-	/*
-	 * When using onerr=continue, and the WUT failed (possibly due to
-	 * an abort with short timeout), do *not* try to get its' response!
+	/* 
+	 * Process the Write Using Token (WUT) we just executed. 
+	 *  
+	 * Note: We only get here today if onerr=continue is specified! 
+	 * This means we do NOT acquire RRTI to handle ABORTED/WUT RESID. 
+	 * Therefore, this needs augmented for advanced error handling!
 	 */ 
-	if (sdp->status == SUCCESS) {
-	    status = rrti_verify_response(sdp, iop);
-	    if (status == FAILURE) return(status);
-	    if (status == RESTART) goto create_token;
+	if (sgp->scsi_status == SCSI_CHECK_CONDITION) {
+	     status = rrti_verify_response(sdp, iop);
+	     if (status == FAILURE) return(status);
+	     if (status == RESTART) goto create_token;
+	} else {
+	    populate_token_parameter_list_t *ptp;
+	    ptp = (populate_token_parameter_list_t *)sgp->data_buffer;
+            /* Note: Some doubt if RRTI after WUT success is necessary. */
+            /* Windows *only* sends the RRTI on a check condition. */
+            /* BTW: spt does not provide an "immed" option today! */
+	    if (sdp->rrti_wut_flag || ptp->immed) {
+		/* TODO: Implement RRTI polling for immediate! */
+		status = rrti_verify_response(sdp, iop);
+		if (status == FAILURE) return(status);
+		if (status == RESTART) goto create_token;
+	    }
 	    if (sdp->compare_data) {
 		status = wut_extended_copy_verify_data(sdp);
 		if (status != SUCCESS) return (status);
@@ -3139,9 +3477,23 @@ create_token:
     rdp = (range_descriptor_t *)bp;
     
     lba = iop->current_lba;
-    blocks_per_range = (uint32_t)(iop->cdb_blocks / range_count);
-    blocks_resid = (uint32_t)(iop->cdb_blocks - (blocks_per_range * range_count));
-    blocks_left = (uint32_t)iop->cdb_blocks;
+    /* 
+     * Avoid writing more blocks, than were populated to void errors.
+     * Zero ROD always uses destination device, no source expected.
+     * Note: It's valid to populate more blocks than we write, but this 
+     * will create gaps in the resulting destination, so disallow this. 
+     * BTW: The bypass flag reverts this behavior for negative testing.
+     */
+    if (sdp->zero_rod_flag || sdp->bypass) {
+	cdb_blocks = iop->cdb_blocks;
+    } else if (siop->cdb_blocks != iop->cdb_blocks) {
+	cdb_blocks = siop->cdb_blocks;	/* Write what we populated. */
+    } else {
+	cdb_blocks = iop->cdb_blocks;	/* Write what user specified. */
+    }
+    blocks_per_range = (uint32_t)(cdb_blocks / range_count);
+    blocks_resid = (uint32_t)(cdb_blocks - (blocks_per_range * range_count));
+    blocks_left = (uint32_t)cdb_blocks;
 
     /*
      * Populate each range descriptor.
@@ -3187,7 +3539,7 @@ wut_extended_copy_verify_data(scsi_device_t *sdp)
 	Printf(sdp, "Starting Data Verification:\n");
 	PrintDecHex(sdp, "Number of Blocks", blocks, PNL);
 	PrintLongDecHex(sdp, "Source Block Device LBA", src_starting_lba, DNL);
-	Printf(sdp, " (lba's " LUF " - " LUF ")\n", src_starting_lba, (src_starting_lba + blocks - 1));
+	Print(sdp, " (lba's " LUF " - " LUF ")\n", src_starting_lba, (src_starting_lba + blocks - 1));
 	PrintLongDecHex(sdp, "Destination Block Device LBA", dst_starting_lba, DNL);
 	Print(sdp, " (lba's " LUF " - " LUF ")\n", dst_starting_lba, (dst_starting_lba + blocks - 1));
 	Printf(sdp, "\n");
@@ -3274,6 +3626,293 @@ receive_rod_token_decode(void *arg)
 
 /* ======================================================================== */
 
+/*
+ * Receive Copy Results Operating Parameters Support Funtions.
+ */
+
+int
+setup_receive_copy_results(scsi_device_t *sdp, scsi_generic_t *sgp)
+{
+    write_using_token_cdb_t *cdb = (write_using_token_cdb_t *)sgp->cdb;
+
+    memset(cdb, '\0', sizeof(*cdb));
+    cdb->opcode = SOPC_RECEIVE_COPY_RESULTS;
+    cdb->service_action = SCSI_SERVICE_ACTION_RECEIVE_COPY_RESULTS;
+    /* Setup to execute a CDB operation. */
+    sdp->op_type = SCSI_CDB_OP;
+    sdp->decode_flag = True;
+    sdp->encode_flag = True;
+    sgp->cdb_size = GetCdbLength(sgp->cdb[0]);
+    return(SUCCESS);
+}
+
+int
+receive_copy_results_encode(void *arg)
+{
+    scsi_device_t *sdp = arg;
+    io_params_t *iop = &sdp->io_params[IO_INDEX_BASE];
+    scsi_generic_t *sgp = &iop->sg;
+    receive_copy_results_cdb_t *cdb;
+    receive_copy_operating_parameters_t *rcop = NULL;
+    int status = SUCCESS;
+
+    /*
+     * Acquire the device size for decoding bytes to blocks.
+     */
+    if ( !iop->device_size || !iop->device_capacity) {
+	status = GetCapacity(sdp, iop);
+	if (status != SUCCESS) return(status);
+    }
+    cdb = (receive_copy_results_cdb_t *)sgp->cdb;
+    sdp->encode_flag = True;
+    sgp->data_dir = scsi_data_read;
+    if ( (sgp->data_buffer == NULL) || (sgp->data_length < sizeof(*rcop)) ) {
+	if (sgp->data_buffer) free_palign(sdp, sgp->data_buffer);
+	sgp->data_length = sizeof(*rcop);
+	sgp->data_buffer = malloc_palign(sdp, sgp->data_length, 0);
+	if (sgp->data_buffer == NULL) return(FAILURE);
+    }
+    HtoS(cdb->allocation_length, sgp->data_length);
+    return(status);
+}
+
+int
+receive_copy_results_decode(void *arg)
+{
+    scsi_device_t *sdp = arg;
+    io_params_t *iop = &sdp->io_params[IO_INDEX_BASE];
+    scsi_generic_t *sgp = &iop->sg;
+    receive_copy_operating_parameters_t *rcop = NULL;
+    uint32_t value32 = 0;
+    int list_index = 0;
+    char *scsi_name = "Receive Copy Operating Parameters";
+    int status = SUCCESS;
+
+    if ( (rcop = (receive_copy_operating_parameters_t *)sgp->data_buffer) == NULL) {
+	ReportDeviceInformation(sdp, sgp);
+	Fprintf(sdp, "No Receive Copy buffer provided!\n");
+	return(FAILURE);
+    }
+
+    if (sdp->output_format == JSON_FMT) {
+	char *json_string;
+	json_string = receive_copy_results_decode_json(sdp, iop, rcop, scsi_name);
+	if (json_string) {
+	    PrintLines(sdp, json_string);
+	    Printnl(sdp);
+	    json_free_serialized_string(json_string);
+	} else {
+            status = FAILURE;
+	}
+	return(status);
+    }
+
+    PrintHeader(sdp, scsi_name);
+    PrintNumeric(sdp, "Available Data", (uint32_t)StoH(rcop->available_data), PNL);
+    PrintBoolean(sdp, False, "Supports No List ID", rcop->snlid, PNL);
+    if (rcop->reserved_byte4_b1_7 || sdp->DebugFlag) {
+	PrintNumeric(sdp, "Reserved (byte 4, bits 1:7)", rcop->reserved_byte4_b1_7, PNL);
+    }
+    value32 = (uint32_t)StoH(rcop->reserved_bytes_5_7);
+    if (value32 || sdp->DebugFlag) {
+	PrintNumeric(sdp, "Reserved (bytes 5-7)", value32, PNL);
+    }
+    PrintNumeric(sdp, "Maximum CSCD Descriptor Count", (uint16_t)StoH(rcop->max_cscd_descriptor_count), PNL);
+    PrintNumeric(sdp, "Maximum Segment Descriptor Count", (uint16_t)StoH(rcop->max_segment_descriptor_count), PNL);
+    value32 = (uint32_t)StoH(rcop->maximum_descriptor_list_length);
+    /* The maximum length, in bytes, of the target descriptor list and segment descriptor list.*/
+    PrintNumeric(sdp, "Maximum Descriptor List Length", value32, DNL);
+    Print(sdp, " bytes\n");
+    value32 = (uint32_t)StoH(rcop->maximum_segment_length);
+    PrintNumeric(sdp, "Maximum Segment Length", value32, DNL);
+    Print(sdp, " bytes (%u blocks)\n", (value32 / iop->device_size));
+    PrintNumeric(sdp, "Maximum Inline Data Length", (uint32_t)StoH(rcop->maximum_inline_data_length), DNL);
+    if (StoH(rcop->maximum_inline_data_length)) {
+	Print(sdp, " bytes\n");
+    } else {
+	Print(sdp, " (not suppported)\n");
+    }
+    PrintNumeric(sdp, "Held Data Length", (uint32_t)StoH(rcop->held_data_limit), DNL);
+    Print(sdp, " bytes\n");
+    PrintNumeric(sdp, "Maximum Stream Transfer Size", (uint32_t)StoH(rcop->maximum_stream_transfer_size), DNL);
+    Print(sdp, " bytes\n");
+    value32 = (uint32_t)StoH(rcop->reserved_bytes_32_33);
+    if (value32 || sdp->DebugFlag) {
+	PrintNumeric(sdp, "Reserved (bytes 32-33)", value32, PNL);
+    }
+    PrintNumeric(sdp, "Total Concurrent Copies", (uint16_t)StoH(rcop->total_concurrent_copies), PNL);
+    PrintNumeric(sdp, "Maximum Concurrent Copies", rcop->maximum_concurrent_copies, PNL);
+    PrintNumeric(sdp, "Data Segment Granularity", rcop->data_segment_granularity, DNL);
+    if (rcop->data_segment_granularity) {
+	Print(sdp, " (%u bytes)\n", (1 << rcop->data_segment_granularity));
+    } else {
+	Print(sdp, " (1 byte)\n");
+    }
+    PrintNumeric(sdp, "Inline Data Granularity", rcop->inline_data_granularity, DNL);
+    if (rcop->inline_data_granularity) {
+	Print(sdp, " (%u bytes)\n", (1 << rcop->inline_data_granularity));
+    } else {
+	Print(sdp, " (1 byte)\n");
+    }
+    PrintNumeric(sdp, "Held Data Granularity", rcop->held_data_granularity, DNL);
+    if (rcop->held_data_granularity) {
+	Print(sdp, " (%u bytes)\n", (1 << rcop->held_data_granularity));
+    } else {
+	Print(sdp, " (1 byte)\n");
+    }
+    value32 = (uint32_t)StoH(rcop->reserved_bytes_40_42);
+    if (value32 || sdp->DebugFlag) {
+	PrintNumeric(sdp, "Reserved (bytes 40-42)", value32, PNL);
+    }
+    PrintNumeric(sdp, "Implemented Descriptor List Length", rcop->implemented_desc_list_length, PNL);
+    PrintAscii(sdp, "Implemented Descriptor List", "", PNL);
+    for (list_index = 0; (list_index < rcop->implemented_desc_list_length); list_index++) {
+        char entry[SMALL_BUFFER_SIZE];
+        uint8_t descriptor_type_code = rcop->implemented_desc_list[list_index];
+        char *descriptor_type = NULL;
+        char *descriptor_description = GetDescriptorTypeMsg(&descriptor_type, descriptor_type_code);
+        sprintf(entry, "%s %u", descriptor_type, list_index);
+        PrintHex(sdp, entry, rcop->implemented_desc_list[list_index], DNL);
+	if (descriptor_description) {
+	    Print(sdp, " (%s)\n", descriptor_description);
+	} else {
+            Print(sdp, "\n");
+	}
+	if ((list_index + 1) == IMP_DESC_LIST_LEN) { break; }
+    }
+    return(SUCCESS);
+}
+
+char *
+receive_copy_results_decode_json(scsi_device_t *sdp, io_params_t *iop,
+				 receive_copy_operating_parameters_t *rcop, char *scsi_name)
+{
+    JSON_Value	*root_value;
+    JSON_Object *root_object;
+    JSON_Value  *value;
+    JSON_Object *object;
+    JSON_Value  *svalue = NULL;
+    JSON_Object *sobject = NULL;
+    JSON_Array	*desc_array;
+    JSON_Value	*desc_value = NULL;
+    JSON_Status json_status;
+    char *json_string = NULL;
+    char text[STRING_BUFFER_SIZE];
+    char *tp = NULL;
+    uint8_t *ucp = NULL;
+    int list_index = 0;
+    int length = 0;
+    int offset = 0;
+    int status = SUCCESS;
+
+    root_value  = json_value_init_object();
+    if (root_value == NULL) return(NULL);
+    root_object = json_value_get_object(root_value);
+
+    value  = json_value_init_object();
+    if (value == NULL) {
+	json_value_free(root_value);
+	return(NULL);
+    }
+    json_status = json_object_dotset_value(root_object, scsi_name, value);
+    object = json_value_get_object(value);
+
+    ucp = (uint8_t *)rcop;
+    length = (int)StoH(rcop->available_data);
+    json_status = json_object_set_number(object, "Length", (double)length);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Offset", (double)offset);
+    if (json_status != JSONSuccess) goto finish;
+    offset = FormatHexBytes(text, offset, ucp, length);
+    json_status = json_object_set_string(object, "Bytes", text);
+    if (json_status != JSONSuccess) goto finish;
+
+    json_status = json_object_set_number(object, "Available Data", (double)StoH(rcop->available_data));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_boolean(object, "Supports No List ID", rcop->snlid);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Reserved (byte 4, bits 1:7)", (double)rcop->reserved_byte4_b1_7);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Reserved (bytes 5-7)", (double)StoH(rcop->reserved_bytes_5_7));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Maximum CSCD Descriptor Count", (double)StoH(rcop->max_cscd_descriptor_count));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Maximum Segment Descriptor Count", (double)StoH(rcop->max_segment_descriptor_count));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Maximum Descriptor List Length", (double)StoH(rcop->maximum_descriptor_list_length));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Maximum Segment Length", (double)StoH(rcop->maximum_segment_length));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Maximum Inline Data Length", (double)StoH(rcop->maximum_inline_data_length));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Held Data Length", (double)StoH(rcop->held_data_limit));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Maximum Stream Transfer Size", (double)StoH(rcop->maximum_stream_transfer_size));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Reserved (bytes 32-33)", (double)StoH(rcop->reserved_bytes_32_33));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Total Concurrent Copies", (double)StoH(rcop->total_concurrent_copies));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Maximum Concurrent Copies", (double)rcop->maximum_concurrent_copies);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Data Segment Granularity", (double)rcop->data_segment_granularity);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Inline Data Granularity", (double)rcop->inline_data_granularity);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Held Data Granularity", (double)rcop->held_data_granularity);
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Reserved (bytes 40-42)", (double)StoH(rcop->reserved_bytes_40_42));
+    if (json_status != JSONSuccess) goto finish;
+    json_status = json_object_set_number(object, "Implemented Descriptor List Length", (double)rcop->implemented_desc_list_length);
+    if (json_status != JSONSuccess) goto finish;
+    /* Implemented Descritors: */
+    for (list_index = 0; (list_index < rcop->implemented_desc_list_length); list_index++) {
+        uint8_t descriptor_type_code = rcop->implemented_desc_list[list_index];
+        char *descriptor_type = NULL;
+        char *descriptor_description = GetDescriptorTypeMsg(&descriptor_type, descriptor_type_code);
+        char *entry = text;
+
+	if (desc_value == NULL) {
+	    desc_value = json_value_init_array();
+	    desc_array = json_value_get_array(desc_value);
+	}
+	if (svalue == NULL) {
+	    svalue  = json_value_init_object();
+	    sobject = json_value_get_object(svalue);
+	}
+
+        /* Add the descritpor code and the description. */
+        sprintf(entry, "%s Code", descriptor_type);
+	json_status = json_object_set_number(sobject, entry, (double)descriptor_type_code);
+	if (json_status != JSONSuccess) break;
+
+        sprintf(entry, "%s Description", descriptor_type);
+	json_status = json_object_set_string(sobject, entry, descriptor_description);
+	if (json_status != JSONSuccess) break;
+
+        //sprintf(entry, "%s %u", descriptor_type, list_index);
+
+	json_array_append_value(desc_array, svalue);
+	svalue = NULL;
+    }
+    if (desc_value) {
+	json_object_set_value(object, "Implemented Descriptor List", desc_value);
+	desc_value = NULL;
+    }
+
+finish:
+    (void)json_object_set_number(object, "JSON Status", (double)json_status);
+    if (sdp->json_pretty) {
+	json_string = json_serialize_to_string_pretty(root_value);
+    } else {
+	json_string = json_serialize_to_string(root_value);
+    }
+    json_value_free(root_value);
+    return(json_string);
+}
+
+/* ======================================================================== */
+
 int
 setup_request_sense(scsi_device_t *sdp, scsi_generic_t *sgp)
 {
@@ -3339,6 +3978,123 @@ request_sense_decode(void *arg)
 
     DumpSenseData(sgp, False, ssp);
     return(status);
+}
+
+/* ======================================================================== */
+/*
+ * Note: This does initial setup, user must specify other options!
+ */
+
+int
+setup_read10(scsi_device_t *sdp, scsi_generic_t *sgp)
+{
+    memset(sgp->cdb, '\0', sizeof(sgp->cdb));
+    sgp->cdb[0] = SOPC_READ_10; 
+    sgp->data_dir = scsi_data_read;
+    sdp->op_type = SCSI_CDB_OP;
+    sdp->encode_flag = True;
+    sgp->cdb_size = GetCdbLength(sgp->cdb[0]);
+    return(SUCCESS);
+}
+
+int
+setup_read16(scsi_device_t *sdp, scsi_generic_t *sgp)
+{
+    memset(sgp->cdb, '\0', sizeof(sgp->cdb));
+    sgp->cdb[0] = SOPC_READ_16;
+    sgp->data_dir = scsi_data_read;
+    sdp->op_type = SCSI_CDB_OP;
+    sdp->encode_flag = True;
+    sgp->cdb_size = GetCdbLength(sgp->cdb[0]);
+    return(SUCCESS);
+}
+
+/* ======================================================================== */
+
+int
+setup_write10(scsi_device_t *sdp, scsi_generic_t *sgp)
+{
+    memset(sgp->cdb, '\0', sizeof(sgp->cdb));
+    sgp->cdb[0] = SOPC_WRITE_10; 
+    sgp->data_dir = scsi_data_write;
+    sdp->op_type = SCSI_CDB_OP;
+    sdp->encode_flag = True;
+    sgp->cdb_size = GetCdbLength(sgp->cdb[0]);
+    return(SUCCESS);
+}
+
+int
+setup_write16(scsi_device_t *sdp, scsi_generic_t *sgp)
+{
+    memset(sgp->cdb, '\0', sizeof(sgp->cdb));
+    sgp->cdb[0] = SOPC_WRITE_16;
+    sgp->data_dir = scsi_data_write;
+    sdp->op_type = SCSI_CDB_OP;
+    sdp->encode_flag = True;
+    sgp->cdb_size = GetCdbLength(sgp->cdb[0]);
+    return(SUCCESS);
+}
+
+/* ======================================================================== */
+
+int
+setup_verify10(scsi_device_t *sdp, scsi_generic_t *sgp)
+{
+    memset(sgp->cdb, '\0', sizeof(sgp->cdb));
+    sgp->cdb[0] = SOPC_VERIFY_10; 
+    sgp->data_dir = scsi_data_none;
+    sdp->op_type = SCSI_CDB_OP;
+    sdp->encode_flag = True;
+    sgp->cdb_size = GetCdbLength(sgp->cdb[0]);
+    return(SUCCESS);
+}
+
+int
+setup_verify16(scsi_device_t *sdp, scsi_generic_t *sgp)
+{
+    memset(sgp->cdb, '\0', sizeof(sgp->cdb));
+    sgp->cdb[0] = SOPC_VERIFY_16;
+    sgp->data_dir = scsi_data_none;
+    sdp->op_type = SCSI_CDB_OP;
+    sdp->encode_flag = True;
+    sgp->cdb_size = GetCdbLength(sgp->cdb[0]);
+    return(SUCCESS);
+}
+
+/* ======================================================================== */
+
+int
+setup_write_same10(scsi_device_t *sdp, scsi_generic_t *sgp)
+{
+    uint32_t data_length = BLOCK_SIZE;
+
+    memset(sgp->cdb, '\0', sizeof(sgp->cdb));
+    sgp->cdb[0] = SOPC_WRITE_SAME; 
+    sgp->data_dir = scsi_data_write;
+    sgp->data_length = data_length;
+    sgp->data_buffer = malloc_palign(sdp, sgp->data_length, 0);
+    if (sgp->data_buffer == NULL) return (FAILURE);
+    sdp->op_type = SCSI_CDB_OP;
+    sdp->encode_flag = True;
+    sgp->cdb_size = GetCdbLength(sgp->cdb[0]);
+    return(SUCCESS);
+}
+
+int
+setup_write_same16(scsi_device_t *sdp, scsi_generic_t *sgp)
+{
+    uint32_t data_length = BLOCK_SIZE;
+
+    memset(sgp->cdb, '\0', sizeof(sgp->cdb));
+    sgp->cdb[0] = SOPC_WRITE_SAME_16;
+    sgp->data_dir = scsi_data_write;
+    sgp->data_length = data_length;
+    sgp->data_buffer = malloc_palign(sdp, sgp->data_length, 0);
+    if (sgp->data_buffer == NULL) return (FAILURE);
+    sdp->op_type = SCSI_CDB_OP;
+    sdp->encode_flag = True;
+    sgp->cdb_size = GetCdbLength(sgp->cdb[0]);
+    return(SUCCESS);
 }
 
 /* ======================================================================== */
@@ -3467,7 +4223,7 @@ static scsi_opcode_t scsiOpcodeTable[] = {
 	scsi_data_write, write_using_token_encode, NULL, XCOPY_PT_MAX_BLOCKS		},
     {	SOPC_RECEIVE_COPY_RESULTS,  RECEIVE_COPY_RESULTS_SVACT_OPERATING_PARAMETERS,
 					  ALL_RANDOM_DEVICES, "Receive Copy Results",
-	scsi_data_read, NULL, NULL							},
+	scsi_data_read, receive_copy_results_encode, receive_copy_results_decode	},
     {	SOPC_RECEIVE_ROD_TOKEN_INFO,RECEIVE_ROD_TOKEN_INFORMATION,
 					  ALL_RANDOM_DEVICES, "Receive ROD Token Information",
 	scsi_data_read, NULL, receive_rod_token_decode					},
@@ -3481,12 +4237,14 @@ static scsi_opcode_t scsiOpcodeTable[] = {
 	scsi_data_none, random_rw16_encode, NULL, VERIFY_DATA_MAX_BLOCKS16		},
     {	SOPC_SYNCHRONIZE_CACHE_16,  0x00, ALL_RANDOM_DEVICES, "Synchronize Cache(16)"	},
     {	SOPC_WRITE_SAME_16,	    0x00, ALL_RANDOM_DEVICES, "Write Same(16)",
-	scsi_data_write, random_rw16_encode, NULL, WRITE_SAME_MAX_BLOCKS16		},
+	scsi_data_write, random_ws16_encode, NULL, WRITE_SAME_MAX_BLOCKS16		},
     {	SOPC_SERVICE_ACTION_IN_16,  0x00, ALL_RANDOM_DEVICES, "Service Action In(16)",
 	scsi_data_read									},
-    {	SOPC_SERVICE_ACTION_IN_16,  0x10, ALL_RANDOM_DEVICES, "Read Capacity(16)",
+    {	SOPC_SERVICE_ACTION_IN_16,  SCSI_SERVICE_ACTION_READ_CAPACITY_16,
+	ALL_RANDOM_DEVICES, "Read Capacity(16)",
 	scsi_data_read, read_capacity16_encode, read_capacity16_decode			},
-    {	SOPC_SERVICE_ACTION_IN_16,  0x12, ALL_RANDOM_DEVICES, "Get LBA Status(16)",
+    {	SOPC_SERVICE_ACTION_IN_16,  SCSI_SERVICE_ACTION_GET_LBA_STATUS,
+	ALL_RANDOM_DEVICES, "Get LBA Status(16)",
         scsi_data_read, get_lba_status_encode, get_lba_status_decode			},
     {	SOPC_COMPARE_AND_WRITE,	    0x00, ALL_RANDOM_DEVICES, "Compare and Write(16)",
 	scsi_data_write, random_caw16_encode, NULL, CAW_DEFAULT_BLOCKS			},

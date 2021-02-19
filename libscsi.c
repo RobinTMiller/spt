@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2020			    *
+ *			  COPYRIGHT (c) 2006 - 2021			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -33,6 +33,12 @@
  * when appropriate, to send a SCSI CDB (Command Descriptor Block).
  * 
  * Modification History:
+ * 
+ * January 21st, 2021 by Robin T. Miller
+ *      Addeed ReceiveCopyParameters() to acquire copy parameters.
+ * 
+ * January 20th, 2021 by Robin T. Miller
+ *      Added GetThirdPartyCopy() to acquire token based xcopy limits.
  * 
  * July 3rd, 2018 by Robin T. Miller
  *      In isSenseRetryable(), be more selective on "Not Ready" errors.
@@ -1182,9 +1188,161 @@ GetUniqueID(HANDLE fd, char *dsf,
 }
 
 /* ======================================================================== */
+/*
+ * GetThirdPartyCopy() - Gets Third Party Copy Parameters.
+ *
+ * Inputs:
+ *  fd     = The file descriptor.
+ *  dsf    = The device special file (raw or "sg" for Linux).
+ *  debug  = Flag to control debug output.
+ *  errlog = Flag to control error logging. (True logs error)
+ *                                          (False suppesses)
+ *  third_party_copy = Pointer to application third party copy.
+ *  tsp = The tool specific information.
+ *
+ * Return Value:
+ *    Returns SUCCESS / FAILURE / WARNING (unknown descriptor type)
+ */
+int
+ReceiveCopyParameters(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
+		      receive_copy_parameters_t *copy_parameters, tool_specific_t *tsp)
+{
+    scsi_generic_t scsi_generic;
+    scsi_generic_t *sgp = &scsi_generic;
+    void *opaque = (tsp) ? tsp->opaque : NULL;
+    receive_copy_results_cdb_t *cdb;
+    receive_copy_operating_parameters_t receive_copy_params;
+    receive_copy_operating_parameters_t *rcop = &receive_copy_params;
+    uint32_t data_length = sizeof(*rcop);
+    int status;
+
+    sgp = init_scsi_generic(tsp);
+    memset(sgp->cdb, 0, sizeof(sgp->cdb));
+    memset(rcop, 0, sizeof(*rcop));
+    memset(copy_parameters, 0, sizeof(*copy_parameters));
+
+    cdb             = (receive_copy_results_cdb_t *)sgp->cdb;
+    cdb->opcode     = SOPC_RECEIVE_COPY_RESULTS;
+    cdb->service_action = SCSI_SERVICE_ACTION_RECEIVE_COPY_RESULTS;
+    HtoS(cdb->allocation_length, data_length);
+
+    sgp->fd         = fd;
+    sgp->dsf        = dsf;
+    sgp->cdb_size   = sizeof(*cdb);
+    sgp->cdb_name   = "Receive Copy Results";
+    sgp->data_dir   = scsi_data_read;
+    sgp->data_buffer = rcop;
+    sgp->data_length = data_length;
+    sgp->debug      = debug;
+    sgp->errlog     = errlog;
+    sgp->timeout    = ScsiDefaultTimeout;
+    
+    status = libExecuteCdb(sgp);
+
+    if (status == SUCCESS) {
+	int list_index = 0;
+	copy_parameters->snlid = (rcop->snlid) ? True : False;
+	copy_parameters->max_cscd_descriptor_count = (uint16_t)StoH(rcop->max_cscd_descriptor_count);
+	copy_parameters->max_segment_descriptor_count = (uint16_t)StoH(rcop->max_segment_descriptor_count);
+	copy_parameters->maximum_descriptor_list_length = (uint32_t)StoH(rcop->maximum_descriptor_list_length);
+	copy_parameters->maximum_segment_length = (uint32_t)StoH(rcop->maximum_segment_length);
+	copy_parameters->maximum_inline_data_length = (uint32_t)StoH(rcop->maximum_inline_data_length);
+	copy_parameters->held_data_limit = (uint32_t)StoH(rcop->held_data_limit);
+	copy_parameters->maximum_stream_transfer_size = (uint32_t)StoH(rcop->maximum_stream_transfer_size);
+	copy_parameters->total_concurrent_copies = (uint16_t)StoH(rcop->total_concurrent_copies);
+	copy_parameters->maximum_concurrent_copies = rcop->maximum_concurrent_copies;
+	copy_parameters->data_segment_granularity = rcop->data_segment_granularity;
+	copy_parameters->inline_data_granularity = rcop->inline_data_granularity;
+	copy_parameters->held_data_granularity = rcop->held_data_granularity;
+	copy_parameters->implemented_desc_list_length = rcop->implemented_desc_list_length;
+	/* Copy the list (for now). */
+	for (list_index = 0; (list_index < rcop->implemented_desc_list_length); list_index++) {
+	    if (list_index == IMP_DESC_LIST_LEN) { break; }
+	    copy_parameters->implemented_desc_list[list_index] = rcop->implemented_desc_list[list_index];
+	}
+    }
+    free_palign(opaque, sgp->sense_data);
+    free(sgp);
+    return(status);
+}
+
+/* ======================================================================== */
 
 /*
- * GetBlockLimits() - Gets Inquiry Block Limits Page.
+ * GetThirdPartyCopy() - Gets Third Party Copy Parameters.
+ *
+ * Inputs:
+ *  fd     = The file descriptor.
+ *  dsf    = The device special file (raw or "sg" for Linux).
+ *  debug  = Flag to control debug output.
+ *  errlog = Flag to control error logging. (True logs error)
+ *                                          (False suppesses)
+ *  third_party_copy = Pointer to application third party copy.
+ *  tsp = The tool specific information.
+ *
+ * Return Value:
+ *    Returns SUCCESS / FAILURE / WARNING (unknown descriptor type)
+ */
+int
+GetThirdPartyCopy(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
+		  inquiry_third_party_copy_t *third_party_copy, tool_specific_t *tsp)
+{
+    inquiry_page_t inquiry_data;  
+    inquiry_page_t *inquiry_page = &inquiry_data;
+    inquiry_header_t *inqh = &inquiry_page->inquiry_hdr;
+    inquiry_third_party_copy_page_t *tpcp = NULL;
+    inquiry_third_party_descriptor_t *tpdp = NULL;
+    unsigned char page = INQ_THIRD_PARTY_COPY;
+    uint16_t desc_length, desc_type;
+    int status;
+
+    status = Inquiry(fd, dsf, debug, errlog, NULL, NULL,
+		     inquiry_page, sizeof(*inquiry_page), page,	0, 0, tsp);
+
+    if (status != SUCCESS) return(status);
+
+    /*
+     * Note: The extra check is for non-compliant SCSI devices.
+     */
+    if (inqh->inq_page_code != page) {
+	return(FAILURE);
+    }
+
+    /*
+     * Data Format: 
+     * <third party descriptor> 
+     * <third party parameters> 
+     *  	...
+     * We only expect one descriptor of ROD Limits Type. 
+     * Revisit as required, we're starting with just one!
+     */
+    tpdp = (inquiry_third_party_descriptor_t *)inquiry_page->inquiry_page_data;
+    tpcp = (inquiry_third_party_copy_page_t *)(tpdp + 1);
+
+    desc_type = (uint16_t)StoH(tpdp->tpc_descriptor_type);
+    desc_length = (uint16_t)StoH(tpdp->tpc_descriptor_length);
+
+    /* This is the only descriptor type we support today! */
+    if (desc_type != TPC_BLOCK_DEVICE_ROD_LIMITS_TYPE) {
+	return(WARNING);
+    }
+
+    /* 
+     * Decode all values, and let caller decide what they want to use. 
+     */
+    third_party_copy->descriptor_type = desc_type;
+    third_party_copy->max_range_descriptors = (uint16_t)StoH(tpcp->max_range_descriptors);
+    third_party_copy->max_inactivity_timeout = (uint32_t)StoH(tpcp->max_inactivity_timeout);
+    third_party_copy->default_inactivity_timeout = (uint32_t)StoH(tpcp->default_inactivity_timeout);
+    third_party_copy->max_token_transfer_size = (uint64_t)StoH(tpcp->max_token_transfer_size);
+    third_party_copy->optimal_transfer_count = (uint64_t)StoH(tpcp->optimal_transfer_count);
+    return(status);
+}
+
+/* ======================================================================== */
+
+/*
+ * GetBlockLimits() - Gets Inquiry Block Limits Parameters.
  *
  * Inputs:
  *  fd     = The file descriptor.
@@ -1223,9 +1381,7 @@ GetBlockLimits(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
     }
 
     page_length = (size_t)inquiry_page->inquiry_hdr.inq_page_length;
-    //blp = (scsit_inq_block_limits_page_t *)inquiry_page->inquiry_page_data;
-    /* Note: SCSIT header defines each page with the Inquiry header! */
-    blp = (inquiry_block_limits_page_t *)inqh;
+    blp = (inquiry_block_limits_page_t *)inquiry_page->inquiry_page_data;
 
     /* 
      * Decode all values, and let caller decide what they want to use. 

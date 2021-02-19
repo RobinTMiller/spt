@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 1988 - 2018			    *
+ *			  COPYRIGHT (c) 1988 - 2021			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -54,8 +54,6 @@ os_ctime(time_t *timep, char *time_buffer, int timebuf_size)
     return(time_buffer);
 }
 
-#if !defined(INLINE_FUNCS)
-
 int
 os_create_directory(char *dir_path, int permissions)
 {
@@ -67,8 +65,6 @@ os_remove_directory(char *dir_path)
 {
     return( rmdir(dir_path) );
 }
-
-#endif /* !defined(INLINE_FUNCS) */
 
 char *
 os_getcwd(void)

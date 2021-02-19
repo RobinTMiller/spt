@@ -34,5 +34,6 @@ ln ../spt_ses.c .
 ln ../spt_ses.h .
 ln ../parson.h .
 ln ../parson.c .
+ln ../spt_jobs.c .
 ln ../spt_log.c .
 ln ../spt_show.c .

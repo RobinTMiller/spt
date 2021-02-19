@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2020			    *
+ *			  COPYRIGHT (c) 2006 - 2021			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -32,6 +32,14 @@
  *
  * Modification History:
  *
+ * January 5th, 2021 by Robin T. Miller
+ *      Remove extra DecodeTargetPortIdentifier() in find_scsi_devices(),
+ *  left over by accident, after refactoring code.
+ * 
+ * October 16th, 2020 by Robin T. Miller
+ *	Add proper error messages for when duplicate devices are found, then
+ * ignore the device rather than invoking abort(), which stop is misleading!
+ * 
  * May 28th, 2020 by Robin T. Miller
  *      Add "The requested resource is in use." (ERROR_BUSY) as retriable
  * error, since this is being returned during path failovers due to faults.
@@ -931,7 +939,6 @@ process_device(scsi_generic_t *sgp, char *devpath, scsi_filters_t *sfp)
     inquiry_page_t inquiry_data;  
     inquiry_page_t *inquiry_page = &inquiry_data;
     scsi_device_entry_t *sdep = NULL;
-    //struct sg_scsi_id scsi_id, *sid = &scsi_id;
     char *path = devpath;
     char *dsf = sgp->dsf;
     HANDLE fd = INVALID_HANDLE_VALUE;
@@ -1120,11 +1127,6 @@ process_device(scsi_generic_t *sgp, char *devpath, scsi_filters_t *sfp)
     }
 
     /*
-     * For SAS protocol, the target port is the drive SAS address.
-     */
-    target_port = DecodeTargetPortIdentifier(opaque, inquiry, inquiry_page);
-
-    /*
      * Get the full firmware version string. 
      * Note: This provides 8 character string versus truncated Inquiry revision! 
      */
@@ -1199,7 +1201,11 @@ add_device_entry(scsi_generic_t *sgp, char *path, inquiry_t *inquiry,
 	//scsi_device_name_t *sdnp;
 	//sdnp = update_device_entry(sgp, sdep, path, inquiry, serial, device_id,
 				   //target_port, bus, channel, target, lun);
-	abort();
+	Eprintf(opaque, "Found unexpected duplicate device %s with serial number %s, ignoring...\n",
+	        path, serial);
+	Fprintf(opaque, "Previous device is %s, which is NOT expected with proper multi-pathing!\n",
+	        sdep->sde_names.sdn_flink->sdn_device_path);
+	//abort();
     }
     return( sdep );
 }
@@ -1293,7 +1299,9 @@ find_device_entry(scsi_generic_t *sgp, char *path, char *serial,
 		return( sdep );
 	    }
 	}
-	if (serial && sdep->sde_serial) {
+	/* Do not do lookup by serial number, if we have a device ID. */
+	/* Note: Some storage, like 3PAR, use same serial number across LUNs! */
+	if ( (device_id == NULL) && serial && sdep->sde_serial) {
 	    if (strcmp(sdep->sde_serial, serial) == 0) {
 		return( sdep );
 	    }
@@ -1313,62 +1321,6 @@ find_device_entry(scsi_generic_t *sgp, char *path, char *serial,
     }
     return(NULL);
 }
-
-#if 0
-static scsi_device_name_t *
-update_device_entry(scsi_generic_t *sgp, scsi_device_entry_t *sdep,
-		    char *path, inquiry_t *inquiry,
-		    char *serial, char *device_id, char *target_port,
-		    int bus, int channel, int target, int lun)
-{
-    void *opaque = sgp->tsp->opaque;
-    struct scsi_device_name *sdnh = &sdep->sde_names;
-    scsi_device_name_t *sdnp;
-    scsi_device_name_t *sptr;
-
-    /* For SCSI generic "sg" devices, try to find an "sd" device path. */
-    if (strncmp(path, SG_PATH_PREFIX, SG_PATH_SIZE) == 0) {
-	sdnp = find_device_by_nexus(sgp, sdep, path, bus, channel, target, lun);
-	if (sdnp) {
-	    sdnp->sdn_scsi_path = strdup(path);
-	    return( sdnp );
-	}
-    }
-    /* We just need to add a new device name. */
-    sdnp = Malloc(opaque, sizeof(*sdnp));
-    if (sdnp == NULL) return(NULL);
-    sdnp->sdn_device_path = strdup(path);
-    if (target_port) {
-	sdnp->sdn_target_port = strdup(target_port);
-    }
-    sdnp->sdn_bus = bus;
-    sdnp->sdn_channel = channel;
-    sdnp->sdn_target = target;
-    sdnp->sdn_lun = lun;
-    /* Sort by device name. */
-    for (sptr = sdnh->sdn_flink; (sptr != sdnh) ; sptr = sptr->sdn_flink) {
-	if (sptr->sdn_flink) {
-	    /* Sort by name, ensuring "sda,sdb,..." comes before "sdaa", etc. */
-	    if ( ( strlen(path) < strlen(sptr->sdn_device_path) ) ||
-		 ((strlen(path) == strlen(sptr->sdn_device_path) &&
-		   strcmp(path, sptr->sdn_device_path) < 0)) ) {
-		sdnp->sdn_flink = sptr;
-		sdnp->sdn_blink = sptr->sdn_blink;
-		sptr->sdn_blink->sdn_flink = sdnp;
-		sptr->sdn_blink = sdnp;
-		return( sdnp );
-	    }
-	}
-    }
-    /* Insert at the tail. */
-    sptr = sdnh->sdn_blink;
-    sptr->sdn_flink = sdnp;
-    sdnp->sdn_blink = sptr;
-    sdnp->sdn_flink = sdnh;
-    sdnh->sdn_blink = sdnp;
-    return( sdnp );
-}
-#endif /* 0 */
 
 /* ========================================================================================================= */
 /*

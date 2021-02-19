@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2020			    *
+ *			  COPYRIGHT (c) 2006 - 2021			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -274,7 +274,7 @@ typedef struct {
 /*
  * Inquiry Page Codes:
  */
-#define INQ_ALL_PAGES		0x00	/* Supported vital product data	*/
+#define INQ_ALL_PAGES		0x00	/* Supported VPD pages.		*/
 #define INQ_SERIAL_PAGE		0x80	/* Unit serial number page.	*/
 #define INQ_IMPOPR_PAGE		0x81	/* Implemented opr defs page.	*/
 #define INQ_ASCOPR_PAGE		0x82	/* ASCII operating defs page.	*/
@@ -342,6 +342,8 @@ typedef struct inquiry_page {
 	uint8_t inquiry_page_data[MAX_INQ_PAGE_LENGTH];
 } inquiry_page_t;
 
+/* ============================================================================ */
+
 /*
  * Operating Definition Parameter Values:
  */
@@ -362,8 +364,10 @@ struct opdef_param {
 #endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
 };
 
+/* ============================================================================ */
+
 /*
- * Implemented Operating Definition Page.
+ * Implemented Operating Definition (VPD Page 0x81):
  */
 typedef struct inquiry_opdef_page {
 	inquiry_header_t inquiry_header;
@@ -384,8 +388,10 @@ typedef struct inquiry_opdef_page {
 	uint8_t	support_list[10];	/* Supported definition list.	*/
 } inquiry_opdef_page_t;
 
+/* ============================================================================ */
+
 /*
- * Device Identification Page Definitions:
+ * Device Identification Page (VPD Page 0x83) Definitions:
  */
 #define IID_CODE_SET_RESERVED	0x00	/* Reserved.			*/
 #define IID_CODE_SET_BINARY	0x01	/* Identifier field is binary.	*/
@@ -424,7 +430,7 @@ typedef struct inquiry_opdef_page {
 #define NAA_IEEE_REG_EXTENDED   0x6	/* IEEE Registered Extended.	*/
                                         /* All other values reserved.	*/
 
-/* Note: SPC-4 and beyond now call this the Designation descriptor! */
+/* Note: SPC-4 and beyond now call this the Designator descriptor! */
 typedef struct inquiry_ident_descriptor {
 #if defined(_BITFIELDS_LOW_TO_HIGH_)
     bitfield_t				/*				[0] */
@@ -466,11 +472,50 @@ typedef struct inquiry_network_service_page {
     uint8_t address[1];
 } inquiry_network_service_page_t;
 
+/* ============================================================================ */
+
 /* 
- * Block Limits Data Structure: 
+ * Third Party Copy Data (VPD Page 0x8F) Definitions:
+ */
+
+/* 
+ * Third Party Copy Descriptor Types:
+ */
+#define TPC_BLOCK_DEVICE_ROD_LIMITS_TYPE	0x0000
+#define TPC_SUPPORTED_COMMANDS_TYPE		0x0001
+#define TPC_PARAMETER_DATALEN_TYPE		0x0004
+#define TPC_SUPPORTED_DESCRIPTORS_TYPE		0x0008
+#define TPC_SUPPORTED_CSCD_DESCRIPTOR_IDS_TYPE	0x000C
+#define TPC_ROD TOKEN_FEATURES_TYPE		0x0106
+#define TPC_SUPPORTED_ROD_TOKEN_ROD_TYPES	0x0108
+#define TPC_GENERAL_COPY_OPERATIONS_TYPE	0x8001
+#define TPC_STREAM_COPY_OPERATIONS_TYPE		0x9101
+#define TPC_HELD_DATA_TYPE			0xC001
+/* Restricted E000h to EFFFh */
+/* Reserved All other codes */
+
+typedef struct inquiry_third_party_descriptor {
+    uint8_t tpc_descriptor_type[2];	/* Third party descriptor type.	  [0-1] */
+    uint8_t tpc_descriptor_length[2];	/* Third party descriptor length. [2-3] */
+    					/* Third party copy parameters. */
+} inquiry_third_party_descriptor_t;
+    
+typedef struct inquiry_third_party_copy_page {
+    uint8_t vendor_specific[6];		/* Vendor specific.		[4-9] */
+    uint8_t max_range_descriptors[2];	/* Maximum range descriptors.	[10-11] */
+    uint8_t max_inactivity_timeout[4];	/* Maximum inactivity timeout.	[12-15] */
+    uint8_t default_inactivity_timeout[4]; /* Default inactivity tmo.	[16-19] */
+    uint8_t max_token_transfer_size[8];	/* Maximum token transfer size.	[20-27] */
+    uint8_t optimal_transfer_count[8];	/* Optimal transfer count.	[28-35] */
+} inquiry_third_party_copy_page_t;
+
+/* ============================================================================ */
+
+/*
+ * Block Limits Data (VPD Page 0xB0) Definitions:
+ * [ Reference SBC-4 September 15th, 2020 ]
  */
 typedef struct inquiry_block_limits_page {
-    inquiry_header_t inquiry_header;
 #if defined(_BITFIELDS_LOW_TO_HIGH_)
     bitfield_t				/*				[4] */
 	wsnz			: 1,    /* Write same no zero.	       (b0) */
@@ -491,8 +536,61 @@ typedef struct inquiry_block_limits_page {
 #define UGAVALID_BIT	0x80000000UL	/* Unmap granularity alignment valid. */
     uint8_t unmap_granularity_alignment[4]; /* Max unmap granularity.	[32-35] */
     uint8_t max_write_same_len[8];	/* Max write same length.	[36-43] */
-    uint8_t reserved_bytes44_63[20];	/* Reserved.			[44-63] */
+    uint8_t max_atomic_xfer_len[4];	/* Max atomic transfer length.	[44-47] */
+    uint8_t atomic_alignment[4];	/* Atomic alignment.		[48-51] */
+    uint8_t atomic_xfer_len_granulatity[4]; /* Atomic xfer granularity.	[52-55] */
+    uint8_t max_atomic_len_boundary[4];	/* Max atomic xfer len boundary [56-59] */
+    uint8_t max_atomic_boundary_size[4];/* Max atomic boundary size.	[60-63] */
 } inquiry_block_limits_page_t;
+
+/* ============================================================================ */
+
+/*
+ * Logical Block Provisioning(VPD Page 0xB2) Defintions:
+ */
+
+/*
+ * Logical Block Provisioning Read Zero (LBPRZ) Definitions:
+ */
+#define LBPRZ_UNMAPPED_VENDOR_SPECIFIC		0x0	/* 000b */
+#define LBPRZ_UNMAPPED_READ_AS_ZERO_MASK	0x1	/* xx1b */
+#define LBPRZ_UNMAPPED_INITIALIZED_PATTERN	0x2	/* 010b */
+
+/*
+ * Provisioning Type Definitions:
+ */
+#define PROVISIONING_TYPE_NOT_REPORTED_OR_FULL	0x00
+#define PROVISIONING_TYPE_RESOURCE_PROVISIONED	0x01
+#define PROVISIONING_TYPE_IS_THIN_PROVISIONED	0x02
+
+typedef struct inquiry_logical_block_provisioning_page {
+    uint8_t threshold_exponent;		/* Threshold exponent.		[4] */
+#if defined(_BITFIELDS_LOW_TO_HIGH_)
+    bitfield_t				/*				[5] */
+        dp			: 1,	/* Descriptor present.	       (b0) */
+        anc_sup			: 1,	/* Anchor supported.	       (b1) */
+        lbprz			: 3,	/* Logical block read zero.  (b2:4) */
+        lbpws10			: 1,	/* Write Same 10 supported.    (b5) */
+        lbpws			: 1,	/* Write Same 16 supported.    (b6) */
+        lbpu			: 1;	/* Unmap is supported.	       (b7) */
+    bitfield_t				/*				[6] */
+        provisioning_type	: 3,	/* Provisioning type.	     (b0:2) */
+        minimum_percentage	: 5;	/* Minimum percentage.       (b3:7) */
+#elif defined(_BITFIELDS_HIGH_TO_LOW_)
+    bitfield_t				/*				[5] */
+        lbpu			: 1,	/* Unmap is supported.	       (b7) */
+        lbpws			: 1,	/* Write Same 16 supported.    (b6) */
+        lbpws10			: 1,	/* Write Same 10 supported.    (b5) */
+	lbprz			: 3,	/* Logical block read zero.  (b2:4) */
+	anc_sup			: 1,	/* Anchor supported.	       (b1) */
+	dp			: 1;	/* Descriptor present.	       (b0) */
+    bitfield_t				/*				[6] */
+	minimum_percentage	: 5,	/* Minmum percentage.        (b3:7) */
+	provisioning_type	: 3;	/* Provisioning type.	     (b0:2) */
+#endif /* defined(_BITFIELDS_LOW_TO_HIGH_) */
+    uint8_t threshold_percentage;	/* Threshold percentage.	[7] */
+    /* Provisioning group descriptor (if any).			      [8-n] */
+} inquiry_logical_block_provisioning_page_t;
 
 #if defined(__IBMC__)
 #  pragma options align=reset

@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2020			    *
+ *			  COPYRIGHT (c) 2006 - 2021			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -31,6 +31,9 @@
  *	This module provides functions to show various information.
  * 
  * Modification History:
+ * 
+ * September 8th, 2020 by Robin T. Miller
+ *      Add support for AIX.
  * 
  * May 27th, 2019 by Robin T. Miller
  *      Handle case where we don't have a device name or SCSI name to match.
@@ -151,7 +154,7 @@ parse_show_devices_args(scsi_device_t *sdp, char **argv, int argc, int *arg_inde
 			return( HandleExit(sdp, FAILURE) );
 		    }
 		} else { /* assume hex */
-		    device_type = (uint8_t)number(sdp, token, HEX_RADIX);
+		    device_type = (uint8_t)number(sdp, token, HEX_RADIX, &status, False);
 		}
 		device_types[num_dtypes++] = device_type;
 		if (num_dtypes == MAX_DTYPES) {
@@ -246,7 +249,7 @@ show_devices(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp)
     int status = SUCCESS;
 
     /* TODO: Implement this for other operating systems, esp. Windows! */
-#if defined(__linux__) || defined(_WIN32)
+#if defined(_AIX) || defined(__linux__) || defined(_WIN32)
     if (sdp->show_caching_flag == False) {
 	/* Empty the list to avoid cached information. */
 	FreeScsiDeviceTable(sgp);
@@ -254,7 +257,7 @@ show_devices(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp)
     if (sdeh->sde_flink == sdeh) {
 	status = os_find_scsi_devices(sgp, &sdp->scsi_filters, sdp->show_paths);
     }
-#endif /* defined(__linux__) || defined(_WIN32) */
+#endif /* defined(_AIX) || defined(__linux__) || defined(_WIN32) */
     if (sdeh->sde_flink == sdeh) {
 	FreeScsiFilters(sdp, &sdp->scsi_filters);
 	return(WARNING); /* Empty list! */
@@ -658,7 +661,7 @@ show_devices_to_json(scsi_device_t *sdp)
 #if defined(__linux__)
 	    device_path_type = os_get_device_path_type(sdnp);
 #else /* !defined(__linux__) */
-	    device_path_type = "Device Path";	/* This may vary by OS, Linux is only OS today! */
+	    device_path_type = "Device Path";	/* This may vary by OS. */
 #endif /* defined(__linux__) */
 	    if (device_path_type) {
 		if (dtvalue == NULL) {

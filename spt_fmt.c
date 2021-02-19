@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 1988 - 2018			    *
+ *			  COPYRIGHT (c) 1988 - 2021			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -906,6 +906,7 @@ get_total_operations(scsi_device_t *sdp, time_t *secs)
  *      %et = The elapsed time.
  *      %tod = The time of day.
  *      %etod = Elapsed time of day.
+ *      %device = The base device name.
  *      %dsf = The device name only.
  *	%dfs = The directory file separator. (Unix: '/' or Windows: '\')
  *	%host = The host name.
@@ -970,6 +971,29 @@ FmtString(scsi_device_t *sdp, char *format, hbool_t filepath_flag)
 		/*
 		 * Note: This device stuff is duplicated, need common parsing!
 		 */
+	    } else if (strncasecmp(key, "device", 6) == 0) {
+		char *device = NULL;
+		/* Switch to dsf (default device). */
+		iop = &sdp->io_params[IO_INDEX_BASE];
+		sgp = &iop->sg;
+		device = sgp->dsf;
+		if (device) {	/* master does not have a device! */
+		    if (filepath_flag) {
+			char *sptr;
+			/* Add basename of the device path. */
+			if (sptr = strrchr(device, ifs)) {
+			    sptr++;
+			} else {
+			    sptr = device;
+			}
+			to += Sprintf(to, "%s", sptr);
+		    } else {
+			to += Sprintf(to, "%s", device);
+		    }
+		}
+		length -= 6;
+		from += 7;
+		continue;
 	    } else if (strncasecmp(key, "dsf1", 4) == 0) {
 		/* Switch to dsf1. (mirror device) */
 		iop = &sdp->io_params[IO_INDEX_DSF1];

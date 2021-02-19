@@ -1,7 +1,7 @@
 #ifndef LIBSCSI_H
 /****************************************************************************
  *                                                                          *
- *                      COPYRIGHT (c) 2006 - 2020                           *
+ *                      COPYRIGHT (c) 2006 - 2021                           *
  *                       This Software Provided                             *
  *                                  By                                      *
  *                      Robin's Nest Software Inc.                          *
@@ -560,8 +560,55 @@ typedef struct sense_entry {
     char    *sense_message;         /* Error message text.          */
 } sense_entry_t;
 
+/* ============================================================================ */
+
+#if !defined(IMP_DESC_LIST_LEN)
+#  define IMP_DESC_LIST_LEN		10	/* For allocation below, this varies. */
+#endif /* !defined(IMP_DESC_LIST_LEN) */
+
 /*
- * Inquiry Block Limits: (normalized for caller in host format)
+ * This is the application style data for receive copy operating parameters.
+ */
+typedef struct receive_copy_parameters {
+    hbool_t snlid;				/* Supports no list ID.			*/
+    uint16_t max_cscd_descriptor_count;		/* Maximum CSCD descriptor count.	*/
+    uint16_t max_segment_descriptor_count;	/* Maximum segment desc count.		*/
+    uint32_t maximum_descriptor_list_length;	/* Maximum desc list length.		*/
+    uint32_t maximum_segment_length;		/* Maximum segment length.		*/
+    uint32_t maximum_inline_data_length;	/* Maximum inline data length.  	*/
+    uint32_t held_data_limit;			/* Held data limit;			*/
+    uint32_t maximum_stream_transfer_size;	/* Maximum stream transfer size.	*/
+    uint16_t total_concurrent_copies;		/* Total concurrent copies.		*/
+    uint8_t maximum_concurrent_copies;		/* Maximum concurrent copies.		*/
+    uint8_t data_segment_granularity;		/* Data segment granularity (log 2)	*/
+    uint8_t inline_data_granularity;		/* Inline data granularity (log 2)	*/
+    uint8_t held_data_granularity;		/* Held data granularity (log 2).	*/
+    uint8_t implemented_desc_list_length;	/* Implemented desc list length.	*/
+    uint8_t implemented_desc_list[IMP_DESC_LIST_LEN];/* List of implemented desc types. */
+    						/* One byte for each desc type, ordered */
+} receive_copy_parameters_t;
+
+/* ============================================================================ */
+/* 
+ * Note: See inquiry.h for indivual inquiry page descriptions. 
+ * These definitions is normallized for application layer usage. 
+ */
+
+/* 
+ * Inquiry Third Party Copy (VPD Page 0x8F):
+ */
+typedef struct inquiry_third_party_copy {
+    uint16_t descriptor_type;
+    uint16_t max_range_descriptors;
+    uint32_t max_inactivity_timeout;
+    uint32_t default_inactivity_timeout;
+    uint64_t max_token_transfer_size;
+    uint64_t optimal_transfer_count;
+} inquiry_third_party_copy_t;
+
+/* ============================================================================ */
+/*
+ * Inquiry Block Limits (VPD Page 0xB0):
  */
 typedef struct inquiry_block_limits {
     hbool_t  wsnz;
@@ -578,6 +625,7 @@ typedef struct inquiry_block_limits {
     uint64_t max_write_same_len;
 } inquiry_block_limits_t;
 
+/* ============================================================================ */
 /*
  * Provisioning Types:
  */
@@ -585,7 +633,7 @@ typedef struct inquiry_block_limits {
 #define PROVISIONING_TYPE_THIN  2
 
 /*
- * Inquiry Logical Block Provisioning: (normalized for caller in host format)
+ * Inquiry Logical Block Provisioning (VPD Page 0xB2):
  */
 typedef struct logical_block_provisioning {
     uint8_t threshold_exponent;
@@ -597,6 +645,8 @@ typedef struct logical_block_provisioning {
     hbool_t dp;
     uint8_t provisioning_type;
 } inquiry_logical_block_provisioning_t;
+
+/* ============================================================================ */
 
 #include "scsilib.h"                  /* OS specific declarations. */
 
@@ -638,9 +688,19 @@ typedef enum id_type {
 #define IDT_BOTHIDS IDT_NONE
 extern idt_t GetUniqueID(HANDLE fd, char *dsf, char **identifier, idt_t idt,
              hbool_t debug, hbool_t errlog, unsigned int timeout, tool_specific_t *tsp);
-extern int GetBlockLimits(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,  inquiry_block_limits_t *block_limits, tool_specific_t *tsp);
+/* 
+ * Application API's to return normalized data (already decoded):
+ */
+extern int ReceiveCopyParameters(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
+				 receive_copy_parameters_t *copy_parameters, tool_specific_t *tsp);
+extern int GetThirdPartyCopy(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
+			     inquiry_third_party_copy_t *third_party_copy, tool_specific_t *tsp);
+extern int GetBlockLimits(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
+			  inquiry_block_limits_t *block_limits, tool_specific_t *tsp);
+/* TODO: This API is NOT implemented yet! */
 extern int GetLogicalBlockProvisioning(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
-				       inquiry_logical_block_provisioning_t *block_provisioning, tool_specific_t *tsp);
+				       inquiry_logical_block_provisioning_t *block_provisioning,
+				       tool_specific_t *tsp);
 /* ATA API's */
 extern char *AtaGetDriveFwVersion(HANDLE fd, char *dsf, hbool_t debug, hbool_t errlog,
                                   scsi_addr_t *sap, scsi_generic_t **sgpp,
@@ -726,5 +786,9 @@ extern void DumpWUTData(scsi_generic_t *sgp);
 extern void DumpRangeDescriptor(scsi_generic_t *sgp, range_descriptor_t *rdp, int descriptor_number, unsigned offset);
 
 extern void GenerateSptCmd(scsi_generic_t *sgp);
+
+extern char *FindSegmentTypeMsg(uint8_t descriptor_type);
+extern char *FindTargetTypeMsg(uint8_t target_descriptor_type);
+extern char *GetDescriptorTypeMsg(char **descriptor_type, uint8_t descriptor_type_code);
 
 #endif /* LIBSCSI_H */
