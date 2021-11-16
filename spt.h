@@ -232,7 +232,8 @@ typedef enum vendor_ident {
     VID_CELESTICA,			/* Celestica vendor identity.   */
     VID_HGST,				/* HGST vendor identity.        */
     VID_WDC,				/* Western Digital identity.    */
-    VID_NIMBLE				/* HPE/Nimble storage array.	*/
+    VID_NIMBLE,				/* HPE/Nimble storage array.	*/
+    VID_3PARDATA			/* 3PAR/Primera storage array.	*/
 } vendor_id_t;
 
 typedef enum product_ident {
@@ -731,6 +732,20 @@ extern uint8_t GetDeviceTypeCode(scsi_device_t *sdp, char *device_type, int *sta
 extern char *GetVendorSerialNumber(scsi_device_t *sdp, inquiry_t *inquiry);
 extern void PrintDesignatorInformation(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp);
 
+char *GetDeviceType(uint8_t device_type, hbool_t full_name);
+char *GetPeripheralQualifier(inquiry_t *inquiry, hbool_t fullname);
+char *get_inquiry_page_name(uint8_t device_type, uint8_t page_code, uint8_t vendor_id);
+
+#include "parson.h"
+extern int standard_inquiry(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp, inquiry_t *inquiry);
+
+extern char *standard_inquiry_to_json(scsi_device_t *sdp, io_params_t *iop,
+				      scsi_generic_t *sgp, inquiry_t *inquiry, char *page_name);
+
+extern int PrintInquiryPageHeader(scsi_device_t *sdp, int offset,
+				  inquiry_header_t *ihdr, vendor_id_t vendor_id);
+extern JSON_Status PrintInquiryPageHeaderJson(scsi_device_t *sdp, JSON_Object *object, inquiry_header_t *ihdr);
+
 /* scsi_opcodes.c */
 extern int setup_extended_copy(scsi_device_t *sdp, scsi_generic_t *sgp);
 extern int setup_get_lba_status(scsi_device_t *sdp, scsi_generic_t *sgp);
@@ -858,6 +873,8 @@ extern void report_bad_sequence(scsi_device_t *sdp, io_params_t *iop, int start,
 extern void report_good_sequence(scsi_device_t *sdp, io_params_t *iop, int start, int length, Offset_t offset);
 
 /* spt_scsi.c */
+extern void copy_string(char *src, char *dst, size_t size);
+extern void strip_trailing_spaces(char *bp);
 extern void clone_scsi_information(io_params_t *iop, io_params_t *ciop);
 extern void free_scsi_information(io_params_t *iop);
 extern int get_scsi_information(scsi_device_t *sdp, io_params_t *iop);

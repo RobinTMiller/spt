@@ -1,6 +1,6 @@
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 2006 - 2018			    *
+ *			  COPYRIGHT (c) 2006 - 2021			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -32,6 +32,28 @@
  * 
  * Modification History:
  * 
+ * November 10th, 2021 by Robin T. Miller
+ *      Ignore errors when acquiring the serial number or device ID pages,
+ * since these two Inquiry VPD pages vary by vendor.
+ * 
+ * October 21st, 2021 by Robin T. Miller
+ *      Add acquiring and reporting of 3PAR FW/SN VPD page data.
+ * 
+ * October 12th, 2021 by Robin T. Miller
+ *      Add detection of 3PAR/Primera storage array LUNs.
+ * 
+ * October 11th, 2021 by Robin T. Miller
+ *      Ignore errors when requesting GetMgmtNetworkAddress(), since this
+ * VPD page may not be supported. (direct disks and 3PAR LUNs do NOT!)
+ * 
+ * September 15th, 2020 by Robin T. Miller
+ * 	When cloning devices, clone the inquiry information too!
+ *      Acquire Management Network Address to display w/SCSI information.
+ *      Report the Vendor, Product, and Firmware Version on separate lines.
+ * 
+ * January 26th, 2019 by Robin T. Miller
+ *      Add Nimble specific SCSI information (Inquiry and VPD pages).
+ * 
  * October 3rd, 2014 by Robin T. Miller
  * 	Modified SCSI generic opaque pointer to tool_specific information,
  * so we can pass more tool specific information (e.g. dt versus spt).
@@ -52,10 +74,14 @@
 #endif /* !defined(_WIN32) */
 
 #include "spt.h"
-//#include "include.h"
-//#include "libscsi.h"
 #include "scsi_cdbs.h"
 #include "scsi_opcodes.h"
+#if defined(Nimble)
+#  include "libnimble.h"
+#endif /* defined(Nimble) */
+#if defined(TPD)
+#  include "libtpd.h"
+#endif /* defined(TPD) */
 
 #if defined(_WIN32)
 #  include "spt_win.h"
@@ -69,6 +95,15 @@
 void strip_trailing_spaces(char *bp);
 scsi_generic_t *init_sg_info(scsi_device_t *sdp, tool_specific_t *tsp);
 void SetupIdentification(scsi_device_t *sdp, io_params_t *iop);
+
+/* ======================================================================== */
+
+void
+copy_string(char *src, char *dst, size_t size)
+{
+    (void)strncpy(dst, src, size);
+    dst[size] = '\0';
+}
 
 void
 strip_trailing_spaces(char *bp)
@@ -85,6 +120,8 @@ strip_trailing_spaces(char *bp)
     return;
 }
 
+/* ======================================================================== */
+
 void
 clone_scsi_information(io_params_t *iop, io_params_t *ciop)
 {
@@ -97,7 +134,10 @@ clone_scsi_information(io_params_t *iop, io_params_t *ciop)
     *csip = *sip;
 
     if (sip->si_inquiry) {
-	csip->si_inquiry = NULL;
+	csip->si_inquiry = Malloc(NULL, sizeof(*sip->si_inquiry));
+	if (csip->si_inquiry) {
+	    *csip->si_inquiry = *sip->si_inquiry;
+	}
     }
     if (sip->si_vendor_id) {
 	csip->si_vendor_id = strdup(sip->si_vendor_id);
@@ -222,6 +262,7 @@ get_standard_scsi_information(scsi_device_t *sdp, io_params_t *iop, scsi_generic
 {
     scsi_information_t	*sip = iop->sip;
     inquiry_t		*inquiry;
+    hbool_t		errlog = False;
     int			status = SUCCESS;
 
 
@@ -229,32 +270,6 @@ get_standard_scsi_information(scsi_device_t *sdp, io_params_t *iop, scsi_generic
     if (status == FAILURE) {
 	return(status);
     }
-#if 0
-    if (sip == NULL) {
-	iop->sip = sip = Malloc(sdp, sizeof(*sip) );
-	if (sip == NULL) return(FAILURE);
-    }
-    if ( (inquiry = sip->si_inquiry) == NULL) {
-	sip->si_inquiry = inquiry = Malloc(sdp, sizeof(*inquiry) );
-	if (sip->si_inquiry == NULL) return(FAILURE);
-    }
-
-    status = Inquiry(sgp->fd, sgp->dsf, sgp->debug, sgp->errlog,
-		     NULL, &sgp, inquiry, sizeof(*inquiry), 0, 0, sgp->timeout, sgp->tsp);
-    if (status) return(status);
-
-    sip->si_vendor_id = Malloc(sdp, INQ_VID_LEN + 1 );
-    sip->si_product_id = Malloc(sdp, INQ_PID_LEN + 1 );
-    sip->si_revision_level = Malloc(sdp, INQ_REV_LEN + 1 );
-    (void)strncpy(sip->si_vendor_id, (char *)inquiry->inq_vid, INQ_VID_LEN);
-    (void)strncpy(sip->si_product_id, (char *)inquiry->inq_pid, INQ_PID_LEN);
-    (void)strncpy(sip->si_revision_level, (char *)inquiry->inq_revlevel, INQ_REV_LEN);
-    /* Remove trailing spaces. */
-    strip_trailing_spaces(sip->si_vendor_id);
-    strip_trailing_spaces(sip->si_product_id);
-    strip_trailing_spaces(sip->si_revision_level);
-#endif /* 0 */
-
     inquiry = sip->si_inquiry;
     if ( (inquiry->inq_dtype == DTYPE_DIRECT) || (inquiry->inq_dtype == DTYPE_RAID) ||
 	 (inquiry->inq_dtype == DTYPE_MULTIMEDIA) || (inquiry->inq_dtype == DTYPE_OPTICAL) ||
@@ -265,17 +280,19 @@ get_standard_scsi_information(scsi_device_t *sdp, io_params_t *iop, scsi_generic
     sip->si_idt = IDT_BOTHIDS;
 
     if (sip->si_idt == IDT_DEVICEID) {
-	sip->si_device_id  = GetDeviceIdentifier(sgp->fd, sgp->dsf, sgp->debug, sgp->errlog,
+	sip->si_device_id  = GetDeviceIdentifier(sgp->fd, sgp->dsf, sgp->debug, errlog,
 						 NULL, &sgp, inquiry, sgp->timeout, sgp->tsp);
     } else if (sip->si_idt == IDT_SERIALID) {
-	sip->si_serial_number = GetSerialNumber(sgp->fd, sgp->dsf, sgp->debug, sgp->errlog,
+	sip->si_serial_number = GetSerialNumber(sgp->fd, sgp->dsf, sgp->debug, errlog,
 						NULL, &sgp, inquiry, sgp->timeout, sgp->tsp);
     } else if (sip->si_idt == IDT_BOTHIDS) {
-	sip->si_device_id  = GetDeviceIdentifier(sgp->fd, sgp->dsf, sgp->debug, sgp->errlog,
+	sip->si_device_id  = GetDeviceIdentifier(sgp->fd, sgp->dsf, sgp->debug, errlog,
 						 NULL, &sgp, inquiry, sgp->timeout, sgp->tsp);
-	sip->si_serial_number = GetSerialNumber(sgp->fd, sgp->dsf, sgp->debug, sgp->errlog,
+	sip->si_serial_number = GetSerialNumber(sgp->fd, sgp->dsf, sgp->debug, errlog,
 						NULL, &sgp, inquiry, sgp->timeout, sgp->tsp);
     }
+    sip->si_mgmt_address = GetMgmtNetworkAddress(sgp->fd, sgp->dsf, sgp->debug, False,
+						 NULL, &sgp, inquiry, sgp->timeout, sgp->tsp);
     return(status);
 }
 
@@ -377,6 +394,10 @@ SetupIdentification(scsi_device_t *sdp, io_params_t *iop)
 	} else if ( EqualStringLength(sip->si_product_id, "Mt Madonna 4U102", 15) ) {
 	    product_id = PID_MT_MADONNA;
 	}
+    } else if ( EqualStringLength(sip->si_vendor_id, "Nimble", 6) ) {
+	vendor_id = VID_NIMBLE;
+    } else if ( EqualStringLength(sip->si_vendor_id, "3PARdata", 8) ) {
+	vendor_id = VID_3PARDATA;
     } else {
 	vendor_id = VID_UNKNOWN;
     }
@@ -411,11 +432,15 @@ report_standard_scsi_information(scsi_device_t *sdp, io_params_t *iop)
 
     Printf(sdp, "\n");
     Printf(sdp, "SCSI Information:\n");
-    Printf(sdp, "%30.30s%s\n", "SCSI Device: ", sgp->dsf);
-    if (sip->si_vendor_id && sip->si_product_id && sip->si_revision_level) {
-	Printf(sdp, "%30.30s", "Inquiry information: ");
-	Print(sdp, "Vid=%s, Pid=%s, Rev=%s\n",
-	       sip->si_vendor_id, sip->si_product_id, sip->si_revision_level);
+    Printf(sdp, SPT_FIELD_WIDTH "%s\n", "SCSI Device", sgp->dsf);
+    if (sip->si_vendor_id) {
+	Printf(sdp, SPT_FIELD_WIDTH "%s\n", "Vendor Identification", sip->si_vendor_id);
+    }
+    if (sip->si_product_id) {
+	Printf(sdp, SPT_FIELD_WIDTH "%s\n", "Product Identification", sip->si_product_id);
+    }
+    if (sip->si_revision_level) {
+	Printf(sdp, SPT_FIELD_WIDTH "%s\n", "Firmware Revision Level", sip->si_revision_level);
     }
     if (inquiry = sip->si_inquiry) {
 	char *alua_str;
@@ -433,30 +458,30 @@ report_standard_scsi_information(scsi_device_t *sdp, io_params_t *iop)
 		alua_str = "explicit & implicit ALUA";
 		break;
 	}
-	Printf(sdp, "%30.30s%u (%s)\n",
-	       "Target Port Group Support: ",
+	Printf(sdp, SPT_FIELD_WIDTH "%u (%s)\n",
+	       "Target Port Group Support",
 	       inquiry->inq_tpgs, alua_str);
     }
-    Printf(sdp, "%30.30s%u\n", "Block Length: ", iop->device_size);
-    Printf(sdp, "%30.30s" LUF " (%.3f Mbytes)\n",
-	   "Maximum Capacity: ", iop->device_capacity,
+    Printf(sdp, SPT_FIELD_WIDTH "%u\n", "Block Length", iop->device_size);
+    Printf(sdp, SPT_FIELD_WIDTH LUF " (%.3f Mbytes)\n",
+	   "Maximum Capacity", iop->device_capacity,
 	   (double)(iop->device_capacity * iop->device_size) / (double)MBYTE_SIZE );
 
     if (iop->lbpmgmt_valid == True) {
-	Printf(sdp, "%30.30s%s Provisioned\n",
-	       "Provisioning Management: ", (iop->lbpme_flag) ? "Thin" : "Full");
+	Printf(sdp, SPT_FIELD_WIDTH "%s Provisioned\n",
+	       "Provisioning Management", (iop->lbpme_flag) ? "Thin" : "Full");
     }
     if (sip->si_device_id) {
-	Printf(sdp, "%30.30s%s\n",
-	       "Device Identifier: ", sip->si_device_id);
+	Printf(sdp, SPT_FIELD_WIDTH "%s\n",
+	       "Device Identifier", sip->si_device_id);
     }
     if (sip->si_serial_number) {
-	Printf(sdp, "%30.30s%s\n",
-	       "Device Serial Number: ", sip->si_serial_number);
+	Printf(sdp, SPT_FIELD_WIDTH "%s\n",
+	       "Device Serial Number", sip->si_serial_number);
     }
     if (sip->si_mgmt_address) {
-	Printf(sdp, "%30.30s%s\n",
-	       "Management Network Address: ", sip->si_mgmt_address);
+	Printf(sdp, SPT_FIELD_WIDTH "%s\n",
+	       "Management Network Address", sip->si_mgmt_address);
     }
     Printf(sdp, "\n");
     return;

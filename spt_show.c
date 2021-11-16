@@ -32,6 +32,9 @@
  * 
  * Modification History:
  * 
+ * April 3rd, 2021 by Robin T. Miller
+ *      Add support for Solaris.
+ * 
  * September 8th, 2020 by Robin T. Miller
  *      Add support for AIX.
  * 
@@ -249,7 +252,7 @@ show_devices(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp)
     int status = SUCCESS;
 
     /* TODO: Implement this for other operating systems, esp. Windows! */
-#if defined(_AIX) || defined(__linux__) || defined(_WIN32)
+#if defined(_AIX) || defined(__linux__) || defined(SOLARIS) || defined(_WIN32)
     if (sdp->show_caching_flag == False) {
 	/* Empty the list to avoid cached information. */
 	FreeScsiDeviceTable(sgp);
@@ -257,7 +260,7 @@ show_devices(scsi_device_t *sdp, io_params_t *iop, scsi_generic_t *sgp)
     if (sdeh->sde_flink == sdeh) {
 	status = os_find_scsi_devices(sgp, &sdp->scsi_filters, sdp->show_paths);
     }
-#endif /* defined(_AIX) || defined(__linux__) || defined(_WIN32) */
+#endif /* defined(_AIX) || defined(__linux__) || defined(SOLARIS) || defined(_WIN32) */
     if (sdeh->sde_flink == sdeh) {
 	FreeScsiFilters(sdp, &sdp->scsi_filters);
 	return(WARNING); /* Empty list! */

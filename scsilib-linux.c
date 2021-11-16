@@ -123,6 +123,10 @@
 #define DM_PATH_SIZE	7
 #define DMMP_PATH_PREFIX "/dev/mapper"
 #define DMMP_PATH_SIZE	11
+#if defined(Nimble)
+# define NIMBLE_PATH_PREFIX	"/dev/nimblestorage"
+# define NIMBLE_PATH_SIZE	18
+#endif /* defined(Nimble) */
 
 /*
  * Forward Declarations:
@@ -1204,6 +1208,9 @@ static scsi_dir_path_t scsi_dir_paths[] = {
     {	DEV_PATH,		"sg",	"SCSI Device",	True	},
     {	DEV_PATH,		"dm",	"DMMP Device",	False	},
     {	DMMP_PATH_PREFIX,	NULL,	"DMMP Device",	True	},
+#if defined(Nimble)
+    {	NIMBLE_PATH_PREFIX,	NULL,	"DMMP Device",	False	},
+#endif /* defined(Nimble) */
     {	NULL,			NULL				}
 };
 
@@ -1614,6 +1621,24 @@ find_scsi_devices(scsi_generic_t *sgp, char *devpath, char *scsi_name, scsi_filt
 	    if (fw_version && sdep->sde_fw_version == NULL) {
 		sdep->sde_fw_version = strdup(fw_version);
 	    }
+#if defined(Nimble)
+	    if ( (inquiry->inq_dtype == DTYPE_DIRECT) &&
+		 (strncmp((char *)inquiry->inq_vid, "Nimble", 6) == 0) ) {
+		nimble_vu_disk_inquiry_t *nimble_inq = (nimble_vu_disk_inquiry_t *)&inquiry->inq_vendor_unique;
+		char text[SMALL_BUFFER_SIZE];
+        	char *target_type = NULL;
+		sdep->sde_nimble_device = True;
+		(void)memcpy(text, nimble_inq->array_sw_version, sizeof(nimble_inq->array_sw_version));
+		text[sizeof(nimble_inq->array_sw_version)] = '\0';
+        	sdep->sde_sw_version = strdup(text);
+		target_type = (nimble_inq->target_type == NIMBLE_VOLUME_SCOPED_TARGET)
+          					? "Volume Scoped" : "Group Scoped";
+        	sdep->sde_target_type = strdup(target_type);
+        	sdep->sde_sync_replication = (nimble_inq->sync_replication == True);
+	    } else {
+		sdep->sde_nimble_device = False;
+	    }
+#endif /* defined(Nimble) */
 
 close_and_continue:
 	    (void)close(fd);

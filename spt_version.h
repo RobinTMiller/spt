@@ -26,8 +26,8 @@
  ****************************************************************************/
 
 #define ToolAuthor	"Robin T. Miller"
-#define ToolDate	"February 8th, 2021"
-#define ToolRevision	"3.38"
+#define ToolDate	"November 10th, 2021"
+#define ToolRevision	"3.41"
 #define ToolVersion	"Date: "ToolDate", Version: "ToolRevision", Author: "ToolAuthor
 
 #endif /* !defined(SPT_VERSION_H) */

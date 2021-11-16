@@ -84,9 +84,9 @@
 /*
  * Local Definitions:
  */
-#define DEV_PATH	"/dev"
-#define AIX_MAX_TIMEOUT         60              /* Real max timeout?  */
-                                        /* Avoids SC_PASSTHRU_INV_TO! */
+#define DEV_PATH		"/dev"	/* Device directory prefix.	*/
+#define AIX_MAX_TIMEOUT		60	/* Real max timeout?		*/
+                                        /* Avoids SC_PASSTHRU_INV_TO!	*/
 
 /*
  * Define Adapter Types:
@@ -120,7 +120,6 @@ static int StartAdapter(scsi_generic_t *sgp, lun_info_t *lunip, struct scsi_scio
 static int StopAdapter(scsi_generic_t *sgp, lun_info_t *lunip, struct scsi_sciolst *sciop);
 static void DumpSciolst(scsi_generic_t *sgp, lun_info_t *lunip, struct scsi_sciolst *sciop, char *operation);
 
-static int get_device_nexus(scsi_generic_t *sgp, char *devname, int fd, int *bus, int *channel, int *target, int *lun);
 static int find_scsi_devices(scsi_generic_t *sgp, char *devpath, char *scsi_name, scsi_filters_t *sfp);
 
 static scsi_device_entry_t *add_device_entry(scsi_generic_t *sgp, char *path, inquiry_t *inquiry,
@@ -2067,6 +2066,24 @@ find_scsi_devices(scsi_generic_t *sgp, char *devpath, char *scsi_name, scsi_filt
 	    if (fw_version && sdep->sde_fw_version == NULL) {
 		sdep->sde_fw_version = strdup(fw_version);
 	    }
+#if defined(Nimble)
+	    if ( (inquiry->inq_dtype == DTYPE_DIRECT) &&
+		 (strncmp((char *)inquiry->inq_vid, "Nimble", 6) == 0) ) {
+		nimble_vu_disk_inquiry_t *nimble_inq = (nimble_vu_disk_inquiry_t *)&inquiry->inq_vendor_unique;
+		char text[SMALL_BUFFER_SIZE];
+        	char *target_type = NULL;
+		sdep->sde_nimble_device = True;
+		(void)memcpy(text, nimble_inq->array_sw_version, sizeof(nimble_inq->array_sw_version));
+		text[sizeof(nimble_inq->array_sw_version)] = '\0';
+        	sdep->sde_sw_version = strdup(text);
+		target_type = (nimble_inq->target_type == NIMBLE_VOLUME_SCOPED_TARGET)
+          					? "Volume Scoped" : "Group Scoped";
+        	sdep->sde_target_type = strdup(target_type);
+        	sdep->sde_sync_replication = (nimble_inq->sync_replication == True);
+	    } else {
+		sdep->sde_nimble_device = False;
+	    }
+#endif /* defined(Nimble) */
 
 close_and_continue:
 	    (void)close(fd);
@@ -2117,10 +2134,15 @@ add_device_entry(scsi_generic_t *sgp, char *path, inquiry_t *inquiry,
 	sdep = create_device_entry(sgp, path, inquiry, serial, device_id,
 				   target_port, bus, channel, target, lun);
     } else { /* Update existing device entry. */
+	/* Note: We only expect multiple paths with Linux, no other OS! */
 	//scsi_device_name_t *sdnp;
 	//sdnp = update_device_entry(sgp, sdep, path, inquiry, serial, device_id,
 				   //target_port, bus, channel, target, lun);
-	abort();
+	Eprintf(opaque, "Found unexpected duplicate device %s with %s %s, ignoring...\n",
+	        path, (serial) ? "serial number" : "device ID", (serial) ? serial : device_id);
+	Fprintf(opaque, "Previous device is %s, which is NOT expected with proper multi-pathing!\n",
+		sdep->sde_names.sdn_flink->sdn_device_path);
+	//abort();	/* Do NOT abort, this is misleading even to the author! */
     }
     return( sdep );
 }
@@ -2221,6 +2243,7 @@ find_device_entry(scsi_generic_t *sgp, char *path, char *serial,
 		return( sdep );
 	    }
 	}
+#if 0
 	/* Find device by SCSI nexus (bus/channel/target/lun). */
 	if ( ( (device_id == NULL) && (serial == NULL) ) ||
 	     ( (sdep->sde_device_id == NULL) && (sdep->sde_serial == NULL) ) ) {
@@ -2233,6 +2256,7 @@ find_device_entry(scsi_generic_t *sgp, char *path, char *serial,
 		}
 	    }
 	}
+#endif /* 0 */
     }
     return(NULL);
 }

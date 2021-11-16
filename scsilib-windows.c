@@ -80,10 +80,6 @@ static scsi_device_entry_t *create_device_entry(scsi_generic_t *sgp, char *path,
 						int bus, int channel, int target, int lun);
 static scsi_device_entry_t *find_device_entry(scsi_generic_t *sgp, char *path, char *serial,
 					      char *device_id, int bus, int channel, int target, int lun);
-static scsi_device_name_t *update_device_entry(scsi_generic_t *sgp, scsi_device_entry_t *sdep,
-					       char *path, inquiry_t *inquiry,
-					       char *serial, char *device_id, char *target_port,
-					       int bus, int channel, int target, int lun);
 
 static scsi_device_name_t *create_exclude_entry(scsi_generic_t *sgp, char *path, 
 						int bus, int channel, int target, int lun);
@@ -1156,6 +1152,24 @@ process_device(scsi_generic_t *sgp, char *devpath, scsi_filters_t *sfp)
     if (fw_version && sdep->sde_fw_version == NULL) {
 	sdep->sde_fw_version = strdup(fw_version);
     }
+#if defined(Nimble)
+    if ( (inquiry->inq_dtype == DTYPE_DIRECT) &&
+	 (strncmp((char *)inquiry->inq_vid, "Nimble", 6) == 0) ) {
+	nimble_vu_disk_inquiry_t *nimble_inq = (nimble_vu_disk_inquiry_t *)&inquiry->inq_vendor_unique;
+	char text[SMALL_BUFFER_SIZE];
+	char *target_type = NULL;
+	sdep->sde_nimble_device = True;
+	(void)memcpy(text, nimble_inq->array_sw_version, sizeof(nimble_inq->array_sw_version));
+	text[sizeof(nimble_inq->array_sw_version)] = '\0';
+	sdep->sde_sw_version = strdup(text);
+	target_type = (nimble_inq->target_type == NIMBLE_VOLUME_SCOPED_TARGET)
+					? "Volume Scoped" : "Group Scoped";
+	sdep->sde_target_type = strdup(target_type);
+	sdep->sde_sync_replication = (nimble_inq->sync_replication == True);
+    } else {
+	sdep->sde_nimble_device = False;
+    }
+#endif /* defined(Nimble) */
 
 close_and_continue:
     (void)CloseHandle(fd);
@@ -1198,14 +1212,11 @@ add_device_entry(scsi_generic_t *sgp, char *path, inquiry_t *inquiry,
 	sdep = create_device_entry(sgp, path, inquiry, serial, device_id,
 				   target_port, bus, channel, target, lun);
     } else { /* Update existing device entry. */
-	//scsi_device_name_t *sdnp;
-	//sdnp = update_device_entry(sgp, sdep, path, inquiry, serial, device_id,
-				   //target_port, bus, channel, target, lun);
-	Eprintf(opaque, "Found unexpected duplicate device %s with serial number %s, ignoring...\n",
-	        path, serial);
+	/* Note: We only expect multiple paths with Linux, no other OS! */
+	Eprintf(opaque, "Found unexpected duplicate device %s with %s %s, ignoring...\n",
+	        path, (serial) ? "serial number" : "device ID", (serial) ? serial : device_id);
 	Fprintf(opaque, "Previous device is %s, which is NOT expected with proper multi-pathing!\n",
 	        sdep->sde_names.sdn_flink->sdn_device_path);
-	//abort();
     }
     return( sdep );
 }
@@ -1306,6 +1317,7 @@ find_device_entry(scsi_generic_t *sgp, char *path, char *serial,
 		return( sdep );
 	    }
 	}
+#if 0
 	/* Find device by SCSI nexus (bus/channel/target/lun). */
 	if ( ( (device_id == NULL) && (serial == NULL) ) ||
 	     ( (sdep->sde_device_id == NULL) && (sdep->sde_serial == NULL) ) ) {
@@ -1318,6 +1330,7 @@ find_device_entry(scsi_generic_t *sgp, char *path, char *serial,
 		}
 	    }
 	}
+#endif /* 0 */
     }
     return(NULL);
 }

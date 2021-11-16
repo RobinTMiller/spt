@@ -2,7 +2,7 @@
 #define SPT_PRINT_H
 /****************************************************************************
  *									    *
- *			  COPYRIGHT (c) 1988 - 2018			    *
+ *			  COPYRIGHT (c) 1988 - 2020			    *
  *			   This Software Provided			    *
  *				     By					    *
  *			  Robin's Nest Software Inc.			    *
@@ -61,6 +61,9 @@ typedef enum logLevel {
 #define LHEX_FIELD	"%38.38s: " LXF
 #define LHEXP_FIELD	"%38.38s: " LLFXFMT
 #define LHEX_DEC_FIELD	"%38.38s: " LXF " (" LUF ")"
+
+/* The rest of spt uses this for its' field width. */
+#define SPT_FIELD_WIDTH "%30.30s: "
 
 #define DNL		0			/* Disable newline.	*/
 #define PNL		1			/* Print newline.	*/
