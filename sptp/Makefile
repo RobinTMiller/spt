@@ -86,6 +86,7 @@ SPT_CFILES=	spt.c		\
 		spt_fmt.c	\
 		spt_inquiry.c	\
 		spt_iot.c	\
+		spt_jobs.c	\
 		spt_log.c	\
 		spt_mem.c	\
 		spt_print.c	\
@@ -196,6 +197,7 @@ sptp.o sptp.ln: sptp.c $(HDRS) spt_version.h
 spt_fmt.o spt_fmt.ln: spt_fmt.c $(HDRS)
 spt_inquiry.o spt_inquiry.ln: spt_inquiry.c $(HDRS)
 spt_iot.o spt_iot.ln: spt_iot.c $(HDRS)
+spt_jobs.o spt_jobs.ln: spt_jobs.c $(HDRS)
 spt_log.o spt_log.ln: spt_log.c $(HDRS)
 spt_mtrand64.o spt_mtrand64.ln: spt_mtrand64.c spt_mtrand64.h
 spt_print.o spt_print.ln: spt_print.c $(HDRS)
